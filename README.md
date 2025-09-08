@@ -27,7 +27,7 @@
    
    Запуск: `bin/hbase shell conf/add_peer_shell_fast.txt`  
    Подробности: см. раздел «Профили peer (готовые скрипты)».
-5) **Проверьте доставку**: сообщения появляются в Kafka‑топике `${table}`.
+5) **Проверьте доставку**: сообщения появляются в Kafka‑топике `\${table}`.
 
 ## Поддерживаемые версии
 
@@ -106,7 +106,7 @@ h2k.salt.map=TBL_JTI_TRACE_CIS_HISTORY=1
 h2k.capacity.hints=TBL_JTI_TRACE_CIS_HISTORY=32
 # опционально:
 h2k.ensure.topics=true
-h2k.topic.pattern=${table}
+h2k.topic.pattern=\${table}
 ```
 
 #### Мини‑таблица: «минимум для запуска» → где применяется
@@ -126,7 +126,7 @@ h2k.topic.pattern=${table}
 | Ключ | Дефолт | Единицы | Где применяется | Назначение / примечание |
 |---|---|---|---|---|
 | `h2k.kafka.bootstrap.servers` | — | `host:port` через запятую | KafkaReplicationEndpoint → KafkaProducer | Список брокеров Kafka |
-| `h2k.topic.pattern` | `${table}` | шаблон | KafkaReplicationEndpoint | Шаблон имени топика. Плейсхолдеры: \`${namespace}\`, \`${qualifier}\`, \`${table}\` (если \`namespace=default\` → \`${qualifier}\`, иначе \`${namespace}_${qualifier}\`). |
+| `h2k.topic.pattern` | `\${table}` | шаблон | KafkaReplicationEndpoint | Шаблон имени топика. Плейсхолдеры: \`\${namespace}\`, \`\${qualifier}\`, \`\${table}\` (если \`namespace=default\` → \`\${qualifier}\`, иначе \`\${namespace}_\${qualifier}\`). |
 | `h2k.cf.list` | — | CSV | PayloadBuilder | Список CF для экспорта (`d,b,0`). Не существующие CF игнорируются без ошибок |
 | `h2k.decode.mode` | `simple` | enum | KafkaReplicationEndpoint | Режим декодирования: `simple` или `json-phoenix` |
 | `h2k.schema.path` | — | путь | JsonSchemaRegistry | Путь к единственному файлу `schema.json`. Используется только в режиме `json-phoenix`. |
@@ -175,20 +175,20 @@ h2k.topic.pattern=${table}
 
 - `namespace` = `TableName.getNamespaceAsString()`; для дефолтного неймспейса это строка `"default"`.
 - `qualifier` = `TableName.getQualifierAsString()`; это собственно имя таблицы **без** неймспейса.
-- `${table}` — удобный шорткат:  
-  если `namespace == "default"` → берётся только `${qualifier}`;  
-  иначе → `${namespace}_${qualifier}`.  
-  Если нужен другой формат — сформируйте его прямо в шаблоне (например, `${namespace}.${qualifier}`).
+- `\${table}` — удобный шорткат:  
+  если `namespace == "default"` → берётся только `\${qualifier}`;  
+  иначе → `\${namespace}_\${qualifier}`.  
+  Если нужен другой формат — сформируйте его прямо в шаблоне (например, `\${namespace}.\${qualifier}`).
 
-**Примеры (при `h2k.topic.pattern=${table}`):**
+**Примеры (при `h2k.topic.pattern=\${table}`):**
 - `DEFAULT`:`TBL_JTI_TRACE_CIS_HISTORY` → топик **`TBL_JTI_TRACE_CIS_HISTORY`**
 - `WORK`:`CIS_HISTORY` → топик **`WORK_CIS_HISTORY`**
 
 **Если создаёте топики вручную**, убедитесь, что имена совпадают с тем, что вычислится из шаблона.  
 Или задайте явный шаблон, например:
-- `${qualifier}` — всегда только имя таблицы;
-- `${namespace}.${qualifier}` — через точку;
-- `hbase_${namespace}__${qualifier}` — с префиксом.
+- `\${qualifier}` — всегда только имя таблицы;
+- `\${namespace}.\${qualifier}` — через точку;
+- `hbase_\${namespace}__\${qualifier}` — с префиксом.
 
 **Автосоздание тем (`h2k.ensure.topics=true`):**
 - Создание выполняет `TopicEnsurer` при первом обращении к таблице.
@@ -491,7 +491,7 @@ Environment="HBASE_OPTS=${HBASE_OPTS} -Dh2k.log.dir=/opt/hbase-default-current/l
    ```bash
    kafka-console-consumer.sh --bootstrap-server <brokers> --topic <topic> --from-beginning --max-messages 5
    ```
-   Топик по умолчанию — имя таблицы (см. `h2k.topic.pattern`, по дефолту `${table}`).
+   Топик по умолчанию — имя таблицы (см. `h2k.topic.pattern`, по дефолту `\${table}`).
 
 
 **Полезные операции (HBase 1.4.13):**
@@ -597,8 +597,8 @@ HBase RegionServer
 **Где искать логи endpoint?**  
 По умолчанию — `${hbase.log.dir}/h2k-endpoint.log`. Можно переопределить `-Dh2k.log.dir`. Ротация управляется `h2k.log.maxFileSize` и `h2k.log.maxBackupIndex`.
 
-**Откуда берётся имя топика, если у меня `h2k.topic.pattern=${table}`?**  
-Из `WALEntry` мы берём `namespace` и `qualifier` текущей таблицы. Затем подставляем их в `${table}` по правилу: если `namespace=default` — только `qualifier`, иначе `namespace_qualifier`. Если тема создана вручную, её имя должно совпадать с этим результатом (либо измените шаблон).
+**Откуда берётся имя топика, если у меня `h2k.topic.pattern=\${table}`?**  
+Из `WALEntry` мы берём `namespace` и `qualifier` текущей таблицы. Затем подставляем их в `\${table}` по правилу: если `namespace=default` — только `\${qualifier}`, иначе `\${namespace}_\${qualifier}`. Если тема создана вручную, её имя должно совпадать с этим результатом (либо измените шаблон).
 
 ---
 
