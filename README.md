@@ -126,7 +126,7 @@ h2k.topic.pattern=${table}
 | Ключ | Дефолт | Единицы | Где применяется | Назначение / примечание |
 |---|---|---|---|---|
 | `h2k.kafka.bootstrap.servers` | — | `host:port` через запятую | KafkaReplicationEndpoint → KafkaProducer | Список брокеров Kafka |
-| `h2k.topic.pattern` | `${table}` | шаблон | KafkaReplicationEndpoint | Шаблон имени топика. Плейсхолдеры: `${table}` (= `namespace_qualifier`), `${namespace}`, `${qualifier}` |
+| `h2k.topic.pattern` | `${table}` | шаблон | KafkaReplicationEndpoint | Шаблон имени топика. Плейсхолдеры: \`${namespace}\`, \`${qualifier}\`, \`${table}\` (если \`namespace=default\` → \`${qualifier}\`, иначе \`${namespace}_${qualifier}\`). |
 | `h2k.cf.list` | — | CSV | PayloadBuilder | Список CF для экспорта (`d,b,0`). Не существующие CF игнорируются без ошибок |
 | `h2k.decode.mode` | `simple` | enum | KafkaReplicationEndpoint | Режим декодирования: `simple` или `json-phoenix` |
 | `h2k.schema.path` | — | путь | JsonSchemaRegistry | Путь к единственному файлу `schema.json`. Используется только в режиме `json-phoenix`. |
@@ -168,6 +168,32 @@ h2k.topic.pattern=${table}
 **Примечания:**
 - Все значения «Дефолт» в таблице указаны для Kafka 2.3.1 (клиент).
 - Размеры (`*.size`, `buffer.memory`, `max.request.size`) указаны в байтах; параметры `*.ms` — в миллисекундах.
+
+## Именование топиков: как формируется имя
+
+Имя топика получается как интерполяция шаблона `h2k.topic.pattern` по данным HBase:
+
+- `namespace` = `TableName.getNamespaceAsString()`; для дефолтного неймспейса это строка `"default"`.
+- `qualifier` = `TableName.getQualifierAsString()`; это собственно имя таблицы **без** неймспейса.
+- `${table}` — удобный шорткат:  
+  если `namespace == "default"` → берётся только `${qualifier}`;  
+  иначе → `${namespace}_${qualifier}`.  
+  Если нужен другой формат — сформируйте его прямо в шаблоне (например, `${namespace}.${qualifier}`).
+
+**Примеры (при `h2k.topic.pattern=${table}`):**
+- `DEFAULT`:`TBL_JTI_TRACE_CIS_HISTORY` → топик **`TBL_JTI_TRACE_CIS_HISTORY`**
+- `WORK`:`CIS_HISTORY` → топик **`WORK_CIS_HISTORY`**
+
+**Если создаёте топики вручную**, убедитесь, что имена совпадают с тем, что вычислится из шаблона.  
+Или задайте явный шаблон, например:
+- `${qualifier}` — всегда только имя таблицы;
+- `${namespace}.${qualifier}` — через точку;
+- `hbase_${namespace}__${qualifier}` — с префиксом.
+
+**Автосоздание тем (`h2k.ensure.topics=true`):**
+- Создание выполняет `TopicEnsurer` при первом обращении к таблице.
+- Используются параметры `h2k.topic.partitions`, `h2k.topic.replication` и любые `h2k.topic.config.*`.
+- Валидные имена Kafka: символы `[a-zA-Z0-9._-]`, длина 1..249; запрещены `'.'` и `'..'`.
 
 ### Устаревшие ключи
 
@@ -338,6 +364,38 @@ _Пример ниже — реальная строка из `TBL_JTI_TRACE_CIS
 - Ключ таблицы — `NAMESPACE.TABLE`. Для таблиц из `DEFAULT` неймспейса указывайте просто `TABLE` (без `DEFAULT.`).
 - Ключи в `columns` — **имена колонок/квалифаеров** в том виде, как они лежат в HBase (регистр важен).
 - Значение — тип Phoenix в `UPPER` (`VARCHAR`, `UNSIGNED_TINYINT`, `TIMESTAMP`, `BIGINT`, `...`, а также `... ARRAY`).
+
+**Как указывать таблицы с неймспейсом (Phoenix schema):**
+- Ключ таблицы в `schema.json` — это **HBase namespace + '.' + имя таблицы**.  
+  Пример: `WORK.CIS_HISTORY`.
+- Не используйте кавычки из SQL DDL: запись `"WORK".CIS_HISTORY` в `schema.json` **неверна**.  
+  Кавычки — это синтаксис Phoenix для SQL, а не часть имени.
+- Для таблиц из `DEFAULT` неймспейса указывайте просто `TABLE` (без `DEFAULT.`).
+
+Пример с двумя таблицами (DEFAULT и WORK):
+
+```json
+{
+  "TBL_JTI_TRACE_CIS_HISTORY": {
+    "columns": {
+      "c": "VARCHAR",
+      "t": "UNSIGNED_TINYINT",
+      "opd": "TIMESTAMP"
+    }
+  },
+  "WORK.CIS_HISTORY": {
+    "columns": {
+      "tm": "TIMESTAMP",
+      "c":  "VARCHAR",
+      "t":  "UNSIGNED_TINYINT",
+      "opd":"TIMESTAMP"
+    }
+  }
+}
+```
+
+> Важно: `schema.json` нужен только для **декодирования типов**.  
+> Имя топика берётся из фактической таблицы в событии WAL и шаблона `h2k.topic.pattern`; содержимое `schema.json` **не влияет** на выбор имени топика.
 
 Пример (реальная таблица `TBL_JTI_TRACE_CIS_HISTORY`):
 
@@ -538,6 +596,9 @@ HBase RegionServer
 
 **Где искать логи endpoint?**  
 По умолчанию — `${hbase.log.dir}/h2k-endpoint.log`. Можно переопределить `-Dh2k.log.dir`. Ротация управляется `h2k.log.maxFileSize` и `h2k.log.maxBackupIndex`.
+
+**Откуда берётся имя топика, если у меня `h2k.topic.pattern=${table}`?**  
+Из `WALEntry` мы берём `namespace` и `qualifier` текущей таблицы. Затем подставляем их в `${table}` по правилу: если `namespace=default` — только `qualifier`, иначе `namespace_qualifier`. Если тема создана вручную, её имя должно совпадать с этим результатом (либо измените шаблон).
 
 ---
 
