@@ -1,8 +1,0 @@
-{
-    "java.compile.nullAnalysis.mode": "automatic",
-    // Включаем профиль dev для всех команд Maven из VSCode,
-    // чтобы IDE всегда видела phoenix-core на classpath.
-    "maven.executable.options": "-Pdev",
-    // Явно просим VSCode пересобирать проект при изменениях pom.xml
-    "java.configuration.updateBuildConfiguration": "automatic"
-}

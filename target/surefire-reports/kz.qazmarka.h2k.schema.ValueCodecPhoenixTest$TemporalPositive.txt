@@ -1,4 +1,0 @@
--------------------------------------------------------------------------------
-Test set: kz.qazmarka.h2k.schema.ValueCodecPhoenixTest$TemporalPositive
--------------------------------------------------------------------------------
-Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.084 s -- in kz.qazmarka.h2k.schema.ValueCodecPhoenixTest$TemporalPositive
