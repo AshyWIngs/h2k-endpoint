@@ -24,6 +24,7 @@
    - `conf/add_peer_shell_fast.txt` — FAST (макс. скорость)
    - `conf/add_peer_shell_balanced.txt` — BALANCED (компромисс)
    - `conf/add_peer_shell_reliable.txt` — RELIABLE (надёжность)
+   
    Запуск: `bin/hbase shell conf/add_peer_shell_fast.txt`  
    Подробности: см. раздел «Профили peer (готовые скрипты)».
 5) **Проверьте доставку**: сообщения появляются в Kafka‑топике `${table}`.
@@ -132,7 +133,7 @@ h2k.topic.pattern=${table}
 | `h2k.json.serialize.nulls` | `false` | boolean | Gson в Endpoint | Добавлять ли `null` в JSON |
 | `h2k.payload.include.meta` | `false` | boolean | PayloadBuilder | Добавлять служебные поля (+8 ключей) |
 | `h2k.payload.include.meta.wal` | `false` | boolean | PayloadBuilder | Добавлять WAL‑метаданные (+2 ключа) |
-| `h2k.payload.include.rowkey` | `false` | boolean | PayloadBuilder | Включать rowkey (+1 ключ) |
+| `h2k.payload.include.rowkey` | `false` | boolean | PayloadBuilder | Включать `_rowkey` (+1 ключ) |
 | `h2k.rowkey.encoding` | `BASE64` | enum | PayloadBuilder | Формат rowkey: `BASE64` или `HEX` (используется только если `include.rowkey=true`) |
 | `h2k.filter.by.wal.ts` | `false` | boolean | KafkaReplicationEndpoint | Включить фильтрацию по минимальному WAL‑времени |
 | `h2k.wal.min.ts` (мс) | `-1` | миллисекунды epoch | KafkaReplicationEndpoint | Минимальный `timestamp`; применяется при `filter.by.wal.ts=true` |
@@ -183,7 +184,7 @@ h2k.topic.pattern=${table}
 
 - если `h2k.payload.include.meta=true` → `+8` ключей: `_table,_namespace,_qualifier,_cf,_cells_total,_cells_cf,event_version,delete`;
 - если `h2k.payload.include.meta.wal=true` → `+2` ключа: `_wal_seq,_wal_write_time`;
-- если `h2k.payload.include.rowkey=true` → `+1` ключ: `rowkey` (`hex` или `base64`).
+- если `h2k.payload.include.rowkey=true` → `+1` ключ: `_rowkey` (формат по `h2k.rowkey.encoding`: `BASE64` или `HEX`).
 
 **Пример:**  
 Таблица `TBL_JTI_TRACE_CIS_HISTORY` имеет 32 логических поля.  
