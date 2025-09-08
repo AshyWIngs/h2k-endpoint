@@ -1,0 +1,4 @@
+-------------------------------------------------------------------------------
+Test set: kz.qazmarka.h2k.schema.ValueCodecPhoenixTest
+-------------------------------------------------------------------------------
+Tests run: 0, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.288 s -- in kz.qazmarka.h2k.schema.ValueCodecPhoenixTest

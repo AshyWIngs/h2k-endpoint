@@ -1,0 +1,11 @@
+/Users/romangolebiewski/Projects/ETL/h2k-endpoint/src/test/java/kz/qazmarka/h2k/kafka/TopicEnsurerTest.java
+/Users/romangolebiewski/Projects/ETL/h2k-endpoint/src/test/java/kz/qazmarka/h2k/endpoint/KafkaReplicationEndpointTest.java
+/Users/romangolebiewski/Projects/ETL/h2k-endpoint/src/test/java/kz/qazmarka/h2k/util/RowKeySliceTest.java
+/Users/romangolebiewski/Projects/ETL/h2k-endpoint/src/test/java/kz/qazmarka/h2k/schema/SchemaRegistryTest.java
+/Users/romangolebiewski/Projects/ETL/h2k-endpoint/src/test/java/kz/qazmarka/h2k/schema/DecoderTest.java
+/Users/romangolebiewski/Projects/ETL/h2k-endpoint/src/test/java/kz/qazmarka/h2k/schema/SimpleDecoderTest.java
+/Users/romangolebiewski/Projects/ETL/h2k-endpoint/src/test/java/kz/qazmarka/h2k/schema/JsonSchemaRegistryTest.java
+/Users/romangolebiewski/Projects/ETL/h2k-endpoint/src/test/java/kz/qazmarka/h2k/payload/PayloadBuilderTest.java
+/Users/romangolebiewski/Projects/ETL/h2k-endpoint/src/test/java/kz/qazmarka/h2k/kafka/BatchSenderTest.java
+/Users/romangolebiewski/Projects/ETL/h2k-endpoint/src/test/java/kz/qazmarka/h2k/schema/ValueCodecPhoenixTest.java
+/Users/romangolebiewski/Projects/ETL/h2k-endpoint/src/test/java/kz/qazmarka/h2k/config/H2kConfigTest.java
