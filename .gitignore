@@ -1,11 +1,11 @@
 # --- Логи (файлы и папки) ---
-/logs/
-/*.log
+logs/
+*.log
 
 # --- IDE/редакторы ---
-/.vscode/
-/.idea/
-/*.code-workspace
+.vscode/
+.idea/
+*.code-workspace
 
 # --- Мусор ОС ---
 .DS_Store
@@ -14,17 +14,17 @@
 Thumbs.db
 
 # --- Конфиг/секреты окружения (в любом проекте) ---
-/.env
-!/.env.example        # образцы конфигураций держим в гите
-/.envrc
-/*.env.local
-/*.secrets
-/*.key
-/*.pem
+.env
+!.env.example        # образцы конфигураций держим в гите
+.envrc
+*.env.local
+*.secrets
+*.key
+*.pem
 
 # === Maven / сборка ===
-/target/
-/META-INF/
+target/
+META-INF/
 pom.xml.versionsBackup
 dependency-reduced-pom.xml
 release.properties
