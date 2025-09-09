@@ -193,7 +193,7 @@ h2k.topic.pattern=${table}
 **Автосоздание тем (`h2k.ensure.topics=true`):**
 - Создание выполняет `TopicEnsurer` при первом обращении к таблице.
 - Используются параметры `h2k.topic.partitions`, `h2k.topic.replication` и любые `h2k.topic.config.*`.
-- Валидные имена Kafka: символы `[a-zA-Z0-9._-]`, длина 1..249; запрещены `'.'` и `'..'`.
+- Валидные имена Kafka: символы `[a-zA-Z0-9._-]`, длина 1..249; *недопустимы имена* `.` и `..` (символ `.` внутри имени допустим).
 
 ### Устаревшие ключи
 
@@ -234,14 +234,14 @@ h2k.capacity.hints = TBL_JTI_TRACE_CIS_HISTORY=32,AGG.INC_DOCS_ACT=18
 
 ### Включение репликации нужных CF (в HBase shell)
 
-```HBase shell
+```bash
 # Пример: TBL_JTI_TRACE_CIS_HISTORY, включаем CF 'd'
 disable 'TBL_JTI_TRACE_CIS_HISTORY'
 alter  'TBL_JTI_TRACE_CIS_HISTORY', { NAME => 'd', REPLICATION_SCOPE => 1 }
 enable 'TBL_JTI_TRACE_CIS_HISTORY'
 ```
 
-```HBase shell
+```bash
 # Пример: таблица RECEIPT, включаем 'b' и 'd'
 disable 'RECEIPT'
 alter  'RECEIPT', { NAME => 'b', REPLICATION_SCOPE => 1 }
@@ -272,7 +272,7 @@ bin/hbase shell
 ```
 
 Проверка:
-```HBase shell
+```bash
 list_peers
 show_peer_tableCFs 'kafka_peer_fast'   # вернёт nil, если ограничений нет
 ```
@@ -481,7 +481,7 @@ Environment="HBASE_OPTS=${HBASE_OPTS} -Dh2k.log.dir=/opt/hbase-default-current/l
 
 1. **Пир виден и включён в HBase.**  
    В HBase shell:
-   ```HBase shell
+   ```bash
    list_peers
    ```
    Убедитесь, что ваш peer в состоянии **ENABLED**, очереди не растут аномально.
@@ -496,7 +496,7 @@ Environment="HBASE_OPTS=${HBASE_OPTS} -Dh2k.log.dir=/opt/hbase-default-current/l
 
 **Полезные операции (HBase 1.4.13):**
 
-```HBase shell
+```bash
 # HBase shell
 # включить/выключить peer
 enable_peer 'kafka_peer_fast'
@@ -609,3 +609,286 @@ HBase RegionServer
 3. Создан peer (`fast/balanced/reliable`) с корректным `bootstrap`.
 4. Если `json-phoenix` — `schema.json` доступен и путь указан.
 5. В логах RS нет ошибок, события появляются в Kafka.
+
+---
+
+## TODO: Реализация варианта через Avro (open-source Schema Registry)
+
+**Статус:** план внедрения. Сейчас endpoint публикует **только JSON (JSONEachRow)**. Всё ниже — дорожная карта. Любые ключи из этого раздела **не работают**, пока соответствующий код не появится в репозитории. Мы придерживаемся правила: **источник истины — фактический исходный код**.
+
+### Зачем Avro
+
+- Бинарный компактный формат → меньше трафика/CPU по сравнению с JSON на объёмах 100M+ событий/день.
+- Строгая схема и эволюция полей (backward-compatible изменения).
+- С Confluent-совместимым реестром используется «AvroConfluent»: `magic byte (0) + schemaId + Avro-payload`.
+
+### Совместимость стенда
+
+- **Kafka (клиенты/брокеры):** 2.3.1 — совместимы с **Schema Registry 5.3.x** (open-source).
+- **Java:** 8 (target 1.8) — ок.
+- **HBase 1.4.13 / Phoenix 4.14:** на SR напрямую не влияют.
+- **ClickHouse 24.8:** умеет читать `AvroConfluent` из Kafka.
+
+### Узлы QA (в примерах ниже)
+
+- Kafka брокеры: `10.254.3.111:9092,10.254.3.112:9092,10.254.3.113:9092`
+- Schema Registry (план): порт `8081` на этих же узлах (можно начать с одного, затем 3 для HA).
+
+---
+
+### Развёртывание Schema Registry 5.3.x (open-source)
+
+**Ссылки (точные):**
+- Исходники (GitHub): <https://github.com/confluentinc/schema-registry>
+- Рекомендуемый тег под Kafka 2.3.1: <https://github.com/confluentinc/schema-registry/tree/v5.3.6>
+- README (сборка/запуск): <https://github.com/confluentinc/schema-registry/blob/v5.3.6/README.md>
+
+#### Вариант A — tar из Confluent Platform 5.3.x
+
+1. Распакуйте платформу, оставьте только каталог **`schema-registry/`** (со скриптами `bin/schema-registry-start|stop`).
+2. Разложите по узлам:
+   ```
+   /opt/schema-registry/       # bin/, etc/, lib/
+   /var/log/schema-registry/   # логи
+   ```
+3. Конфиг: `/opt/schema-registry/etc/schema-registry/schema-registry.properties`
+   ```properties
+   listeners=http://0.0.0.0:8081
+   host.name=${HOSTNAME}
+
+   # Kafka 2.3.1
+   kafkastore.bootstrap.servers=PLAINTEXT://10.254.3.111:9092,PLAINTEXT://10.254.3.112:9092,PLAINTEXT://10.254.3.113:9092
+
+   # Топик для хранения схем (в Kafka)
+   kafkastore.topic=_schemas
+   kafkastore.topic.replication.factor=3
+   kafkastore.timeout.ms=60000
+
+   # Политика совместимости
+   compatibility.level=BACKWARD
+   ```
+4. Юнит systemd: `/etc/systemd/system/schema-registry.service`
+   ```ini
+   [Unit]
+   Description=Schema Registry (open-source)
+   After=network-online.target
+
+   [Service]
+   Type=simple
+   ExecStart=/opt/schema-registry/bin/schema-registry-start /opt/schema-registry/etc/schema-registry/schema-registry.properties
+   ExecStop=/opt/schema-registry/bin/schema-registry-stop
+   Restart=always
+   RestartSec=5
+   Environment="KAFKA_HEAP_OPTS=-Xms512m -Xmx512m" "JAVA_TOOL_OPTIONS=-Dfile.encoding=UTF-8"
+   LimitNOFILE=65536
+
+   [Install]
+   WantedBy=multi-user.target
+   ```
+5. Запуск и проверка:
+   ```bash
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now schema-registry
+   curl -s http://10.254.3.111:8081/subjects   # ожидаем: []
+   ```
+
+#### Вариант B — сборка из исходников
+
+> На том же репозитории/теге: <https://github.com/confluentinc/schema-registry/tree/v5.3.6>
+
+```bash
+git clone https://github.com/confluentinc/schema-registry.git
+cd schema-registry
+git checkout v5.3.6
+mvn -q -DskipTests package
+# далее развернуть как в варианте A (пп. 2–5)
+```
+
+---
+
+### Avro-схема: `TBL_JTI_TRACE_CIS_HISTORY`
+
+Конвенции сериализации: `TIMESTAMP → *_ms (epoch-millis, long)`, `UNSIGNED_* → int`, `VARCHAR ARRAY → array<string>`.  
+PK: `c` (string), `t` (int), `opd_ms` (long).  
+Доп. поля: `event_version_ms` (nullable long), `delete` (boolean, default `false`).
+
+Файл `conf/avro/tbl_jti_trace_cis_history.avsc`:
+```json
+{
+  "type": "record",
+  "name": "TBL_JTI_TRACE_CIS_HISTORY_Row",
+  "namespace": "kz.qazmarka.h2k",
+  "fields": [
+    {"name": "c",   "type": "string"},
+    {"name": "t",   "type": "int"},
+    {"name": "opd_ms", "type": "long"},
+
+    {"name": "id",   "type": ["null","string"], "default": null},
+    {"name": "did",  "type": ["null","string"], "default": null},
+    {"name": "rid",  "type": ["null","string"], "default": null},
+    {"name": "rinn", "type": ["null","string"], "default": null},
+    {"name": "rn",   "type": ["null","string"], "default": null},
+    {"name": "sid",  "type": ["null","string"], "default": null},
+    {"name": "sinn", "type": ["null","string"], "default": null},
+    {"name": "sn",   "type": ["null","string"], "default": null},
+    {"name": "gt",   "type": ["null","string"], "default": null},
+    {"name": "prid", "type": ["null","string"], "default": null},
+
+    {"name": "st",   "type": ["null","int"], "default": null},
+    {"name": "ste",  "type": ["null","int"], "default": null},
+    {"name": "elr",  "type": ["null","int"], "default": null},
+
+    {"name": "emd_ms", "type": ["null","long"], "default": null},
+    {"name": "apd_ms", "type": ["null","long"], "default": null},
+
+    {"name": "p",   "type": ["null","string"], "default": null},
+    {"name": "pt",  "type": ["null","int"],    "default": null},
+    {"name": "o",   "type": ["null","string"], "default": null},
+    {"name": "pn",  "type": ["null","string"], "default": null},
+    {"name": "b",   "type": ["null","string"], "default": null},
+    {"name": "tt",  "type": ["null","long"],   "default": null},
+    {"name": "tm_ms", "type": ["null","long"], "default": null},
+
+    {"name": "ch",  "type": ["null", { "type": "array", "items": "string" }], "default": null},
+    {"name": "j",   "type": ["null","string"], "default": null},
+    {"name": "pg",  "type": ["null","int"],    "default": null},
+    {"name": "et",  "type": ["null","int"],    "default": null},
+    {"name": "exd_ms", "type": ["null","long"], "default": null},
+    {"name": "pvad","type": ["null","string"], "default": null},
+    {"name": "ag",  "type": ["null","string"], "default": null},
+
+    {"name": "event_version_ms", "type": ["null","long"], "default": null},
+    {"name": "delete", "type": "boolean", "default": false}
+  ]
+}
+```
+
+**Регистрация схемы** (subject = `<topic>-value`):
+```bash
+curl -s -X POST http://10.254.3.111:8081/subjects/TBL_JTI_TRACE_CIS_HISTORY-value/versions \
+  -H "Content-Type: application/vnd.schemaregistry.v1+json" \
+  -d @conf/avro/tbl_jti_trace_cis_history.avsc
+```
+
+---
+
+### ClickHouse 24.8: чтение AvroConfluent
+
+**RAW-таблица (Kafka-engine):**
+```sql
+CREATE TABLE raw_tbl_jti_trace_cis_history_kafka
+(
+  c String,
+  t Int32,
+  opd_ms Int64,
+
+  id Nullable(String), did Nullable(String), rid Nullable(String), rinn Nullable(String), rn Nullable(String),
+  sid Nullable(String), sinn Nullable(String), sn Nullable(String), gt Nullable(String), prid Nullable(String),
+
+  st Nullable(Int32), ste Nullable(Int32), elr Nullable(Int32),
+
+  emd_ms Nullable(Int64), apd_ms Nullable(Int64),
+
+  p Nullable(String), pt Nullable(Int32), o Nullable(String), pn Nullable(String), b Nullable(String),
+  tt Nullable(Int64), tm_ms Nullable(Int64),
+
+  ch Array(String), j Nullable(String), pg Nullable(Int32), et Nullable(Int32),
+  exd_ms Nullable(Int64), pvad Nullable(String), ag Nullable(String),
+
+  event_version_ms Nullable(Int64),
+  `delete` UInt8
+)
+ENGINE = Kafka
+SETTINGS
+  kafka_broker_list = '10.254.3.111:9092,10.254.3.112:9092,10.254.3.113:9092',
+  kafka_topic_list  = 'TBL_JTI_TRACE_CIS_HISTORY',
+  kafka_group_name  = 'ch_tbl_jti_trace_cis_history',
+  kafka_format      = 'AvroConfluent',
+  kafka_schema_registry_url = 'http://10.254.3.111:8081,http://10.254.3.112:8081,http://10.254.3.113:8081',
+  kafka_num_consumers = 6,
+  kafka_skip_broken_messages = 1;
+```
+
+**Целевая MergeTree + MV:**
+```sql
+CREATE TABLE tbl_jti_trace_cis_history
+(
+  c String,
+  t UInt8,
+  opd_ms       DateTime64(3),
+  event_version_ms Nullable(DateTime64(3)),
+  `delete` UInt8,
+
+  id Nullable(String), did Nullable(String), rid Nullable(String), rinn Nullable(String), rn Nullable(String),
+  sid Nullable(String), sinn Nullable(String), sn Nullable(String), gt Nullable(String), prid Nullable(String),
+
+  st Nullable(UInt8), ste Nullable(UInt8), elr Nullable(UInt8),
+
+  emd_ms Nullable(DateTime64(3)), apd_ms Nullable(DateTime64(3)),
+
+  p Nullable(String), pt Nullable(UInt8), o Nullable(String), pn Nullable(String), b Nullable(String),
+  tt Nullable(Int64), tm_ms Nullable(DateTime64(3)),
+
+  ch Array(String), j Nullable(String), pg Nullable(UInt16), et Nullable(UInt8),
+  exd_ms Nullable(DateTime64(3)), pvad Nullable(String), ag Nullable(String)
+)
+ENGINE = MergeTree
+ORDER BY (c, t, opd_ms);
+
+CREATE MATERIALIZED VIEW mv_tbl_jti_trace_cis_history
+TO tbl_jti_trace_cis_history AS
+SELECT
+  c,
+  CAST(t AS UInt8) AS t,
+  toDateTime64(opd_ms/1000, 3) AS opd_ms,
+  ifNull(toDateTime64(event_version_ms/1000, 3), NULL) AS event_version_ms,
+  `delete`,
+  id, did, rid, rinn, rn, sid, sinn, sn, gt, prid,
+  CAST(st  AS Nullable(UInt8))  AS st,
+  CAST(ste AS Nullable(UInt8))  AS ste,
+  CAST(elr AS Nullable(UInt8))  AS elr,
+  ifNull(toDateTime64(emd_ms/1000, 3), NULL) AS emd_ms,
+  ifNull(toDateTime64(apd_ms/1000, 3), NULL) AS apd_ms,
+  p,
+  CAST(pt AS Nullable(UInt8)) AS pt,
+  o, pn, b,
+  tt,
+  ifNull(toDateTime64(tm_ms/1000, 3), NULL)  AS tm_ms,
+  ch, j,
+  CAST(pg AS Nullable(UInt16)) AS pg,
+  CAST(et AS Nullable(UInt8))  AS et,
+  ifNull(toDateTime64(exd_ms/1000, 3), NULL) AS exd_ms,
+  pvad, ag
+FROM raw_tbl_jti_trace_cis_history_kafka;
+```
+
+---
+
+### Изменения в h2k-endpoint (план; не реализовано)
+
+1. Новый ключ (дефолт делаем **avro**):
+   ```properties
+   h2k.output.format = json | avro   # дефолт: avro
+   ```
+   Пока в репозитории нет поддержки Avro — фактический формат остаётся JSON.
+2. Для `avro` добавить:
+   ```properties
+   h2k.schema.registry.urls = http://10.254.3.111:8081,http://10.254.3.112:8081,http://10.254.3.113:8081
+   h2k.schema.subject.pattern = ${topic}-value
+   # В KafkaProducer:
+   value.serializer=io.confluent.kafka.serializers.KafkaAvroSerializer
+   schema.registry.url=<urls>
+   ```
+3. В `KafkaReplicationEndpoint` собирать Avro-record из уже типизированной карты (как сейчас для JSON в режиме Phoenix).
+4. Тесты: `MockSchemaRegistryClient`, проверка совместимости, негативные кейсы.
+
+---
+
+### Порядок включения (минимум)
+
+1. Поднять Schema Registry 5.3.x на QA; убедиться, что `/subjects` отвечает.
+2. Согласовать и зарегистрировать Avro-схемы для нужных топиков.
+3. Реализовать поддержку `h2k.output.format=avro` в коде, собрать JAR.
+4. Включить Avro для `TBL_JTI_TRACE_CIS_HISTORY`, проверить доставку в Kafka.
+5. Завести RAW-таблицу и MV в ClickHouse; проверить лаг и типы.
+6. Провести нагрузочные тесты, затем расширять перечень таблиц.
