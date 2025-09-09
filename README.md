@@ -7,6 +7,10 @@
 
 ---
 
+## Содержание
+
+- [Чек-лист совместимости для Avro](#avro-compat-checklist)
+
 ## Быстрый старт
 
 1) **Соберите и разложите JAR** на все RegionServer:
@@ -193,7 +197,7 @@ h2k.topic.pattern=${table}
 **Автосоздание тем (`h2k.ensure.topics=true`):**
 - Создание выполняет `TopicEnsurer` при первом обращении к таблице.
 - Используются параметры `h2k.topic.partitions`, `h2k.topic.replication` и любые `h2k.topic.config.*`.
-- Валидные имена Kafka: символы `[a-zA-Z0-9._-]`, длина 1..249; *недопустимы имена* `.` и `..` (символ `.` внутри имени допустим).
+- Валидные имена Kafka: символы `[a-zA-Z0-9._-]`, длина 1..249; запрещены `'.'` и `'..'`.
 
 ### Устаревшие ключи
 
@@ -234,14 +238,14 @@ h2k.capacity.hints = TBL_JTI_TRACE_CIS_HISTORY=32,AGG.INC_DOCS_ACT=18
 
 ### Включение репликации нужных CF (в HBase shell)
 
-```bash
+```HBase shell
 # Пример: TBL_JTI_TRACE_CIS_HISTORY, включаем CF 'd'
 disable 'TBL_JTI_TRACE_CIS_HISTORY'
 alter  'TBL_JTI_TRACE_CIS_HISTORY', { NAME => 'd', REPLICATION_SCOPE => 1 }
 enable 'TBL_JTI_TRACE_CIS_HISTORY'
 ```
 
-```bash
+```HBase shell
 # Пример: таблица RECEIPT, включаем 'b' и 'd'
 disable 'RECEIPT'
 alter  'RECEIPT', { NAME => 'b', REPLICATION_SCOPE => 1 }
@@ -272,7 +276,7 @@ bin/hbase shell
 ```
 
 Проверка:
-```bash
+```HBase shell
 list_peers
 show_peer_tableCFs 'kafka_peer_fast'   # вернёт nil, если ограничений нет
 ```
@@ -481,7 +485,7 @@ Environment="HBASE_OPTS=${HBASE_OPTS} -Dh2k.log.dir=/opt/hbase-default-current/l
 
 1. **Пир виден и включён в HBase.**  
    В HBase shell:
-   ```bash
+   ```HBase shell
    list_peers
    ```
    Убедитесь, что ваш peer в состоянии **ENABLED**, очереди не растут аномально.
@@ -496,7 +500,7 @@ Environment="HBASE_OPTS=${HBASE_OPTS} -Dh2k.log.dir=/opt/hbase-default-current/l
 
 **Полезные операции (HBase 1.4.13):**
 
-```bash
+```HBase shell
 # HBase shell
 # включить/выключить peer
 enable_peer 'kafka_peer_fast'
@@ -636,12 +640,40 @@ HBase RegionServer
 
 ---
 
+
+```
+**Совместимость: короткий чек‑лист**
+
+- **JDK:** Schema Registry **5.3.8** работает на Java 8 (1.8). Проверьте `java -version` на всех узлах.
+- **Kafka:** брокеры **2.3.1**. `kafkastore.bootstrap.servers` указывает на тот же кластер; топик `_schemas` существует и имеет `replication.factor ≥ 3`.
+- **REST‑доступ:** порт **8081** доступен с RegionServer (продьюсеров), ClickHouse и админ‑хостов. Проверка: `curl -s http://&lt;sr-host&gt;:8081/subjects`.
+- **Формат для ClickHouse 24.8:** поддерживается `AvroConfluent`; укажите `kafka_format='AvroConfluent'` и `kafka_schema_registry_url` в таблице Kafka‑engine.
+- **Безопасность:** используем `PLAINTEXT` в Kafka и Schema Registry. Если в кластере Kafka включены SSL/SASL — потребуется сконфигурировать SR и продьюсеров соответствующим образом.
+- **Сериализатор на продьюсере:** `io.confluent.kafka.serializers.KafkaAvroSerializer` и свойство `schema.registry.url` должны быть в конфигурации.
+- **Синхронизация времени:** узлы с SR/Kafka/CH синхронизированы по времени (NTP), чтобы исключить аномалии по меткам времени.
+- **Альтернативы по версиям:** допускаются SR **5.5.x/6.x**, однако перед апгрейдом обязателен нагрузочный тест на QA и проверка совместимости с Kafka 2.3.1.
+```
+
 ### Развёртывание Schema Registry 5.3.x (open-source)
 
 **Ссылки (точные):**
 - Исходники (GitHub): <https://github.com/confluentinc/schema-registry>
-- Рекомендуемый тег под Kafka 2.3.1: <https://github.com/confluentinc/schema-registry/tree/v5.3.6>
-- README (сборка/запуск): <https://github.com/confluentinc/schema-registry/blob/v5.3.6/README.md>
+- Рекомендуемый тег: <https://github.com/confluentinc/schema-registry/tree/v5.3.8> (рекомендуется под Kafka 2.3.1)
+- README (сборка/запуск): <https://github.com/confluentinc/schema-registry/blob/v5.3.8/README.md>
+
+_Альтернатива:_ допустимо пробовать Schema Registry **5.5.x/6.x**, но такие версии могут тянуть иные зависимости/минимальные версии JDK/Kafka. Перед апгрейдом обязателен нагрузочный прогон на QA (регистрация/валидация схем, публикация AvroConfluent, потребление в ClickHouse). При отсутствии явной необходимости остаёмся на **5.3.x**.
+
+<a id="avro-compat-checklist"></a>
+### Совместимость: короткий чек-лист
+
+- **JDK:** Java 8 (1.8) на всех RegionServer, узлах Schema Registry и ClickHouse.
+- **Kafka:** брокеры 2.3.1; системный топик `_schemas` с `replication.factor ≥ 3`; доступность брокеров с узлов SR и RS.
+- **Schema Registry:** open-source 5.3.8; REST на `http://<host>:8081`; доступен из RS и ClickHouse; `compatibility.level=BACKWARD` (или ваша политика).
+- **ClickHouse:** 24.8; Kafka-engine с `kafka_format='AvroConfluent'` и `kafka_schema_registry_url='http://host1:8081,...'`.
+- **Producer (endpoint):** при включении Avro должен использовать `value.serializer=io.confluent.kafka.serializers.KafkaAvroSerializer` и `schema.registry.url=...` (в коде пока не реализовано — см. раздел «Изменения в h2k-endpoint (план)»).
+- **Безопасность:** единообразие транспорта (PLAINTEXT везде, либо SSL/SASL везде); при SSL/SASL — соответствующие `schema.registry.*`/`kafkastore.*` настройки.
+- **Время:** синхронизация NTP/PTP на всех узлах (важно для таймаутов/метрик).
+- **Альтернативные SR:** 5.5.x/6.x допустимы, но требуются нагрузочные и длительные (soak) тесты с Kafka 2.3.1 перед продом.
 
 #### Вариант A — tar из Confluent Platform 5.3.x
 
@@ -892,3 +924,12 @@ FROM raw_tbl_jti_trace_cis_history_kafka;
 4. Включить Avro для `TBL_JTI_TRACE_CIS_HISTORY`, проверить доставку в Kafka.
 5. Завести RAW-таблицу и MV в ClickHouse; проверить лаг и типы.
 6. Провести нагрузочные тесты, затем расширять перечень таблиц.
+
+#### Коротко: проверьте перед стартом Avro
+
+- Java 8, Kafka 2.3.1, SR 5.3.8 REST:8081 доступны.
+- В ClickHouse настроен `AvroConfluent` + `kafka_schema_registry_url`.
+- В endpoint будет включён Avro-serializer и `schema.registry.url` (после реализации).
+- Транспорт единообразный (PLAINTEXT/SSL/SASL), время синхронизировано.
+- Под альтернативные SR версии проведён нагрузочный тест.  
+  См. полный чек-лист: [ссылка](#avro-compat-checklist).
