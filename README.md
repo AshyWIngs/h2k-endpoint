@@ -26,6 +26,7 @@
 - [ClickHouse: чтение JSONEachRow из Kafka](#clickhouse-чтение-jsoneachrow-из-kafka)
 - [Логирование](#логирование)
 - [Диагностика и эксплуатация](#диагностика-и-эксплуатация)
+- [Смена профиля и обновление конфигурации peer](#смена-профиля-и-обновление-конфигурации-peer)
 - [Типовые ошибки и что посмотреть в логах](#типовые-ошибки-и-что-посмотреть-в-логах)
 - [Что тюнить, если…](#что-тюнить-если)
 - [Архитектура (кратко)](#архитектура-кратко)
@@ -253,9 +254,9 @@ h2k.topic.pattern=${table}
 - **PK-колонки:** добавьте число ключей, равное количеству колонок первичного ключа (обычно 2–3), т.к. PK всегда включается в payload.
 
 **Пример:**  
-Таблица `TBL_JTI_TRACE_CIS_HISTORY` имеет 32 логических поля по CF, **PK состоит из 3 колонок**.
-При текущих настройках (`h2k.payload.include.meta=false`, `h2k.payload.include.meta.wal=false`, `h2k.payload.include.rowkey=false`) разумный hint — **`32 + 3 = 35`** (учитываем PK).
-Если позже включите базовые мета-поля и rowkey, станет `35 + 8 + 1 = 44`. Для запаса можно округлять вверх до ближайшей «красивой» величины (например, 48).
+По вашему DDL у `TBL_JTI_TRACE_CIS_HISTORY` **32 колонки всего** (включая PK `c`,`t`,`opd`). Поэтому при текущих настройках (`h2k.payload.include.meta=false`, `h2k.payload.include.meta.wal=false`, `h2k.payload.include.rowkey=false`) базовый hint = **`32`**.  
+Если где‑то считаете только колонки CF (без учёта PK), используйте правило: **`hint = N(CF) + N(PK)`**; для этой таблицы `N(PK)=3`.  
+Если позже включите базовые мета‑поля и rowkey, получится **`32 + 8 + 1 = 41`**; при добавлении WAL‑метаданных — **`41 + 2 = 43`**. Для запаса допускается округлить вверх до ближайшей «красивой» величины.
 
 **Где задавать:**  
 В peer‑конфиге (имеет приоритет) или в `hbase-site.xml`:
@@ -344,8 +345,8 @@ show_peer_tableCFs 'h2k_balanced'   # проверка
 | h2k.producer.acks | 1 | all | all |
 | h2k.producer.enable.idempotence | false | true | true |
 | h2k.producer.max.in.flight | 5 | 5 | 1 |
-| h2k.producer.linger.ms | 100 | 50 | 50 |
-| h2k.producer.batch.size | 524288 | 262144 | 65536 |
+| h2k.producer.linger.ms | 100 | 100 | 50 |
+| h2k.producer.batch.size | 524288 | 524288 | 65536 |
 | h2k.producer.compression.type | lz4 | lz4 | snappy |
 | h2k.producer.retries | 10 | 2147483647 | 2147483647 |
 | h2k.producer.request.timeout.ms | 30000 | 120000 | 120000 |
@@ -719,8 +720,8 @@ disable_peer 'h2k_balanced'
 # enable_peer 'h2k_reliable' ; disable_peer 'h2k_reliable'
 
 # показать/изменить ограничения по таблицам/CF
-show_peer_tableCFs 'kafka_peer_fast'       # вернёт nil, если ограничений нет
-set_peer_tableCFs   'kafka_peer_fast', 'TBL1:cf1;TBL2:cf2,cf3'
+show_peer_tableCFs 'h2k_fast'       # вернёт nil, если ограничений нет
+set_peer_tableCFs   'h2k_fast', 'TBL1:cf1;TBL2:cf2,cf3'
 
 # обновить конфиг peer (например, поменяли acks или bootstrap) — безопаснее через Java API
 rep_admin = org.apache.hadoop.hbase.client.replication.ReplicationAdmin.new(@hbase.configuration)
@@ -777,8 +778,8 @@ newcfg = java.util.HashMap.new
 newcfg.put('h2k.producer.acks',               'all')
 newcfg.put('h2k.producer.enable.idempotence', 'true')
 newcfg.put('h2k.producer.max.in.flight',      '5')
-newcfg.put('h2k.producer.linger.ms',          '50')
-newcfg.put('h2k.producer.batch.size',         '262144')
+newcfg.put('h2k.producer.linger.ms',          '100')
+newcfg.put('h2k.producer.batch.size',         '524288')
 newcfg.put('h2k.producer.compression.type',   'lz4')
 newcfg.put('h2k.producer.retries',            '2147483647')
 newcfg.put('h2k.producer.request.timeout.ms', '120000')
