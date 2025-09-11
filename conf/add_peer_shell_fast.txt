@@ -31,10 +31,14 @@ add_peer 'h2k_fast',
       # client.id не задаём — Endpoint сам сгенерирует уникальный id per-host (hostname/UUID)
       'h2k.topic.pattern'                   => '${table}',              # ${table}|${namespace}|${qualifier}
       'h2k.cf.list'                         => 'd',                     # можно CSV: 'b,d'
+# PK-колонки из rowkey автоматически инъектируются в payload (c,t,opd и пр.), включать их в h2k.cf.list не требуется
 
       # Декодирование
       'h2k.decode.mode'                     => 'json-phoenix',          # 'simple' | 'json-phoenix'
+# TIMESTAMP/DATE/TIME сериализуются как epoch millis (long); любой ARRAY -> JSON-массив
+# null-значения пропускаются согласно h2k.json.serialize.nulls=false
       'h2k.schema.path'                     => '/opt/hbase-default-current/conf/schema.json',
+# schema.json: кроме столбцов содержит PK, которые будут добавлены в Value в Kafka
       'h2k.json.serialize.nulls'            => 'false',
 
       # Метаполя в полезной нагрузке
@@ -45,7 +49,7 @@ add_peer 'h2k_fast',
       # RowKey/соль/подсказки ёмкости (для DEFAULT namespace имя без префикса)
       'h2k.rowkey.encoding'                 => 'BASE64',
       'h2k.salt.map'                        => 'TBL_JTI_TRACE_CIS_HISTORY=1',
-      'h2k.capacity.hints'                  => 'TBL_JTI_TRACE_CIS_HISTORY=32',
+      'h2k.capacity.hints'                  => 'TBL_JTI_TRACE_CIS_HISTORY=35',   # учтены +3 PK
 
       # Ожидание подтверждений внутри BatchSender
       'h2k.producer.await.every'            => '500',

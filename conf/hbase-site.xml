@@ -34,6 +34,7 @@
     Список семейств колонок (CF), по которым берём значения. CSV без пробелов.
     Примеры: "d,b", "0,DOCUMENTS". Имена — ровно как в HBase (см. describe).
     Несуществующие в таблице CF игнорируются без ошибок.
+    PK‑колонки всегда инъектируются в payload независимо от списка CF (их не нужно добавлять в h2k.cf.list).
   -->
   <property>
     <name>h2k.cf.list</name>
@@ -54,10 +55,11 @@
     Подсказки ёмкости JSON‑payload (число ключей в корневой map) per-table.
     Нужны для точного подбора LinkedHashMap без ре‑хешей.
     'default=0' — использовать быструю оценку в рантайме.
+    Важно: учитывайте PK — добавьте количество PK‑колонок (обычно 2–3), т.к. PK всегда присутствует в payload.
   -->
   <property>
     <name>h2k.capacity.hints</name>
-    <value>TBL_JTI_TRACE_CIS_HISTORY=32</value>
+    <value>TBL_JTI_TRACE_CIS_HISTORY=35</value>
   </property>
 
   <!--
@@ -223,14 +225,29 @@
   <!--
     Режим декодирования значений:
       simple        — отдаём Base64/строки без схемы (минимальные накладные)
-      json-phoenix  — используем schema.json для типового декодирования Phoenix
+      json-phoenix  — используем schema.json для строгого декодирования типов Phoenix:
+                      - структура: { "TABLE": { "pk": [...], "columns": { "col": "TYPE", ... } }, ... }
+                      - PK всегда инъектируется в payload из rowkey (имена — как в schema.json)
+                      - TIMESTAMP сериализуется как epoch‑millis: поле получает суффикс *_ms
+                      - ARRAY типов возвращается как JSON‑массив (List)
   -->
   <property>
     <name>h2k.decode.mode</name>
     <value>json-phoenix</value>
   </property>
 
-  <!-- Путь к файлу схемы (schema.json) для режима json-phoenix. -->
+  <!--
+    Путь к файлу схемы (schema.json) для режима json‑phoenix.
+    Ожидается структура:
+      {
+        "TBL_JTI_TRACE_CIS_HISTORY": {
+          "pk": ["c","t","opd"],                 // порядок соответствует разбору rowkey
+          "columns": { "c":"VARCHAR", "t":"UNSIGNED_TINYINT", "opd":"TIMESTAMP", ... }
+        },
+        ...
+      }
+    Примечание: PK всегда добавляется в payload; TIMESTAMP пишется с суффиксом *_ms (epoch‑millis).
+  -->
   <property>
     <name>h2k.schema.path</name>
     <value>/opt/hbase-default-current/conf/schema.json</value>

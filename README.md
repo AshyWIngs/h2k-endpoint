@@ -23,6 +23,7 @@
 - [Матрица профилей (ключевые отличия)](#матрица-профилей-ключевые-отличия)
 - [Формат сообщения (JSONEachRow)](#формат-сообщения-jsoneachrow)
 - [Схема Phoenix (`conf/schema.json`)](#схема-phoenix-confschemajson)
+- [ClickHouse: чтение JSONEachRow из Kafka](#clickhouse-чтение-jsoneachrow-из-kafka)
 - [Логирование](#логирование)
 - [Диагностика и эксплуатация](#диагностика-и-эксплуатация)
 - [Типовые ошибки и что посмотреть в логах](#типовые-ошибки-и-что-посмотреть-в-логах)
@@ -59,11 +60,11 @@
    <property><name>hbase.replication</name><value>true</value></property>
    ```
 4) **Создайте peer** готовым скриптом (HBase 1.4.13), выберите профиль:
-   - `conf/add_peer_shell_fast.txt` — FAST (макс. скорость)
-   - `conf/add_peer_shell_balanced.txt` — BALANCED (компромисс)
-   - `conf/add_peer_shell_reliable.txt` — RELIABLE (надёжность)
+   - `conf/add_peer_shell_balanced.txt` — **BALANCED** (рекомендуется для прод)
+   - `conf/add_peer_shell_reliable.txt` — **RELIABLE** (максимальные гарантии/порядок)
+   - `conf/add_peer_shell_fast.txt` — **FAST** (максимальная скорость; без строгих гарантий)
    
-   Запуск: `bin/hbase shell conf/add_peer_shell_fast.txt`  
+   Запуск (пример): `bin/hbase shell conf/add_peer_shell_balanced.txt`  
    Подробности: см. раздел «Профили peer (готовые скрипты)».
 5) **Проверьте доставку**: сообщения появляются в Kafka‑топике `${table}`.
 
@@ -249,11 +250,12 @@ h2k.topic.pattern=${table}
 - если `h2k.payload.include.meta=true` → `+8` ключей: `_table,_namespace,_qualifier,_cf,_cells_total,_cells_cf,event_version,delete`;
 - если `h2k.payload.include.meta.wal=true` → `+2` ключа: `_wal_seq,_wal_write_time`;
 - если `h2k.payload.include.rowkey=true` → `+1` ключ: `_rowkey` (формат по `h2k.rowkey.encoding`: `BASE64` или `HEX`).
+- **PK-колонки:** добавьте число ключей, равное количеству колонок первичного ключа (обычно 2–3), т.к. PK всегда включается в payload.
 
 **Пример:**  
-Таблица `TBL_JTI_TRACE_CIS_HISTORY` имеет 32 логических поля.  
-При текущих настройках (`h2k.payload.include.meta=false`, `h2k.payload.include.meta.wal=false`, `h2k.payload.include.rowkey=false`) разумный hint — **`32`**.  
-Если позже включите базовые мета‑поля и rowkey, станет `32 + 8 + 1 = 41`. Для запаса можно округлять вверх до ближайшей «красивой» величины (например, 44).
+Таблица `TBL_JTI_TRACE_CIS_HISTORY` имеет 32 логических поля по CF, **PK состоит из 3 колонок**.
+При текущих настройках (`h2k.payload.include.meta=false`, `h2k.payload.include.meta.wal=false`, `h2k.payload.include.rowkey=false`) разумный hint — **`32 + 3 = 35`** (учитываем PK).
+Если позже включите базовые мета-поля и rowkey, станет `35 + 8 + 1 = 44`. Для запаса можно округлять вверх до ближайшей «красивой» величины (например, 48).
 
 **Где задавать:**  
 В peer‑конфиге (имеет приоритет) или в `hbase-site.xml`:
@@ -296,23 +298,27 @@ enable 'DOCUMENTS'
 ## Профили peer (готовые скрипты)
 
 Скрипты для создания peer находятся в каталоге `conf/`:
-- FAST — `conf/add_peer_shell_fast.txt` (максимальная скорость)
-- BALANCED — `conf/add_peer_shell_balanced.txt` (компромисс)
-- RELIABLE — `conf/add_peer_shell_reliable.txt` (строгие гарантии)
+- BALANCED — `conf/add_peer_shell_balanced.txt` (**основной/рекомендуемый прод-профиль**)
+- RELIABLE — `conf/add_peer_shell_reliable.txt` (строжайшие гарантии/порядок; медленнее)
+- FAST — `conf/add_peer_shell_fast.txt` (максимальная скорость; допускает риск повторов/потерь при сбоях)
 
 Как запускать:
-```bash
-# выполнить скрипт целиком
-bin/hbase shell conf/add_peer_shell_fast.txt
+```
+# выполнить скрипт целиком (выберите профиль)
+bin/hbase shell conf/add_peer_shell_balanced.txt    # прод-профиль (рекомендуется)
+# bin/hbase shell conf/add_peer_shell_reliable.txt  # строгие гарантии/порядок; медленнее
+# bin/hbase shell conf/add_peer_shell_fast.txt      # максимум скорости; допускает риски
 
 # или открыть, скопировать и вставить содержимое в интерактивный shell
 bin/hbase shell
 ```
 
 Проверка:
-```HBase shell
+```
 list_peers
-show_peer_tableCFs 'kafka_peer_fast'   # вернёт nil, если ограничений нет
+show_peer_tableCFs 'h2k_balanced'   # вернёт nil, если ограничений нет
+# show_peer_tableCFs 'h2k_fast'
+# show_peer_tableCFs 'h2k_reliable'
 ```
 
 ---
@@ -321,9 +327,9 @@ show_peer_tableCFs 'kafka_peer_fast'   # вернёт nil, если ограни
 По умолчанию `TABLE_CFS = nil` → HBase отдаёт в Endpoint все таблицы/CF, у которых `REPLICATION_SCOPE => 1`. 
 Чтобы сузить поток **ещё на стороне HBase**, используйте:
 ```
-# только DOCUMENTS:0 и RECEIPT:b,d
-set_peer_tableCFs 'kafka_peer_fast', 'DOCUMENTS:0;RECEIPT:b,d'
-show_peer_tableCFs 'kafka_peer_fast'   # проверка
+set_peer_tableCFs 'h2k_balanced', 'DOCUMENTS:0;RECEIPT:b,d'
+show_peer_tableCFs 'h2k_balanced'   # проверка
+# при необходимости используйте 'h2k_fast' или 'h2k_reliable'
 ```
 Это уменьшает объём обрабатываемых WALEdit до того, как они попадут в Endpoint.
 
@@ -337,23 +343,21 @@ show_peer_tableCFs 'kafka_peer_fast'   # проверка
 |---|---:|---:|---:|
 | h2k.producer.acks | 1 | all | all |
 | h2k.producer.enable.idempotence | false | true | true |
-| h2k.producer.max.in.flight | 5 | 3 | 1 |
-| h2k.producer.linger.ms | 100 | 100 | 50 |
-| h2k.producer.batch.size | 524288 | 131072 | 65536 |
+| h2k.producer.max.in.flight | 5 | 5 | 1 |
+| h2k.producer.linger.ms | 100 | 50 | 50 |
+| h2k.producer.batch.size | 524288 | 262144 | 65536 |
 | h2k.producer.compression.type | lz4 | lz4 | snappy |
 | h2k.producer.retries | 10 | 2147483647 | 2147483647 |
-| h2k.producer.request.timeout.ms | 30000 | 60000 | 120000 |
+| h2k.producer.request.timeout.ms | 30000 | 120000 | 120000 |
 | h2k.producer.delivery.timeout.ms | 90000 | 300000 | 300000 |
 | h2k.producer.buffer.memory | 268435456 | 268435456 | 268435456 |
 | h2k.producer.max.request.size | 2097152 | 2097152 | 2097152 |
 | h2k.producer.await.every | 500 | 500 | 500 |
 | h2k.producer.await.timeout.ms | 180000 | 300000 | 300000 |
 
-Пояснения:
-- FAST: приоритет throughput (acks=1, без идемпотентности), крупные батчи и агрессивный параллелизм.
-- BALANCED: строгие подтверждения и идемпотентность при умеренном параллелизме; типовой продакшен.
-- RELIABLE: максимум гарантий и порядка (in-flight=1, меньшие батчи, компрессор snappy).
-Дополнение: значение `retries=2147483647` в профилях BALANCED/RELIABLE трактуем как «практически безлимитные повторы до дедлайна `delivery.timeout.ms`».
+**Примечание к BALANCED:** дополнительно включены «бережные» бэкоффы продьюсера для устойчивости к флапам сети/брокеров (задаются как `h2k.producer.*`, pass‑through к Kafka):  
+`retry.backoff.ms=100`, `reconnect.backoff.ms=100`, `reconnect.backoff.max.ms=10000`.  
+При `enable.idempotence=true` порядок внутри раздела сохраняется даже при `max.in.flight=5`.
 
 ---
 
@@ -389,19 +393,22 @@ _Пример ниже — реальная строка из `TBL_JTI_TRACE_CIS
 ```
 
 - `c`, `t`, `opd_ms` — части PK из Phoenix rowkey (`VARCHAR`, `UNSIGNED_TINYINT`, `TIMESTAMP` → миллисекунды).
+- **PK всегда в payload.** Колонки первичного ключа (например, `c`,`t`,`opd`) **всегда** присутствуют в JSON независимо от выбранных CF; тип `TIMESTAMP` у PK сериализуется с суффиксом `*_ms` (epoch-millis), как и для обычных колонок.
 - `event_version` — максимум меток времени среди ячеек выбранного CF; **в примере** совпадает с `tm_ms` строки.
 - `delete=true` — если в партии был delete‑маркер по CF; иначе `false`.
 - Прочие поля — это значения колонок из CF, приведённые по Phoenix‑типам; все `TIMESTAMP` сериализуются как epoch‑millis (`*_ms`). Поля с `NULL` по умолчанию опускаются (см. `h2k.json.serialize.nulls`).
+- Имена ключей берутся из HBase как есть (регистр важен в `schema.json`). Для `TIMESTAMP` используется соглашение `*_ms`.
 
 ---
 
 ## Схема Phoenix (`conf/schema.json`)
 
-В режиме `h2k.decode.mode=json-phoenix` endpoint использует компактное описание таблиц (карта *таблица → {columns}*), чтобы строго и быстро привести байтовые значения к типам Phoenix.
+В режиме `h2k.decode.mode=json-phoenix` endpoint использует компактное описание таблиц (карта *таблица → {pk, columns}*), чтобы строго и быстро привести байтовые значения к типам Phoenix. Теперь, помимо описания колонок, в `schema.json` указывается **первичный ключ** (`pk`) — упорядоченный список имён PK-колонок, как они лежат в HBase (регистр важен).
 
 - Ключ таблицы — `NAMESPACE.TABLE`. Для таблиц из `DEFAULT` неймспейса указывайте просто `TABLE` (без `DEFAULT.`).
 - Ключи в `columns` — **имена колонок/квалифаеров** в том виде, как они лежат в HBase (регистр важен).
 - Значение — тип Phoenix в `UPPER` (`VARCHAR`, `UNSIGNED_TINYINT`, `TIMESTAMP`, `BIGINT`, `...`, а также `... ARRAY`).
+- Ключ `pk` — массив имён PK-колонок **в порядке их следования** в rowkey (например, `["c","t","opd"]`). Типы этих колонок задаются в `columns`.
 
 **Как указывать таблицы с неймспейсом (Phoenix schema):**
 - Ключ таблицы в `schema.json` — это **HBase namespace + '.' + имя таблицы**.  
@@ -415,6 +422,7 @@ _Пример ниже — реальная строка из `TBL_JTI_TRACE_CIS
 ```json
 {
   "TBL_JTI_TRACE_CIS_HISTORY": {
+    "pk": ["c", "t", "opd"],
     "columns": {
       "c": "VARCHAR",
       "t": "UNSIGNED_TINYINT",
@@ -422,6 +430,7 @@ _Пример ниже — реальная строка из `TBL_JTI_TRACE_CIS
     }
   },
   "WORK.CIS_HISTORY": {
+    "pk": ["c", "t", "opd"],
     "columns": {
       "tm": "TIMESTAMP",
       "c":  "VARCHAR",
@@ -440,6 +449,7 @@ _Пример ниже — реальная строка из `TBL_JTI_TRACE_CIS
 ```json
 {
   "TBL_JTI_TRACE_CIS_HISTORY": {
+    "pk": ["c", "t", "opd"],
     "columns": {
       "c": "VARCHAR",
       "t": "UNSIGNED_TINYINT",
@@ -477,6 +487,171 @@ _Пример ниже — реальная строка из `TBL_JTI_TRACE_CIS
   }
 }
 ```
+Примечание: для колонок типа `TIMESTAMP` (включая те, что входят в PK) при сериализации в JSON используется имя с суффиксом `*_ms` и значение в миллисекундах epoch (например, `opd` → `opd_ms`).
+
+
+## ClickHouse: чтение JSONEachRow из Kafka
+
+Ниже — минимальный кластерный ingest потока JSONEachRow из Kafka в ClickHouse **без параметров**. Он состоит из трёх объектов: источника Kafka, RAW‑таблицы и материализованного представления (MV), которое конвертирует `*_ms` в `DateTime64(3,'UTC')`.
+
+> Замените значения в `kafka_broker_list` и `kafka_topic_list` на ваши.  
+> Для быстрой ручной проверки прямого чтения из Kafka-таблицы включите сессионную настройку:  
+> `SET stream_like_engine_allow_direct_select = 1;`
+
+```sql
+-- 0) Источник: Kafka (одна таблица на ноду; группа общая на кластер)
+DROP TABLE IF EXISTS stg.kafka_tbl_jti_trace_cis_history_src ON CLUSTER shardless SYNC;
+CREATE TABLE stg.kafka_tbl_jti_trace_cis_history_src ON CLUSTER shardless
+(
+    c String,
+    t UInt8,
+    opd_ms Int64,
+
+    `delete` UInt8,
+    event_version Nullable(Int64),
+
+    id   Nullable(String),
+    did  Nullable(String),
+    rid  Nullable(String),
+    rinn Nullable(String),
+    rn   Nullable(String),
+    sid  Nullable(String),
+    sinn Nullable(String),
+    sn   Nullable(String),
+    gt   Nullable(String),
+    prid Nullable(String),
+
+    st   Nullable(UInt8),
+    ste  Nullable(UInt8),
+    elr  Nullable(UInt8),
+
+    emd_ms Nullable(Int64),
+    apd_ms Nullable(Int64),
+    exd_ms Nullable(Int64),
+
+    p    Nullable(String),
+    pt   Nullable(UInt8),
+    o    Nullable(String),
+    pn   Nullable(String),
+    b    Nullable(String),
+    tt   Nullable(Int64),
+    tm_ms Nullable(Int64),
+
+    ch   Array(String),
+    j    Nullable(String),
+    pg   Nullable(UInt16),
+    et   Nullable(UInt8),
+    pvad Nullable(String),
+    ag   Nullable(String)
+)
+ENGINE = Kafka
+SETTINGS
+  kafka_broker_list = '10.254.3.111:9092,10.254.3.112:9092,10.254.3.113:9092',
+  kafka_topic_list  = 'TBL_JTI_TRACE_CIS_HISTORY',
+  kafka_group_name  = 'ch_tbl_jti_trace_cis_history',
+  kafka_format      = 'JSONEachRow',
+  kafka_num_consumers = 4,
+  kafka_max_block_size = 10000,
+  kafka_skip_broken_messages = 1;
+
+-- 1) RAW: приземление (типизировано) + TTL по времени загрузки
+DROP TABLE IF EXISTS stg.tbl_jti_trace_cis_history_raw ON CLUSTER shardless SYNC;
+CREATE TABLE stg.tbl_jti_trace_cis_history_raw ON CLUSTER shardless
+(
+    c   String,
+    t   UInt8,
+    opd DateTime64(3, 'UTC'),
+    opd_local DateTime64(3, 'Asia/Almaty') ALIAS toTimeZone(opd, 'Asia/Almaty'),
+    opd_local_date Date MATERIALIZED toDate(toTimeZone(opd, 'Asia/Almaty')),
+
+    `delete` UInt8,
+    event_version Nullable(DateTime64(3, 'UTC')),
+    event_version_local Nullable(DateTime64(3, 'Asia/Almaty'))
+        ALIAS if(isNull(event_version), NULL, toTimeZone(event_version, 'Asia/Almaty')),
+
+    id   Nullable(String),
+    did  Nullable(String),
+    rid  Nullable(String),
+    rinn Nullable(String),
+    rn   Nullable(String),
+    sid  Nullable(String),
+    sinn Nullable(String),
+    sn   Nullable(String),
+    gt   Nullable(String),
+    prid Nullable(String),
+
+    st   Nullable(UInt8),
+    ste  Nullable(UInt8),
+    elr  Nullable(UInt8),
+
+    emd  Nullable(DateTime64(3, 'UTC')),
+    emd_local Nullable(DateTime64(3, 'Asia/Almaty')) ALIAS if(isNull(emd), NULL, toTimeZone(emd, 'Asia/Almaty')),
+
+    apd  Nullable(DateTime64(3, 'UTC')),
+    apd_local Nullable(DateTime64(3, 'Asia/Almaty')) ALIAS if(isNull(apd), NULL, toTimeZone(apd, 'Asia/Almaty')),
+
+    exd  Nullable(DateTime64(3, 'UTC')),
+    exd_local Nullable(DateTime64(3, 'Asia/Almaty')) ALIAS if(isNull(exd), NULL, toTimeZone(exd, 'Asia/Almaty')),
+
+    p    Nullable(String),
+    pt   Nullable(UInt8),
+    o    Nullable(String),
+    pn   Nullable(String),
+    b    Nullable(String),
+    tt   Nullable(Int64),
+
+    tm   Nullable(DateTime64(3, 'UTC')),
+    tm_local Nullable(DateTime64(3, 'Asia/Almaty')) ALIAS if(isNull(tm), NULL, toTimeZone(tm, 'Asia/Almaty')),
+
+    ch   Array(String) DEFAULT [] CODEC(ZSTD(6)),
+    j    Nullable(String) CODEC(ZSTD(6)),
+    pg   Nullable(UInt16),
+    et   Nullable(UInt8),
+    pvad Nullable(String) CODEC(ZSTD(6)),
+    ag   Nullable(String) CODEC(ZSTD(6)),
+
+    ingested_at DateTime('UTC') DEFAULT now('UTC'),
+    ingested_at_local DateTime('Asia/Almaty') ALIAS toTimeZone(ingested_at, 'Asia/Almaty'),
+
+    INDEX idx_opd_local_date (opd_local_date) TYPE minmax GRANULARITY 1
+)
+ENGINE = ReplicatedMergeTree('/clickhouse/tables/stg.tbl_jti_trace_cis_history_raw', '{shardless_repl}')
+PARTITION BY toYYYYMMDD(opd)
+ORDER BY (c, opd, t)
+TTL ingested_at + INTERVAL 5 DAY DELETE
+SETTINGS index_granularity = 8192;
+
+-- 2) MV: конвертация JSON-ms → типы и вставка в RAW
+DROP TABLE IF EXISTS stg.mv_tbl_jti_trace_cis_history_to_raw ON CLUSTER shardless SYNC;
+CREATE MATERIALIZED VIEW stg.mv_tbl_jti_trace_cis_history_to_raw ON CLUSTER shardless
+TO stg.tbl_jti_trace_cis_history_raw
+AS
+SELECT
+  c,
+  t,
+  toDateTime64(opd_ms / 1000.0, 3, 'UTC') AS opd,
+
+  `delete`,
+  ifNull(toDateTime64(event_version / 1000.0, 3, 'UTC'), NULL) AS event_version,
+
+  id, did, rid, rinn, rn, sid, sinn, sn, gt, prid,
+  st, ste, elr,
+
+  ifNull(toDateTime64(emd_ms / 1000.0, 3, 'UTC'), NULL) AS emd,
+  ifNull(toDateTime64(apd_ms / 1000.0, 3, 'UTC'), NULL) AS apd,
+  ifNull(toDateTime64(exd_ms / 1000.0, 3, 'UTC'), NULL) AS exd,
+
+  p, pt, o, pn, b, tt,
+  ifNull(toDateTime64(tm_ms  / 1000.0, 3, 'UTC'), NULL) AS tm,
+
+  ch, j, pg, et, pvad, ag
+FROM stg.kafka_tbl_jti_trace_cis_history_src;
+```
+
+**Диагностика:**
+- Проверить консьюм: `SELECT * FROM stg.kafka_tbl_jti_trace_cis_history_src LIMIT 5` (после `SET stream_like_engine_allow_direct_select = 1`).
+- Вставки в RAW: `SELECT count() FROM stg.tbl_jti_trace_cis_history_raw`.
+- При необходимости измените `kafka_group_name`, чтобы начать чтение «с нуля» другой группой.
 
 ## Логирование
 
@@ -486,7 +661,7 @@ _Пример ниже — реальная строка из `TBL_JTI_TRACE_CIS
 
 - Кодировка: UTF‑8 (русские сообщения без проблем).
 - Паттерн: `%d{ISO8601} %-5p [%t] %c - %m%n` (без дорогих `%M/%L`).
-- Файл лога: `${h2k.log.dir}/h2k-endpoint.log`. Если `-Dh2k.log.dir` не задан, берётся `${hbase.log.dir}`; при отсутствии и этого — `./logs`.
+- Файл лога: `/opt/hbase-default-current/logs/h2k-endpoint.log` (дефолт). Можно переопределить через `-Dh2k.log.dir=/ваш/путь`.
 - Ротация:
   - размер файла: `${h2k.log.maxFileSize}` (по умолчанию `64MB`);
   - число бэкапов: `${h2k.log.maxBackupIndex}` (по умолчанию `10`).
@@ -537,16 +712,41 @@ Environment="HBASE_OPTS=${HBASE_OPTS} -Dh2k.log.dir=/opt/hbase-default-current/l
 ```HBase shell
 # HBase shell
 # включить/выключить peer
-enable_peer 'kafka_peer_fast'
-disable_peer 'kafka_peer_fast'
+enable_peer 'h2k_balanced'
+disable_peer 'h2k_balanced'
+# примеры для других профилей:
+# enable_peer 'h2k_fast' ; disable_peer 'h2k_fast'
+# enable_peer 'h2k_reliable' ; disable_peer 'h2k_reliable'
 
 # показать/изменить ограничения по таблицам/CF
 show_peer_tableCFs 'kafka_peer_fast'       # вернёт nil, если ограничений нет
 set_peer_tableCFs   'kafka_peer_fast', 'TBL1:cf1;TBL2:cf2,cf3'
 
-# обновить конфиг (например, поменяли acks или bootstrap) — надёжнее через Java API в 1.4.13
+# обновить конфиг peer (например, поменяли acks или bootstrap) — безопаснее через Java API
 rep_admin = org.apache.hadoop.hbase.client.replication.ReplicationAdmin.new(@hbase.configuration)
-rep_admin.updatePeerConfig("kafka_peer_fast", repconf)
+peer_id = 'h2k_balanced'   # или 'h2k_fast' / 'h2k_reliable'
+newcfg = java.util.HashMap.new
+# примеры ключей (pass-through к Kafka Producer через префикс h2k.producer.*):
+newcfg.put('h2k.producer.acks',               'all')
+newcfg.put('h2k.producer.enable.idempotence', 'true')
+newcfg.put('h2k.producer.max.in.flight',      '5')
+newcfg.put('h2k.producer.linger.ms',          '50')
+newcfg.put('h2k.producer.batch.size',         '262144')
+newcfg.put('h2k.producer.compression.type',   'lz4')
+newcfg.put('h2k.producer.retries',            '2147483647')
+newcfg.put('h2k.producer.request.timeout.ms', '120000')
+newcfg.put('h2k.producer.delivery.timeout.ms','300000')
+# бережные бэкоффы
+newcfg.put('h2k.producer.retry.backoff.ms',        '100')
+newcfg.put('h2k.producer.reconnect.backoff.ms',    '100')
+newcfg.put('h2k.producer.reconnect.backoff.max.ms','10000')
+# при необходимости можно добавить bootstrap/cf.list и т.п.:
+# newcfg.put('h2k.kafka.bootstrap.servers','10.254.3.111:9092,10.254.3.112:9092,10.254.3.113:9092')
+# newcfg.put('h2k.cf.list','d')
+
+current = rep_admin.getPeerConfig(peer_id)
+current.getConfiguration().putAll(newcfg)
+rep_admin.updatePeerConfig(peer_id, current)
 ```
 
 **JMX/метрики:**
@@ -563,6 +763,66 @@ kafka-console-consumer.sh \
 ```
 
 ---
+
+### Смена профиля и обновление конфигурации peer
+
+В HBase 1.4 удобнее **обновлять конфиг существующего peer** (без создания нового ID), чем пересоздавать его — так не будет дублей в Kafka и не потеряется прогресс очередей.
+
+**A) Обновить конфиг существующего peer (рекомендуется):**
+```HBase shell
+rep_admin = org.apache.hadoop.hbase.client.replication.ReplicationAdmin.new(@hbase.configuration)
+
+# 1) Собираем новую конфигурацию (минимально отличия от FAST → BALANCED)
+newcfg = java.util.HashMap.new
+newcfg.put('h2k.producer.acks',               'all')
+newcfg.put('h2k.producer.enable.idempotence', 'true')
+newcfg.put('h2k.producer.max.in.flight',      '5')
+newcfg.put('h2k.producer.linger.ms',          '50')
+newcfg.put('h2k.producer.batch.size',         '262144')
+newcfg.put('h2k.producer.compression.type',   'lz4')
+newcfg.put('h2k.producer.retries',            '2147483647')
+newcfg.put('h2k.producer.request.timeout.ms', '120000')
+newcfg.put('h2k.producer.delivery.timeout.ms','300000')
+# бережные бэкоффы (устойчивость к флапам)
+newcfg.put('h2k.producer.retry.backoff.ms',        '100')
+newcfg.put('h2k.producer.reconnect.backoff.ms',    '100')
+newcfg.put('h2k.producer.reconnect.backoff.max.ms','10000')
+
+# 2) Дополнительно можно задать/изменить bootstrap, cf.list и т.п.
+# newcfg.put('h2k.kafka.bootstrap.servers','10.254.3.111:9092,10.254.3.112:9092,10.254.3.113:9092')
+# newcfg.put('h2k.cf.list','d')
+
+# 3) Прочитать текущий ReplicationPeerConfig, обновить карту CONFIG и записать назад
+peer_id = 'h2k_balanced'
+current = rep_admin.getPeerConfig(peer_id)
+current.getConfiguration().putAll(newcfg)
+rep_admin.updatePeerConfig(peer_id, current)
+```
+
+> Примечание: В HBase 1.4 `ReplicationPeerConfig` хранит карту `CONFIG`, которую читает наш Endpoint на старте и при следующих WALEntry. Изменение этих ключей **не требует** перезапуска RS.
+
+**B) Пересоздать peer (альтернативно):**
+```HBase shell
+# 1) Выключить текущий peer (например, FAST)
+disable_peer 'h2k_fast'
+
+# 2) Создать новый peer выбранного профиля (BALANCED) готовым скриптом
+# (в отдельном терминале) → bin/hbase shell conf/add_peer_shell_balanced.txt
+
+# 3) Включить новый peer и удалить старый
+enable_peer  'h2k_balanced'
+remove_peer  'h2k_fast'
+```
+
+**Изменить фильтр TABLE_CFS у peer:**
+```HBase shell
+# оставить только DOCUMENTS:0 и RECEIPT:b,d
+set_peer_tableCFs 'h2k_balanced', 'DOCUMENTS:0;RECEIPT:b,d'
+show_peer_tableCFs 'h2k_balanced'
+```
+
+**Переименовать peer:**
+Неподдерживаемо напрямую. Создайте новый peer с нужным ID, перенесите конфиг, затем удалите старый.
 
 ## Типовые ошибки и что посмотреть в логах
 
@@ -633,10 +893,13 @@ HBase RegionServer
 Обычно LZ4 быстрее при сопоставимой компрессии, поэтому в профилях FAST/BALANCED используется `lz4`. Для максимальной совместимости и строгих гарантий профиль RELIABLE оставляет `snappy`.
 
 **Где искать логи endpoint?**  
-По умолчанию — `${hbase.log.dir}/h2k-endpoint.log`. Можно переопределить `-Dh2k.log.dir`. Ротация управляется `h2k.log.maxFileSize` и `h2k.log.maxBackupIndex`.
+По умолчанию — `/opt/hbase-default-current/logs/h2k-endpoint.log`. Путь можно переопределить ключом `-Dh2k.log.dir`. Ротация управляется `h2k.log.maxFileSize` и `h2k.log.maxBackupIndex`.
 
 **Откуда берётся имя топика, если у меня `h2k.topic.pattern=${table}`?**  
 Из `WALEntry` мы берём `namespace` и `qualifier` текущей таблицы. Затем подставляем их в `${table}` по правилу: если `namespace=default` — только `${qualifier}`, иначе `${namespace}_${qualifier}`. Если тема создана вручную, её имя должно совпадать с этим результатом (либо измените шаблон).
+
+**Почему PK есть в Value, хотя их нет в выбранном CF?**
+Endpoint всегда инъектирует PK из rowkey в payload, чтобы консюмеры имели доступ к ключу строки без парсинга rowkey. Порядок и состав PK задаются в `schema.json` через массив `pk`. Для `TIMESTAMP`-колонок применяется соглашение `*_ms` (epoch-millis).
 
 ---
 
@@ -644,7 +907,7 @@ HBase RegionServer
 
 1. JAR в `/opt/hbase-default-current/lib/`.
 2. На RS есть `kafka-clients-2.3.1.jar` и `lz4-java-1.6.0+.jar` (`hbase classpath` это показывает).
-3. Создан peer (`fast/balanced/reliable`) с корректным `bootstrap`.
+3. Создан peer (**balanced/reliable/fast**) с корректным `bootstrap` (рекомендуется `balanced`).
 4. Если `json-phoenix` — `schema.json` доступен и путь указан.
 5. В логах RS нет ошибок, события появляются в Kafka.
 
@@ -751,7 +1014,7 @@ _Альтернатива:_ допустимо пробовать Schema Registr
 ```bash
 git clone https://github.com/confluentinc/schema-registry.git
 cd schema-registry
-git checkout v5.3.6
+git checkout v5.3.8
 mvn -q -DskipTests package
 # далее развернуть как в варианте A (пп. 2–5)
 ```

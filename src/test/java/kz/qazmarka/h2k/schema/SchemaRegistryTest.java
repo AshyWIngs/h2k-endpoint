@@ -234,7 +234,7 @@ class SchemaRegistryTest {
 
     @Test
     @DisplayName("columnTypeOrDefaultRelaxed: при наличии exact (lower) возвращает его (а не default)")
-    void orDefaultRelaxedPrefersUpper() {
+    void orDefaultRelaxedPrefersExactLower() {
         SchemaRegistry r = mapRegistry()
                 .put("DEFAULT:TBL_JTI_TRACE_CIS_HISTORY", "FOO", "INT")
                 .put("DEFAULT:TBL_JTI_TRACE_CIS_HISTORY", "foo", "BIGINT")
@@ -242,6 +242,51 @@ class SchemaRegistryTest {
 
         // В реестре есть exact (lower) для "foo" → вернуть его, а не default
         assertEquals("BIGINT", r.columnTypeOrDefaultRelaxed(TBL, "foo", "DECIMAL"));
+    }
+
+    @Test
+    @DisplayName("columnType: exact чувствителен к регистру (без relaxed)")
+    void exactIsCaseSensitive() {
+        // В реестре есть только верхний регистр
+        SchemaRegistry r = mapRegistry()
+                .put("DEFAULT:TBL_JTI_TRACE_CIS_HISTORY", "ID", "VARCHAR")
+                .build();
+
+        // exact-поиск: совпадает только точный регистр
+        assertEquals("VARCHAR", r.columnType(TBL, "ID"));
+        assertNull(r.columnType(TBL, "id"));
+        assertFalse(r.hasColumn(TBL, "id"));
+    }
+
+    @Test
+    @DisplayName("columnTypeOrDefaultRelaxed: при отсутствии exact и наличии UPPER возвращает его")
+    void orDefaultRelaxedPrefersUpperWhenNoExact() {
+        SchemaRegistry r = mapRegistry()
+                .put("DEFAULT:TBL_JTI_TRACE_CIS_HISTORY", "FOO", "INT")
+                .build();
+
+        // Для входа "foo" exact нет, но есть UPPER-вариант → берём его
+        assertEquals("INT", r.columnTypeOrDefaultRelaxed(TBL, "foo", "DECIMAL"));
+        assertEquals("INT", r.columnTypeRelaxed(TBL, "foo"));
+        assertTrue(r.hasColumnRelaxed(TBL, "foo"));
+    }
+
+    @Test
+    @DisplayName("Пустой qualifier: relaxed/exact возвращают null/false, не бросают")
+    void emptyQualifierTreatedAsMissing() {
+        SchemaRegistry r = mapRegistry()
+                .put("DEFAULT:TBL_JTI_TRACE_CIS_HISTORY", "X", "VARCHAR")
+                .build();
+
+        // exact / relaxed — ничего не найдено
+        assertNull(r.columnType(TBL, ""));
+        assertNull(r.columnTypeRelaxed(TBL, ""));
+        assertFalse(r.hasColumn(TBL, ""));
+        assertFalse(r.hasColumnRelaxed(TBL, ""));
+
+        // orDefault* — возвращают default-тип
+        assertEquals("VARCHAR", r.columnTypeOrDefault(TBL, "", "VARCHAR"));
+        assertEquals("VARCHAR", r.columnTypeOrDefaultRelaxed(TBL, "", "VARCHAR"));
     }
 
     @Test

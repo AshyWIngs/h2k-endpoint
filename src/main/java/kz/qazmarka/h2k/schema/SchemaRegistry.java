@@ -1,7 +1,8 @@
 package kz.qazmarka.h2k.schema;
 
-import org.apache.hadoop.hbase.TableName;
 import java.util.Locale;
+
+import org.apache.hadoop.hbase.TableName;
 
 /**
  * SchemaRegistry — тонкая абстракция реестра типов колонок Phoenix.
@@ -147,6 +148,29 @@ public interface SchemaRegistry {
         java.util.Objects.requireNonNull(table, "table");
         java.util.Objects.requireNonNull(qualifier, "qualifier");
         return columnType(table, qualifier) != null;
+    }
+
+    /**
+     * Имена PK-колонок таблицы в порядке их размещения в rowkey (как в Phoenix).
+     *
+     * Назначение
+     *  - Позволяет вызывающей стороне восстановить значения PK из rowkey, когда PK не пишутся в клетки.
+     *
+     * Контракт
+     *  - Никогда не возвращает {@code null}; при отсутствии информации возвращает пустой массив.
+     *  - Не бросает исключений при отсутствии определения; fail‑fast только на {@code null} аргументах.
+     *  - Реализация может кэшировать результат и/или подставлять алиасы имён таблиц.
+     *
+     * Потокобезопасность
+     *  - Реализации должны быть потокобезопасными или неизменяемыми.
+     *
+     * @param table имя таблицы (HBase TableName с namespace), не {@code null}
+     * @return массив имён PK‑колонок (возможно пустой, но не {@code null})
+     * @throws NullPointerException если {@code table == null}
+     */
+    default String[] primaryKeyColumns(TableName table) {
+        java.util.Objects.requireNonNull(table, "table");
+        return new String[0];
     }
 
     /**

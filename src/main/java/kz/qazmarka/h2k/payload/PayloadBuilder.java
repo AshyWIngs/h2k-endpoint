@@ -3,6 +3,7 @@ package kz.qazmarka.h2k.payload;
 import java.nio.charset.StandardCharsets;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 
@@ -15,26 +16,29 @@ import kz.qazmarka.h2k.schema.Decoder;
 import kz.qazmarka.h2k.util.RowKeySlice;
 
 /**
- * Собирает payload `Map<String,Object>` из клеток строки HBase.
+ * Сборщик JSON‑payload для отправки в Kafka в формате JSONEachRow.
  *
  * Назначение
- *  - Преобразовать набор ячеек (всех CF) одной строки в упорядоченную карту значений целевых CF и служебных полей.
- *  - Работает только с CF, указанными в {@link H2kConfig}; остальные ячейки пропускаются без накладных расходов.
+ *  - На основе данных WAL формирует одну JSON-строку на одну строку HBase: ключи — квалификаторы колонок.
+ *  - Обрабатывает все ячейки строки; при необходимости фильтрация CF должна выполняться на уровне источника/сканера.
+ *
+ * PK из rowkey
+ *  - Перед сериализацией выполняется декодирование rowkey: {@link kz.qazmarka.h2k.schema.Decoder#decodeRowKey}
+ *    обогащает карту значений расшифрованными компонентами PK (например, "c","t","opd"), чтобы PK были видны
+ *    в Value как обычные колонки.
+ *
+ * Сериализация и метаданные
+ *  - Нулевые значения колонок не сериализуются, если не включено cfg.isJsonSerializeNulls().
+ *  - Колонки, не описанные в схеме, не отбрасываются: если декодер вернул {@code null}, но значение непустое —
+ *    сохраняем как UTF‑8 строку.
+ *  - Метаполя добавляются по флагам конфигурации (см. README и {@link H2kConfig}): h2k.include.meta.*,
+ *    h2k.include.rowkey и др.
  *
  * Производительность и потокобезопасность
  *  - Без побочных эффектов; удобно тестировать.
- *  - Используется {@link LinkedHashMap} с заранее рассчитанной ёмкостью (минимум рехешей), порядок ключей стабилен.
- *  - Строка qualifier строится «лениво» — только если колонка реально попала в результат.
- *  - Декодер вызывается только для клеток целевых CF (минимум ветвлений на горячем пути).
- *
- * Логи и локализация
- *  - Класс сам ничего не пишет в лог; все сообщения в проекте — на русском.
- *
- * Конфигурация
- *  - Поведение управляется флагами из {@link H2kConfig}: includeMeta / includeMetaWal / includeRowKey /
- *    rowkeyEncoding (hex|base64) и др.
- *  - Если для таблицы задана соль Phoenix, {@link H2kConfig#getSaltBytesFor(org.apache.hadoop.hbase.TableName)} позволяет
- *    «снять» первые N байт rowkey перед сериализацией (в payload попадает бизнес‑ключ без байта «корзины»).
+ *  - Используется {@link java.util.LinkedHashMap} с заранее рассчитанной ёмкостью, порядок ключей стабилен.
+ *  - Строка qualifier создаётся один раз на ячейку напрямую из буфера без промежуточного копирования.
+ *  - Декодер вызывается для всех ячеек строки (фильтрация CF — на уровне источника/сканера).
  */
 public final class PayloadBuilder {
     /**
@@ -47,12 +51,6 @@ public final class PayloadBuilder {
      * JDK 8 предоставляет только array‑based API (без (offset,len)), поэтому кодируем из временного среза.
      */
     private static final java.util.Base64.Encoder BASE64 = java.util.Base64.getEncoder();
-    /**
-     * Порог предпросмотра для оценки числа целевых ячеек.
-     * Если в строке ячеек больше порога — сканируем только первые N и экстраполируем.
-     * Цель: точнее подобрать ёмкость LinkedHashMap без второго полного прохода.
-     */
-    private static final int PRESCAN_THRESHOLD = 128;
     /**
      * Ключи payload (исключаем "магические строки" по коду):
      *  - _table, _namespace, _qualifier, _cf — метаданные таблицы и CSV‑список целевых CF;
@@ -85,8 +83,8 @@ public final class PayloadBuilder {
      * @throws NullPointerException если любой из аргументов равен null
      */
     public PayloadBuilder(Decoder decoder, H2kConfig cfg) {
-        this.decoder = Objects.requireNonNull(decoder, "decoder");
-        this.cfg = Objects.requireNonNull(cfg, "cfg");
+        this.decoder = Objects.requireNonNull(decoder, "декодер");
+        this.cfg = Objects.requireNonNull(cfg, "конфигурация h2k");
     }
 
     /**
@@ -141,7 +139,7 @@ public final class PayloadBuilder {
                                                RowKeySlice rowKey,
                                                long walSeq,
                                                long walWriteTime) {
-        Objects.requireNonNull(table, "table");
+        Objects.requireNonNull(table, "таблица");
         // Кэшируем флаги конфига (уменьшаем количество ветвлений в этом методе)
         final boolean includeMeta    = cfg.isIncludeMeta();
         final boolean includeWalMeta = includeMeta && cfg.isIncludeMetaWal();
@@ -155,9 +153,7 @@ public final class PayloadBuilder {
         // Точный/приближённый прогноз числа целевых ячеек.
         // Подсказка ёмкости учитывается на этапе newRootMap(...) как итоговое целевое число ключей.
         // Здесь для оценки числа колонок используем только прескан.
-        final byte[][] cfFamilies = cfg.getCfFamiliesBytes();
-        final int sampledCellsEstimate = estimateTargetCells(cells, cfFamilies);
-        final int effectiveCellsEstimate = sampledCellsEstimate;
+        final int effectiveCellsEstimate = (cells == null ? 0 : cells.size());
 
         int cap = 1 /*event_version*/
                 + effectiveCellsEstimate
@@ -170,8 +166,12 @@ public final class PayloadBuilder {
         // Метаданные таблицы (если включены)
         addMetaIfEnabled(includeMeta, obj, table, cellsCount);
 
+        // PK как отдельные поля значения (c/t/opd и т.п.) — извлекаем из rowkey по схеме Phoenix.
+        // Включаем всегда (это бизнес-данные), если rowkey доступен и схема знает состав PK.
+        decodePkFromRowKey(table, rowKey, obj);
+
         // Расшифровка ячеек: добавляет поля CF в obj и возвращает агрегаты
-        CellStats stats = decodeCells(table, cells, obj, cfFamilies);
+        CellStats stats = decodeCells(table, cells, obj);
 
         // Итоговые служебные поля
         addCellsCfIfMeta(obj, includeMeta, stats.cfCells);
@@ -189,136 +189,97 @@ public final class PayloadBuilder {
     }
 
     /**
+     * Декодирует составной PK из {@link RowKeySlice} в именованные поля значения.
+     * Реализация декодирования и знание порядка/типов колонок PK — на стороне {@link Decoder}.
+     * Если rowkey отсутствует/пустой или таблица не описана в схеме — метод ничего не делает.
+     */
+    private void decodePkFromRowKey(TableName table, RowKeySlice rk, Map<String, Object> out) {
+        if (rk == null) {
+            return;
+        }
+        // Если у таблицы есть соль Phoenix — декодер обязан корректно её учесть (сдвиг/обрезка).
+        final int saltBytes = cfg.getSaltBytesFor(table);
+        // Decoder API: decodeRowKey(table, rowKeySlice, saltBytes, outValues)
+        // Контракт декодера: безопасно-небросающий; при отсутствии описания PK — no-op.
+        decoder.decodeRowKey(table, rk, saltBytes, out);
+    }
+
+    /**
      * Декодирует клетки целевых CF и заполняет {@code obj} декодированными значениями колонок.
      * Обновляет агрегаты (максимальную метку времени, число ячеек CF, флаг удаления).
      *
      * @param table таблица для декодера и построения имён
      * @param cells все ячейки строки (все CF)
      * @param obj   результирующая карта для добавления полей
-     * @param cfFamilies список целевых семейств колонок (каждый — в виде байтов)
-     * @return агрегаты по CF
+     * @return агрегаты по строке
      */
-    private CellStats decodeCells(TableName table, List<Cell> cells, Map<String, Object> obj, byte[][] cfFamilies) {
+    private CellStats decodeCells(TableName table, List<Cell> cells, Map<String, Object> obj) {
         CellStats s = new CellStats();
         if (cells == null || cells.isEmpty()) {
             return s;
         }
 
         final boolean serializeNulls = cfg.isJsonSerializeNulls();
-        final QualCache qcache = new QualCache();
 
         for (Cell cell : cells) {
-            processCell(table, cell, obj, s, cfFamilies, serializeNulls, qcache);
+            processCell(table, cell, obj, s, serializeNulls);
         }
         return s;
     }
 
     /**
      * Обрабатывает одну ячейку:
-     *  - игнорирует, если CF не входит в список целевых;
+     *  - обрабатывает все ячейки (фильтрация CF выполняется на уровне источника/сканера);
      *  - увеличивает счётчики и обновляет maxTs;
      *  - для операций удаления выставляет флаг и не добавляет колонку;
      *  - для обычных значений вызывает декодер и кладёт результат в {@code obj}.
+     *  - если декодер вернул {@code null}, но значение непустое — сохраняем как UTF‑8 строку.
      *
      * @param table           таблица (контекст декодера)
      * @param cell            текущая ячейка
      * @param obj             результирующая карта
      * @param s               агрегаты по CF
-     * @param cfFamilies      список целевых семейств колонок (каждый — в виде байтов)
-     * @param serializeNulls  добавлять ли колонку с null‑значением
-     * @param qcache          пер-строковый кэш последнего qualifier (ссылка/смещение/длина) для снижения аллокаций String
+     * @param serializeNulls  добавлять ли колонку с null-значением
      */
     private void processCell(TableName table,
                             Cell cell,
                             Map<String, Object> obj,
                             CellStats s,
-                            byte[][] cfFamilies,
-                            boolean serializeNulls,
-                            QualCache qcache) {
-        if (!matchesAnyFamily(cell, cfFamilies)) {
-            return; // не наш CF
-        }
+                            boolean serializeNulls) {
+        // Считаем все ячейки релевантными (фильтрация CF — на уровне источника/сканера)
         s.cfCells++;
         long ts = cell.getTimestamp();
-        if (ts > s.maxTs) {
-            s.maxTs = ts;
-        }
+        if (ts > s.maxTs) s.maxTs = ts;
         if (CellUtil.isDelete(cell)) {
-            s.hasDelete = true; // удаление помечаем, но колонки не добавляем
+            s.hasDelete = true;
             return;
         }
-        final byte[] qa = cell.getQualifierArray();
-        final int qo = cell.getQualifierOffset();
-        final int ql = cell.getQualifierLength();
-        final byte[] va = cell.getValueArray();
-        final int vo = cell.getValueOffset();
-        final int vl = cell.getValueLength();
 
-        Object decoded = decoder.decode(
-                table,
-                qa, qo, ql,
-                va, vo, vl
-        );
+        final String q = new String(cell.getQualifierArray(),
+                                    cell.getQualifierOffset(),
+                                    cell.getQualifierLength(),
+                                    StandardCharsets.UTF_8)
+                                    .toLowerCase(Locale.ROOT);
+        final byte[] vBytes = CellUtil.cloneValue(cell);
 
-        if (decoded != null || serializeNulls) {
-            String q;
-            // Быстрый путь: та же ссылка массива/смещение/длина — значит тот же qualifier (обычно другая версия той же колонки)
-            if (qcache.s != null && qcache.a == qa && qcache.o == qo && qcache.l == ql) {
-                q = qcache.s;
-            } else {
-                q = new String(qa, qo, ql, StandardCharsets.UTF_8);
-                qcache.a = qa;
-                qcache.o = qo;
-                qcache.l = ql;
-                qcache.s = q;
-            }
+        // Попытка декодировать известный тип
+        Object decoded = decoder.decode(table, q, vBytes);
+
+        if (decoded != null) {
             obj.put(q, decoded);
-        }
-    }
-
-    /**
-     * Оценить число ячеек целевых CF в списке cells (дешёво).
-     * Для коротких строк (≤ {@link #PRESCAN_THRESHOLD}) считает точно.
-     * Для длинных — сканирует первые N и экстраполирует на общий размер.
-     */
-    private static int estimateTargetCells(List<Cell> cells, byte[][] cfFamilies) {
-        if (cells == null || cells.isEmpty() || cfFamilies == null || cfFamilies.length == 0) {
-            return 0;
-        }
-        final int total = cells.size();
-        final int sample = Math.min(total, PRESCAN_THRESHOLD);
-
-        int matches = 0;
-        for (int i = 0; i < sample; i++) {
-            if (matchesAnyFamily(cells.get(i), cfFamilies)) {
-                matches++;
-            }
+            return;
         }
 
-        if (sample == total) {
-            return matches; // точное значение
+        // Фоллбэк: если байты непустые, кладём как UTF-8 строку (для пользовательских/неописанных колонок)
+        if (vBytes != null && vBytes.length > 0) {
+            obj.put(q, new String(vBytes, StandardCharsets.UTF_8));
+            return;
         }
-        // Экстраполируем долю совпадений на весь размер; защита от переполнений через long.
-        int estimated = (int) ((long) matches * total / sample);
-        if (estimated < 0) {
-            return 0;
-        }
-        return Math.min(estimated, total);
-    }
 
-    /**
-     * Проверяет, принадлежит ли ячейка одному из целевых семейства колонок.
-     * Выполняется без дополнительной аллокации; прекращает поиск при первом совпадении.
-     */
-    private static boolean matchesAnyFamily(Cell cell, byte[][] families) {
-        if (families == null || families.length == 0) return false;
-        if (families.length == 1) {
-            return CellUtil.matchingFamily(cell, families[0]);
+        // Иначе добавляем null только если это разрешено конфигурацией
+        if (serializeNulls && (!obj.containsKey(q) || obj.get(q) == null)) {
+            obj.put(q, null);
         }
-        for (byte[] f : families) {
-            if (CellUtil.matchingFamily(cell, f)) return true;
-        }
-        return false;
     }
 
     /**
@@ -356,7 +317,7 @@ public final class PayloadBuilder {
         }
     }
 
-    /** Добавляет единое поле `_rowkey` (HEX или Base64 по конфигурации), если ключ присутствует и включён. */
+    /** Добавляет единое поле {@code _rowkey} (HEX или Base64 по конфигурации), если ключ присутствует и включён. */
     private static void addRowKeyIfPresent(boolean includeRowKeyPresent,
                                            Map<String, Object> obj,
                                            RowKeySlice rk,
@@ -419,7 +380,6 @@ public final class PayloadBuilder {
         return new String(out);
     }
 
-    // (encodeRowKeyBase64(RowKeySlice) method removed as unused)
 
     /**
      * Кодирует фрагмент массива байт в Base64 без промежуточных строк.
@@ -445,13 +405,6 @@ public final class PayloadBuilder {
         return new String(out, 0, n, StandardCharsets.US_ASCII);
     }
 
-    /** Пер-строковый кэш последнего qualifier: снижает число аллокаций String при нескольких версиях колонки подряд. */
-    private static final class QualCache {
-        byte[] a;
-        int o;
-        int l;
-        String s;
-    }
 
     /** Агрегаты по CF. */
     private static final class CellStats {
@@ -462,6 +415,4 @@ public final class PayloadBuilder {
         /** Сколько ячеек целевого CF было обработано. */
         int cfCells;
     }
-
-
 }
