@@ -92,8 +92,12 @@ public final class PayloadBuilder {
      * и/или оценке фактического числа ключей (данные + метаданные). Расчёт ёмкости производится целочисленной формулой,
      * эквивалентной 1 + ceil(target / 0.75), без использования double/Math.ceil.
      *
-     * @param table              таблица HBase для которой строится payload
+     * Подсказка берётся из {@code cfg.getCapacityHintFor(table)} (0 — подсказка отсутствует).
+     * Итоговая ёмкость ограничивается внутренним максимумом HashMap/LinkedHashMap (~2^30).
+     *
+     * @param table              таблица HBase, для которой строится payload
      * @param estimatedKeysCount оценка общего числа ключей в payload (данные колонок + служебные поля)
+     * @return новая упорядоченная мапа под корневой JSON‑объект
      */
     private Map<String, Object> newRootMap(TableName table, int estimatedKeysCount) {
         final int hint = cfg.getCapacityHintFor(table); // 0, если подсказка не задана
@@ -105,6 +109,10 @@ public final class PayloadBuilder {
      * Вычисляет начальную ёмкость LinkedHashMap без использования FP‑арифметики:
      * формула 1 + ceil(target / 0.75) эквивалентна 1 + (4*target + 2) / 3 (целочисленно).
      * Это избавляет от Math.ceil/double‑деления на горячем пути и даёт те же результаты.
+     *
+     * @param estimatedKeysCount оценка общего числа ключей (данные + метаданные)
+     * @param hint               «подсказка» из конфигурации (0 — нет подсказки)
+     * @return рекомендуемая ёмкость для конструктора LinkedHashMap (с учётом верхнего ограничения ~2^30)
      */
     static int computeInitialCapacity(int estimatedKeysCount, int hint) {
         // Берём максимум из оценки и подсказки (если она задана)
@@ -126,13 +134,15 @@ public final class PayloadBuilder {
      * Порядок ключей стабилен ({@link LinkedHashMap}). Null‑значения колонок включаются в JSON только
      * при {@code cfg.isJsonSerializeNulls()}.
      *
+     * Ёмкость результирующей мапы рассчитывается заранее из числа ячеек и флагов включения метаданных/rowkey.
+     *
      * @param table        таблица HBase (для ключей _table/_namespace/_qualifier и для декодера)
      * @param cells        список ячеек этой строки (все CF); внутри будут обработаны только ячейки целевого CF
-     * @param rowKey       срез rowkey (может быть null, если источник не предоставляет ключ)
-     * @param walSeq       sequenceId записи WAL (или < 0, если недоступен)
-     * @param walWriteTime время записи в WAL в мс (или < 0, если недоступно)
+     * @param rowKey       срез rowkey (может быть {@code null}, если источник не предоставляет ключ)
+     * @param walSeq       sequenceId записи WAL (или {@code < 0}, если недоступен)
+     * @param walWriteTime время записи в WAL в мс (или {@code < 0}, если недоступно)
      * @return упорядоченная карта с данными колонок и служебными полями
-     * @throws NullPointerException если {@code table} равен null
+     * @throws NullPointerException если {@code table} равен {@code null}
      */
     public Map<String, Object> buildRowPayload(TableName table,
                                                List<Cell> cells,
@@ -150,13 +160,8 @@ public final class PayloadBuilder {
         final int cellsCount = (cells == null ? 0 : cells.size());
         final boolean includeRowKeyPresent = includeRowKey && rowKey != null;
 
-        // Точный/приближённый прогноз числа целевых ячеек.
-        // Подсказка ёмкости учитывается на этапе newRootMap(...) как итоговое целевое число ключей.
-        // Здесь для оценки числа колонок используем только прескан.
-        final int effectiveCellsEstimate = (cells == null ? 0 : cells.size());
-
         int cap = 1 /*event_version*/
-                + effectiveCellsEstimate
+                + cellsCount
                 + (includeMeta ? 5 : 0)         /*_table,_namespace,_qualifier,_cf,_cells_total*/
                 + (includeRowKeyPresent ? 1 : 0)/*_rowkey*/
                 + (includeWalMeta ? 2 : 0);     /*_wal_seq,_wal_write_time*/
@@ -208,6 +213,9 @@ public final class PayloadBuilder {
      * Декодирует клетки целевых CF и заполняет {@code obj} декодированными значениями колонок.
      * Обновляет агрегаты (максимальную метку времени, число ячеек CF, флаг удаления).
      *
+     * Имплементационная заметка: обработка делегируется в {@link #processCell(TableName, Cell, Map, CellStats, boolean)},
+     * где используется «быстрая» перегрузка декодера без копирования value; {@code CellUtil.cloneValue} не вызывается.
+     *
      * @param table таблица для декодера и построения имён
      * @param cells все ячейки строки (все CF)
      * @param obj   результирующая карта для добавления полей
@@ -230,16 +238,20 @@ public final class PayloadBuilder {
     /**
      * Обрабатывает одну ячейку:
      *  - обрабатывает все ячейки (фильтрация CF выполняется на уровне источника/сканера);
-     *  - увеличивает счётчики и обновляет maxTs;
+     *  - увеличивает счётчики и обновляет {@code maxTs};
      *  - для операций удаления выставляет флаг и не добавляет колонку;
-     *  - для обычных значений вызывает декодер и кладёт результат в {@code obj}.
+     *  - для обычных значений вызывает декодер и кладёт результат в {@code obj};
      *  - если декодер вернул {@code null}, но значение непустое — сохраняем как UTF‑8 строку.
+     *
+     * Имплементационная заметка: используется «быстрая» перегрузка декодера
+     * {@link Decoder#decode(org.apache.hadoop.hbase.TableName, byte[], int, int, byte[], int, int)} (без копирования value).
+     * Преобразование в строку выполняется только в фоллбэке, когда декодер вернул {@code null}.
      *
      * @param table           таблица (контекст декодера)
      * @param cell            текущая ячейка
      * @param obj             результирующая карта
      * @param s               агрегаты по CF
-     * @param serializeNulls  добавлять ли колонку с null-значением
+     * @param serializeNulls  добавлять ли колонку с null‑значением
      */
     private void processCell(TableName table,
                             Cell cell,
@@ -255,24 +267,26 @@ public final class PayloadBuilder {
             return;
         }
 
-        final String q = new String(cell.getQualifierArray(),
-                                    cell.getQualifierOffset(),
-                                    cell.getQualifierLength(),
-                                    StandardCharsets.UTF_8)
-                                    .toLowerCase(Locale.ROOT);
-        final byte[] vBytes = CellUtil.cloneValue(cell);
+        final byte[] qa = cell.getQualifierArray();
+        final int    qo = cell.getQualifierOffset();
+        final int    ql = cell.getQualifierLength();
 
-        // Попытка декодировать известный тип
-        Object decoded = decoder.decode(table, q, vBytes);
+        final String q = new String(qa, qo, ql, StandardCharsets.UTF_8).toLowerCase(Locale.ROOT);
 
+        final byte[] va = cell.getValueArray();
+        final int    vo = cell.getValueOffset();
+        final int    vl = cell.getValueLength();
+
+        // Попытка декодировать известный тип: быстрая перегрузка без копирования value
+        Object decoded = decoder.decode(table, qa, qo, ql, va, vo, vl);
         if (decoded != null) {
             obj.put(q, decoded);
             return;
         }
 
         // Фоллбэк: если байты непустые, кладём как UTF-8 строку (для пользовательских/неописанных колонок)
-        if (vBytes != null && vBytes.length > 0) {
-            obj.put(q, new String(vBytes, StandardCharsets.UTF_8));
+        if (va != null && vl > 0) {
+            obj.put(q, new String(va, vo, vl, StandardCharsets.UTF_8));
             return;
         }
 
@@ -317,7 +331,16 @@ public final class PayloadBuilder {
         }
     }
 
-    /** Добавляет единое поле {@code _rowkey} (HEX или Base64 по конфигурации), если ключ присутствует и включён. */
+    /**
+     * Добавляет единое поле {@code _rowkey} (HEX или Base64 по конфигурации), если ключ присутствует и включён.
+     * Учитывает соль Phoenix: первые {@code saltBytes} байт ключа пропускаются без аллокаций (смещение/длина).
+     *
+     * @param includeRowKeyPresent флаг «rowkey включён и присутствует»
+     * @param obj                  результирующая карта
+     * @param rk                   срез исходного rowkey
+     * @param base64               {@code true} — кодировать Base64; {@code false} — как HEX
+     * @param saltBytes            число байт соли Phoenix в начале ключа (0 — соли нет)
+     */
     private static void addRowKeyIfPresent(boolean includeRowKeyPresent,
                                            Map<String, Object> obj,
                                            RowKeySlice rk,
@@ -361,14 +384,19 @@ public final class PayloadBuilder {
 
     /**
      * Быстрая конвертация массива байт в hex‑строку без промежуточных объектов.
-     * @param a   исходный массив
+     *
+     * @param a   исходный массив (может быть {@code null})
      * @param off смещение
      * @param len длина
-     * @return строка из 2*len символов
+     * @return строка из {@code 2*len} символов; пустая строка, если массив {@code null} или {@code len == 0}
+     * @throws IndexOutOfBoundsException если запрошен срез вне границ исходного массива (сообщение на русском)
      */
     private static String toHex(byte[] a, int off, int len) {
         if (a == null || len == 0) {
             return "";
+        }
+        if (off < 0 || len < 0 || off > a.length - len) {
+            throw new IndexOutOfBoundsException("срез hex вне границ: off=" + off + " len=" + len + " cap=" + a.length);
         }
         char[] out = new char[len * 2];
         int p = 0;
@@ -383,14 +411,14 @@ public final class PayloadBuilder {
 
     /**
      * Кодирует фрагмент массива байт в Base64 без промежуточных строк.
-     * В JDK 8 нет API с offset/length, поэтому выполняются два шага:
-     * 1) копируется ровно нужный срез в временный буфер;
+     * В JDK 8 нет API с (offset,len), поэтому выполняются два шага:
+     * 1) копируется ровно нужный срез во временный буфер;
      * 2) кодирование производится напрямую в предвычисленный выходной массив.
      *
      * @param a   исходный массив
      * @param off смещение начала фрагмента
      * @param len длина фрагмента
-     * @return ASCII-строка Base64; пустая строка, если {@code len == 0}; {@code null}, если {@code a == null}
+     * @return ASCII‑строка Base64; пустая строка, если {@code len == 0}; {@code null}, если {@code a == null}
      */
     private static String encodeRowKeyBase64(byte[] a, int off, int len) {
         if (a == null) return null;

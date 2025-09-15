@@ -29,10 +29,13 @@ import org.apache.hadoop.hbase.TableName;
 @FunctionalInterface
 public interface SchemaRegistry {
     /**
-     * Константа: «пустой» реестр — всегда возвращает {@code null}.
-     * Полезно в тестах и микробенчмарках, исключает лишние аллокации при каждом вызове {@link #empty()}.
+ * Константа: «пустой» реестр — всегда возвращает {@code null}.
+ * Полезно в тестах и микробенчмарках, исключает лишние аллокации при каждом вызове {@link #emptyRegistry()}.
      */
     SchemaRegistry NOOP = (table, qualifier) -> null;
+
+    /** Пустой неизменяемый массив строк (общая константа без аллокаций). */
+    String[] EMPTY = new String[0];
 
     /**
      * Возвращает имя phoenix‑типа колонки либо {@code null}, если тип неизвестен.
@@ -46,6 +49,7 @@ public interface SchemaRegistry {
 
     /**
      * Возвращает тип из реестра или значение по умолчанию, если тип не найден.
+     * @implSpec Выполняет fail‑fast валидацию аргументов через {@link java.util.Objects#requireNonNull(Object, String)}.
      *
      * @param table       имя таблицы, не {@code null}
      * @param qualifier   имя колонки, не {@code null}
@@ -65,6 +69,7 @@ public interface SchemaRegistry {
      * Ищет тип с постепенной нормализацией регистра: exact → UPPER → lower (через {@link Locale#ROOT}),
      * избегая лишних выделений строк (toUpperCase/toLowerCase вызываются только при необходимости).
      * Реализации могут переопределить метод для поддержки кавычных идентификаторов и спец. правил.
+     * @implSpec Делает до трёх обращений к {@link #columnType(TableName, String)}; аллокации строк (upper/lower) выполняются только при наличии соответствующих символов регистра.
      *
      * @param table     имя таблицы, не {@code null}
      * @param qualifier имя колонки (как пришло из источника), не {@code null}
@@ -79,23 +84,21 @@ public interface SchemaRegistry {
         String t = columnType(table, qualifier);
         if (t != null) return t;
 
-        // 2) Если есть хотя бы одна строчная буква — пробуем UPPER без создания строки в очевидных случаях
+        // 2) Единый проход по символам: определяем наличие и нижних, и верхних букв
         boolean hasLower = false;
-        for (int i = 0, n = qualifier.length(); i < n; i++) {
+        boolean hasUpper = false;
+        for (int i = 0, n = qualifier.length(); i < n && !(hasLower && hasUpper); i++) {
             char ch = qualifier.charAt(i);
-            if (Character.isLowerCase(ch)) { hasLower = true; break; }
+            if (!hasLower && Character.isLowerCase(ch)) {
+                hasLower = true;
+            } else if (!hasUpper && Character.isUpperCase(ch)) {
+                hasUpper = true;
+            }
         }
         if (hasLower) {
             String upper = qualifier.toUpperCase(Locale.ROOT);
             t = columnType(table, upper);
             if (t != null) return t;
-        }
-
-        // 3) Если есть хотя бы одна прописная буква — пробуем lower
-        boolean hasUpper = false;
-        for (int i = 0, n = qualifier.length(); i < n; i++) {
-            char ch = qualifier.charAt(i);
-            if (Character.isUpperCase(ch)) { hasUpper = true; break; }
         }
         if (hasUpper) {
             String lower = qualifier.toLowerCase(Locale.ROOT);
@@ -108,6 +111,7 @@ public interface SchemaRegistry {
     /**
      * Проверяет наличие колонки в реестре с релаксированной нормализацией регистра.
      * Эквивалентно {@code columnTypeRelaxed(table, qualifier) != null}.
+     * @implSpec Эквивалент вызову {@code columnTypeRelaxed(table, qualifier) != null}.
      *
      * @param table     имя таблицы, не {@code null}
      * @param qualifier имя колонки, не {@code null}
@@ -120,6 +124,7 @@ public interface SchemaRegistry {
 
     /**
      * Возвращает тип с релаксированной нормализацией (exact → UPPER → lower) либо значение по умолчанию.
+     * @implSpec Выполняет те же шаги, что и {@link #columnTypeRelaxed(TableName, String)}, и затем подставляет {@code defaultType} при отсутствии результата; также выполняет fail‑fast валидацию аргументов.
      *
      * @param table        имя таблицы, не {@code null}
      * @param qualifier    имя колонки, не {@code null}
@@ -138,6 +143,7 @@ public interface SchemaRegistry {
     /**
      * Быстрая проверка наличия определения колонки в реестре (без релаксированного поиска).
      * Выполняет fail‑fast валидацию аргументов согласно контракту интерфейса.
+     * @implSpec Делает один вызов {@link #columnType(TableName, String)} после fail‑fast проверки аргументов.
      *
      * @param table     имя таблицы, не {@code null}
      * @param qualifier имя колонки, не {@code null}
@@ -163,6 +169,7 @@ public interface SchemaRegistry {
      *
      * Потокобезопасность
      *  - Реализации должны быть потокобезопасными или неизменяемыми.
+     * @implSpec Реализация по умолчанию возвращает {@link #EMPTY} и никогда не возвращает {@code null}.
      *
      * @param table имя таблицы (HBase TableName с namespace), не {@code null}
      * @return массив имён PK‑колонок (возможно пустой, но не {@code null})
@@ -170,12 +177,13 @@ public interface SchemaRegistry {
      */
     default String[] primaryKeyColumns(TableName table) {
         java.util.Objects.requireNonNull(table, "table");
-        return new String[0];
+        return EMPTY;
     }
 
     /**
      * Явный хук на обновление/перечтение источника схем (по умолчанию — no‑op).
      * Реализации на JSON или SYSTEM.CATALOG могут переопределить и выполнить загрузку.
+     * @implSpec По умолчанию метод — no‑op; переопределите в реализациях, читающих внешние источники.
      */
     default void refresh() {
         // no-op
@@ -184,10 +192,11 @@ public interface SchemaRegistry {
     /**
      * Фабрика «пустого» реестра: всегда возвращает {@code null} для любого запроса.
      * Удобно для тестов/стабов и микробенчмарков.
+     * @implNote Возвращает константу {@link #NOOP}.
      *
      * @return реализация SchemaRegistry, возвращающая всегда {@code null}
      */
-    static SchemaRegistry empty() {
+    static SchemaRegistry emptyRegistry() {
         return NOOP;
     }
 }

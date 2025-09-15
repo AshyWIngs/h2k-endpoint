@@ -60,6 +60,8 @@ public final class RowKeySlice {
     /**
      * Возвращает общий пустой срез (без аллокаций).
      * Полезно там, где ожидается «отсутствие ключа», но нужен объект.
+     *
+     * @return общий пустой срез (singleton), не создаёт новых объектов
      */
     public static RowKeySlice empty() { return EMPTY_SLICE; }
 
@@ -99,7 +101,7 @@ public final class RowKeySlice {
      */
     public RowKeySlice(byte[] array, int offset, int length) {
         Objects.requireNonNull(array, "array");
-        if (offset < 0 || length < 0 || offset + length > array.length) {
+        if (offset < 0 || length < 0 || offset > array.length || length > array.length - offset) {
             throw new IllegalArgumentException(
                 "offset/length out of bounds: offset=" + offset + ", length=" + length + ", array.length=" + array.length);
         }
@@ -114,6 +116,8 @@ public final class RowKeySlice {
      * ВАЖНО: возвращаемый массив нельзя модифицировать — это приведёт к нарушению
      * инвариантов (предвычисленный хеш останется старым). Метод предназначен для низкоуровневых
      * сценариев, где нужна совместимость с нативными API.
+     *
+     * @return исходный массив байт, принадлежащий этому срезу (не копия)
      */
     public byte[] getArray() { return array; }
 
@@ -168,6 +172,8 @@ public final class RowKeySlice {
      * Краткое диагностическое представление: длина, смещение, хеш (hex) и предпросмотр
      * первых байт rowkey в шестнадцатеричном виде, ограниченный {@link #PREVIEW_MAX} байт.
      * Формат предпросмотра: `[xx xx ..]`, где `..` означает усечение.
+     *
+     * @return человекочитаемая строка с основными параметрами и hex‑предпросмотром
      */
     @Override
     public String toString() {

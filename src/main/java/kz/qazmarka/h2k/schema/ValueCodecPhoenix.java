@@ -149,7 +149,7 @@ public final class ValueCodecPhoenix implements Decoder {
      * @param registry реализация реестра типов Phoenix для колонок; не должна быть {@code null}
      */
     public ValueCodecPhoenix(SchemaRegistry registry) {
-        this.registry = registry;
+        this.registry = java.util.Objects.requireNonNull(registry, "registry");
     }
 
     /**
@@ -175,7 +175,7 @@ public final class ValueCodecPhoenix implements Decoder {
             // Неизвестный тип — предупредим один раз для этой колонки, дальше молчим (DEBUG)
             final ColKey warnKey = new ColKey(table, q); // создаём только в редкой ветке
             if (unknownTypeWarned.add(warnKey)) {
-                LOG.warn("Неизвестный тип Phoenix в реестре: {}.{} -> '{}' (нормализовано '{}'). Использую VARCHAR по умолчанию.",
+                LOG.warn("Неизвестный тип Phoenix в реестре для колонки {}.{} -> '{}' (нормализовано '{}'). Будет использован VARCHAR по умолчанию.",
                          table.getNameAsString(), q, raw, norm);
             } else if (LOG.isDebugEnabled()) {
                 LOG.debug("Повтор неизвестного типа Phoenix: {}.{} -> '{}' (нормализовано '{}')",
@@ -436,5 +436,33 @@ public final class ValueCodecPhoenix implements Decoder {
             }
         }
         return sb.toString();
+    }
+    /**
+     * Равенство кодеков определяется ссылочной идентичностью реестра типов.
+     * Считаем два экземпляра эквивалентными только если это один и тот же класс
+     * и оба указывают на один и тот же {@code registry} (по ссылке).
+     *
+     * @param o другой объект для сравнения
+     * @return {@code true}, если {@code this == o} или оба экземпляра одного класса с тем же {@code registry}
+     */
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || o.getClass() != ValueCodecPhoenix.class) return false;
+        ValueCodecPhoenix other = (ValueCodecPhoenix) o;
+        // Эквивалентность кодеков определяем по ссылочной идентичности реестра
+        return this.registry == other.registry;
+    }
+
+    /**
+     * Хеш-код согласован с {@link #equals(Object)}: вычисляется на основе ссылочной
+     * идентичности {@code registry}. Это гарантирует, что равные объекты имеют одинаковый хеш.
+     *
+     * @return хеш-код текущего экземпляра
+     */
+    @Override
+    public int hashCode() {
+        // Хеш-функция согласована с equals: опираемся на идентичность реестра
+        return System.identityHashCode(this.registry);
     }
 }

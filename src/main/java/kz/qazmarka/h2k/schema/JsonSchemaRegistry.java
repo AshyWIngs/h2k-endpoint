@@ -93,10 +93,12 @@ public final class JsonSchemaRegistry implements SchemaRegistry {
         s.add("DATE"); s.add("TIME"); s.add("TIMESTAMP");
         // Прочее
         s.add("BOOLEAN");
-        // Разрешим и массивы, если в схеме появятся
-        s.add("ARRAY");
+        // Массивы валидируем отдельно по правилу "<SCALAR> ARRAY" (см. isAllowedType)
         ALLOWED_TYPES = Collections.unmodifiableSet(s);
     }
+
+    /** Суффикс обозначения массивов Phoenix (используется в {@link #isAllowedType(String)}); всегда в верхнем регистре. */
+    private static final String ARRAY_SUFFIX = " ARRAY";
 
     /**
      * Множество уже залогированных «неизвестных» типов, чтобы не засорять WARN-ами.
@@ -105,20 +107,37 @@ public final class JsonSchemaRegistry implements SchemaRegistry {
     private static final Set<String> UNKNOWN_TYPES_LOGGED = ConcurrentHashMap.newKeySet();
 
     /**
-     * Возвращает true, если тип допустим:
-     *  - входит в белый список скалярных типов;
-     *  - либо является массивом Phoenix (например, "VARCHAR ARRAY").
+     * Флаг «уже логировали» для версии Phoenix.
+     * Логируем версию Phoenix ровно один раз за процесс, чтобы не дублировать сообщения в логах.
+     */
+    private static final java.util.concurrent.atomic.AtomicBoolean PHOENIX_LOGGED =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
+
+    /**
+     * Проверяет, является ли указанное строковое представление типа допустимым.
+     *
+     * Допускаются:
+     *  - скалярные типы из белого списка ({@link #ALLOWED_TYPES});
+     *  - массивы Phoenix в форме {@literal <SCALAR> ARRAY} — регистр не учитывается.
+     *
+     * @param tname исходное имя типа (может быть {@code null} или с лишними пробелами)
+     * @return {@code true}, если тип допустим; иначе {@code false}
      */
     private static boolean isAllowedType(String tname) {
-        // Страховка от случайного null, чтобы не ловить NPE при внешних вызовах/изменениях парсинга
         if (tname == null) {
             return false;
         }
-        if (ALLOWED_TYPES.contains(tname)) {
-            return true;
+        // Нормализуем регистр один раз для регистронезависимой обработки массивов
+        String upper = tname.trim().toUpperCase(Locale.ROOT);
+        if (upper.isEmpty()) {
+            return false;
         }
-        // Разрешаем массивы: "VARCHAR ARRAY", "INTEGER ARRAY", ...
-        return tname.endsWith(" ARRAY");
+        // Массивы: допускаем форму "<SCALAR> ARRAY" (регистр суффикса игнорируется за счёт нормализации)
+        if (upper.endsWith(ARRAY_SUFFIX)) {
+            String base = upper.substring(0, upper.length() - ARRAY_SUFFIX.length()).trim();
+            return ALLOWED_TYPES.contains(base);
+        }
+        return ALLOWED_TYPES.contains(upper);
     }
 
     /**
@@ -139,11 +158,37 @@ public final class JsonSchemaRegistry implements SchemaRegistry {
     /** Публикация алиасов таблицы → массив имён PK (иммутабельно). */
     private final AtomicReference<Map<String, String[]>> pkRef = new AtomicReference<>();
 
+    /** Версия опубликованной схемы; инкрементируется при каждом refresh(). */
+    private final java.util.concurrent.atomic.AtomicLong schemaVersion =
+            new java.util.concurrent.atomic.AtomicLong(0L);
+
     /**
-     * Локальный кэш {TableName -> карта колонок}. Обнуляется при {@link #refresh()}.
-     * Устраняет повторную конкатенацию строк имён таблиц на горячем пути.
+     * Запись для кэша колонок с привязкой к версии опубликованной схемы.
+     *
+     * Используется для того, чтобы отличать актуальные снэпшоты от устаревших при конкурентных
+     * вызовах {@link #refresh()}: если версия в кэше отличается от текущей, запись считается
+     * устаревшей и переинициализируется.
      */
-    private final ConcurrentMap<TableName, Map<String, String>> tableCache = new ConcurrentHashMap<>(64);
+    private static final class VersionedCols {
+        /** Версия схемы на момент помещения записи в кэш. */
+        final long ver;
+        /** Неизменяемая карта «квалификатор → тип Phoenix» для конкретной таблицы. */
+        final Map<String, String> cols;
+        /**
+         * Создаёт новую версионированную запись кэша.
+         *
+         * @param ver  версия опубликованной схемы
+         * @param cols неизменяемая карта колонок (квалификатор → тип)
+         */
+        VersionedCols(long ver, Map<String, String> cols) {
+            this.ver = ver;
+            this.cols = cols;
+        }
+    }
+    /**
+     * Кэш колонок с версионированием, чтобы отсекать устаревшие записи при конкурентном refresh().
+     */
+    private final ConcurrentMap<String, VersionedCols> tableCache = new ConcurrentHashMap<>(64);
 
     /**
      * Создаёт реестр и сразу выполняет {@link #refresh()}.
@@ -165,10 +210,15 @@ public final class JsonSchemaRegistry implements SchemaRegistry {
     public void refresh() {
         final Map<String, Map<String, String>> oldCols = schemaRef.get();
         final Map<String, String[]> oldPk = pkRef.get();
+        logPhoenixRuntimeIfAvailable();
         try {
             ParsedSchema parsed = parseFromDisk(sourcePath);
+            UNKNOWN_TYPES_LOGGED.clear();
             schemaRef.set(parsed.columnsByTable);
             pkRef.set(parsed.pkByTable);
+            // Обновляем версию и очищаем кэш. Предзагрузку не выполняем:
+            // кэш наполняется лениво при первых обращениях (без кеширования промахов).
+            schemaVersion.incrementAndGet();
             tableCache.clear();
         } catch (java.io.IOException | RuntimeException e) {
             if (LOG.isDebugEnabled()) {
@@ -189,6 +239,12 @@ public final class JsonSchemaRegistry implements SchemaRegistry {
     private static final class ParsedSchema {
         final Map<String, Map<String, String>> columnsByTable;
         final Map<String, String[]> pkByTable;
+        /**
+         * Создаёт неизменяемый снимок разобранной схемы.
+         *
+         * @param c иммутабельная карта «алиас таблицы → карта колонок»
+         * @param p иммутабельная карта «алиас таблицы → массив имён PK»
+         */
         ParsedSchema(Map<String, Map<String, String>> c, Map<String, String[]> p) {
             this.columnsByTable = c; this.pkByTable = p;
         }
@@ -201,46 +257,183 @@ public final class JsonSchemaRegistry implements SchemaRegistry {
      * @throws IOException при ошибке чтения или парсинга
      */
     private JsonObject readRootJson(String path) throws IOException {
-        String json = new String(Files.readAllBytes(Paths.get(path)), StandardCharsets.UTF_8);
-        return JsonParser.parseString(json).getAsJsonObject();
+        final byte[] bytes = Files.readAllBytes(Paths.get(path));
+        String json = new String(bytes, StandardCharsets.UTF_8);
+        json = stripUtf8Bom(json);
+
+        // Gson 2.2.4 API: only instance method parse(String)
+        final JsonElement el = new JsonParser().parse(json);
+        if (!el.isJsonObject()) {
+            throw new IOException("Корень JSON схемы должен быть объектом, но получено: " + el.getClass().getSimpleName());
+        }
+        return el.getAsJsonObject();
     }
 
-    /** Разбирает секцию "columns": нормализует квалификаторы в lower-case и типы в UPPER, с мягкой валидацией. */
+    /**
+     * Удаляет префикс BOM (U+FEFF) из начала строки в кодировке UTF‑8, если он присутствует.
+     *
+     * @param s исходная строка (может быть {@code null})
+     * @return строка без BOM в начале; исходная строка без изменений, если BOM отсутствует; {@code null}, если вход {@code null}
+     */
+    private static String stripUtf8Bom(String s) {
+        if (s != null && !s.isEmpty() && s.charAt(0) == '\uFEFF') {
+            return s.substring(1);
+        }
+        return s;
+    }
+
+    /** Логирует версию Phoenix (если драйвер доступен на classpath). Выполняется один раз. */
+    private static void logPhoenixRuntimeIfAvailable() {
+        if (PHOENIX_LOGGED.getAndSet(true)) {
+            return; // уже логировали
+        }
+        try {
+            Class<?> drv = Class.forName("org.apache.phoenix.jdbc.PhoenixDriver");
+            Package p = drv.getPackage();
+            String impl = (p != null ? p.getImplementationVersion() : "unknown");
+            LOG.info("Версия Phoenix во время выполнения: {}", impl);
+        } catch (ClassNotFoundException e) { // драйвер отсутствует (scope=provided) — это штатно
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("Версия Phoenix недоступна: {}", e.toString());
+            }
+        }
+    }
+
+    /**
+     * Достаёт значение поля без учёта регистра из набора возможных имён (возвращает первое совпадение).
+     *
+     * @param obj   объект JSON, из которого выполняется чтение (не {@code null})
+     * @param names список возможных имён поля; проверяются в указанном порядке
+     * @return найденный {@link JsonElement} или {@code null}, если ни одно имя не присутствует
+     */
+    private static JsonElement ciGet(JsonObject obj, String... names) {
+        for (String n : names) {
+            if (obj.has(n)) return obj.get(n);
+        }
+        return null;
+    }
+
+    /**
+     * Безопасно приводит значение JSON к объекту.
+     *
+     * @param el элемент JSON (может быть {@code null})
+     * @return {@link JsonObject}, если элемент является объектом; иначе {@code null}
+     */
+    private static JsonObject asObject(JsonElement el) {
+        return (el != null && el.isJsonObject()) ? el.getAsJsonObject() : null;
+    }
+
+    /**
+     * Извлекает строковое значение из {@link JsonElement}.
+     *
+     * @param v           элемент JSON
+     * @param onTypeError необязательное действие, вызываемое при ошибке приведения типа
+     * @return строка или {@code null}, если значение отсутствует/не является строкой
+     */
+    private static String extractString(JsonElement v, Runnable onTypeError) {
+        if (v == null || v.isJsonNull()) return null;
+        if (v.isJsonPrimitive()) {
+            try {
+                return v.getAsString();
+            } catch (RuntimeException ex) {
+                if (onTypeError != null) onTypeError.run();
+                return null;
+            }
+        }
+        if (onTypeError != null) onTypeError.run();
+        return null;
+    }
+
+    /**
+     * Нормализует строку типа к верхнему регистру (Locale.ROOT).
+     *
+     * @param raw исходная строка типа (может быть {@code null})
+     * @return канонизированная строка или {@code null} для пустых/пробельных значений
+     */
+    private static String normalizeType(String raw) {
+        if (raw == null) return null;
+        String t = raw.trim().toUpperCase(Locale.ROOT);
+        return t.isEmpty() ? null : t;
+    }
+
+    /**
+     * Безопасно приводит строку к нижнему регистру (Locale.ROOT).
+     *
+     * @param s исходная строка (может быть {@code null})
+     * @return строка в нижнем регистре или {@code null}, если вход равен {@code null}
+     */
+    private static String lower(String s) {
+        return (s == null) ? null : s.toLowerCase(Locale.ROOT);
+    }
+
+    /**
+     * Добавляет одно имя PK-колонки в аккумулятор после {@code trim()} и приведения к lower-case.
+     *
+     * @param v   исходное значение
+     * @param out список-аккумулятор (не {@code null})
+     */
+    private static void addPkValue(String v, ArrayList<String> out) {
+        if (v == null) return;
+        String q = v.trim();
+        if (!q.isEmpty()) out.add(q.toLowerCase(Locale.ROOT));
+    }
+
+    /**
+     * Разбирает секцию {@code "columns"}: нормализует квалификаторы в lower-case и типы в UPPER.
+     * Неизвестные типы допускаются, но логируются как предупреждение один раз на тип.
+     *
+     * @param tableObj объект таблицы из корневого JSON
+     * @param tableKey исходный ключ таблицы (для диагностики)
+     * @param path     путь к файлу схемы (для диагностики)
+     * @return изменяемая карта «квалификатор(lower-case) → тип(UPPER или {@code null})»
+     */
     private Map<String, String> parseColumns(JsonObject tableObj, String tableKey, String path) {
         Map<String, String> cols = new HashMap<>();
-        JsonElement colsEl = tableObj.get(KEY_COLUMNS);
-        if (colsEl != null && colsEl.isJsonObject()) {
-            for (Map.Entry<String, JsonElement> c : colsEl.getAsJsonObject().entrySet()) {
-                final String qLower = c.getKey().toLowerCase(Locale.ROOT);
-                final String rawType = c.getValue().isJsonNull() ? null : c.getValue().getAsString();
-                final String tUpper  = (rawType == null) ? null : rawType.trim().toUpperCase(Locale.ROOT);
-                if (tUpper != null
-                        && !tUpper.isEmpty()
-                        && !isAllowedType(tUpper)
-                        && UNKNOWN_TYPES_LOGGED.add(tUpper)) {
-                    LOG.warn("Неизвестный тип '{}' для колонки '{}' в таблице '{}' (файл '{}') — будет использован как есть",
-                            tUpper, c.getKey(), tableKey, path);
-                }
-                cols.put(qLower, tUpper);
+        JsonObject colsObj = asObject(ciGet(tableObj, KEY_COLUMNS, "COLUMNS", "Columns"));
+        if (colsObj == null) {
+            return cols;
+        }
+        for (Map.Entry<String, JsonElement> c : colsObj.entrySet()) {
+            final String qLower = lower(c.getKey());
+            final String rawType = extractString(c.getValue(), () ->
+                    LOG.warn("Тип для колонки '{}' в таблице '{}' (файл '{}') должен быть строкой — пропускается",
+                            c.getKey(), tableKey, path)
+            );
+            final String tUpper = normalizeType(rawType);
+            if (tUpper != null
+                    && !isAllowedType(tUpper)
+                    && UNKNOWN_TYPES_LOGGED.add(tUpper)) {
+                LOG.warn("Неизвестный тип '{}' для колонки '{}' в таблице '{}' (файл '{}') — будет использован как есть",
+                        tUpper, c.getKey(), tableKey, path);
             }
+            cols.put(qLower, tUpper);
         }
         return cols;
     }
 
-    /** Разбирает секцию "pk"/"PK" и возвращает массив имён PK (или пустой массив). */
+    /**
+     * Разбирает секцию {@code "pk"/"PK"} и возвращает массив имён PK.
+     * Поддерживает массив строк или одиночное строковое поле.
+     *
+     * @param tableObj объект таблицы
+     * @return массив имён PK в нижнем регистре; пустой массив (не {@code null}) при отсутствии секции
+     */
     private String[] parsePk(JsonObject tableObj) {
-        String[] pk = new String[0];
-        JsonElement pkEl = tableObj.has(KEY_PK) ? tableObj.get(KEY_PK) : tableObj.get("PK");
-        if (pkEl != null && pkEl.isJsonArray()) {
-            JsonArray a = pkEl.getAsJsonArray();
-            ArrayList<String> tmp = new ArrayList<>(a.size());
-            for (int i = 0; i < a.size(); i++) {
-                String q = a.get(i).getAsString();
-                if (q != null && !q.trim().isEmpty()) tmp.add(q.trim());
-            }
-            pk = tmp.toArray(new String[0]);
+        JsonElement pkEl = ciGet(tableObj, KEY_PK, "PK", "Pk", "pK");
+        if (pkEl == null || pkEl.isJsonNull()) {
+            return new String[0];
         }
-        return pk;
+
+        ArrayList<String> tmp = new ArrayList<>();
+        if (pkEl.isJsonArray()) {
+            JsonArray a = pkEl.getAsJsonArray();
+            for (int i = 0; i < a.size(); i++) {
+                addPkValue(extractString(a.get(i), null), tmp);
+            }
+        } else {
+            addPkValue(extractString(pkEl, null), tmp);
+        }
+        return tmp.toArray(new String[0]);
     }
 
     /**
@@ -273,9 +466,20 @@ public final class JsonSchemaRegistry implements SchemaRegistry {
             String tableKey = e.getKey();
             JsonObject tableObj = e.getValue().getAsJsonObject();
 
+            /**
+             * Обрабатывает одну запись таблицы из корня JSON: разбирает колонки и PK, затем публикует алиасы.
+             *
+             * @param colsOut  результирующая карта «алиас таблицы → карта колонок»
+             * @param pkOut    результирующая карта «алиас таблицы → массив PK»
+             * @param tableKey исходное имя таблицы в корне JSON
+             * @param tableObj объект JSON с данными таблицы
+             * @param path     путь к файлу (для диагностики)
+             */
             processTableEntry(colsTmp, pkTmp, tableKey, tableObj, path);
         }
-
+        if (colsTmp.isEmpty() && pkTmp.isEmpty()) {
+            LOG.info("Файл схемы '{}' не содержит таблиц (пустая схема)", path);
+        }
         return new ParsedSchema(Collections.unmodifiableMap(colsTmp),
                                 Collections.unmodifiableMap(pkTmp));
     }
@@ -288,15 +492,41 @@ public final class JsonSchemaRegistry implements SchemaRegistry {
                                    String path) {
         Map<String, String> colsView = Collections.unmodifiableMap(parseColumns(tableObj, tableKey, path));
         String[] pk = parsePk(tableObj);
+        // Строгая проверка согласованности: PK должны присутствовать среди columns
+        if (pk.length > 0 && !colsView.isEmpty()) {
+            for (String pkCol : pk) {
+                if (!colsView.containsKey(pkCol)) {
+                    LOG.warn("PK-колонка '{}' не найдена среди columns для таблицы '{}' (файл '{}')",
+                             pkCol, tableKey, path);
+                }
+            }
+        }
         publishTableAliases(colsOut, pkOut, tableKey, colsView, pk);
     }
 
-    /** Публикует алиасы таблицы: исходное/UPPER/lower и «короткое» имя. */
+    /**
+     * Публикует алиасы таблицы: исходное/UPPER/lower и «короткое» имя (после двоеточия).
+     *
+     * @param colsOut  карта для публикации колонок
+     * @param pkOut    карта для публикации PK
+     * @param tableKey исходное имя таблицы (как в JSON)
+     * @param colsView неизменяемое представление колонок
+     * @param pk       массив имён PK
+     */
     private static void publishTableAliases(Map<String, Map<String, String>> colsOut,
                                             Map<String, String[]> pkOut,
                                             String tableKey,
                                             Map<String, String> colsView,
                                             String[] pk) {
+        /**
+         * Публикует три варианта имени таблицы: исходное, UPPER и lower.
+         *
+         * @param colsOut  карта для публикации колонок
+         * @param pkOut    карта для публикации PK
+         * @param name     имя таблицы
+         * @param colsView неизменяемое представление колонок
+         * @param pk       массив имён PK
+         */
         addAliases(colsOut, pkOut, tableKey, colsView, pk);
         int idx = tableKey.indexOf(':');
         if (idx > 0 && idx + 1 < tableKey.length()) {
@@ -304,7 +534,15 @@ public final class JsonSchemaRegistry implements SchemaRegistry {
         }
     }
 
-    /** Публикует исходное/UPPER/lower варианты имени. */
+    /**
+     * Публикует три варианта имени таблицы: исходное, UPPER и lower.
+     *
+     * @param colsOut  карта для публикации соответствий «алиас таблицы → карта колонок»
+     * @param pkOut    карта для публикации соответствий «алиас таблицы → массив PK»
+     * @param name     имя таблицы (источник для генерации алиасов); пустое/{@code null} игнорируется
+     * @param colsView неизменяемое представление колонок для публикации под всеми алиасами
+     * @param pk       неизменяемый массив имён PK для публикации под всеми алиасами
+     */
     private static void addAliases(Map<String, Map<String, String>> colsOut,
                                    Map<String, String[]> pkOut,
                                    String name,
@@ -319,24 +557,27 @@ public final class JsonSchemaRegistry implements SchemaRegistry {
     }
 
     /**
-     * Registers a single alias mapping for both structures.
+     * Регистрирует один алиас таблицы одновременно в обеих структурах.
      *
-     * <p>Both maps receive the same immutable references to avoid extra allocations:
-     * alias -> {@code colsView} and alias -> {@code pk}. The values are not copied.</p>
+     * Примечание: в обе карты записываются одни и те же неизменяемые ссылки без копирования:
+     * alias → {@code colsView} и alias → {@code pk}. Значения не клонируются.
      *
-     * @param colsOut destination map: table alias -> immutable map of columns (qualifier -> type)
-     * @param pkOut   destination map: table alias -> immutable array of PK column names
-     * @param alias   table alias to publish (as-is)
-     * @param colsView immutable view of columns to associate with the alias
-     * @param pk      immutable PK array to associate with the alias
+     * @param colsOut карта-приёмник: алиас таблицы → неизменяемая карта колонок (квалификатор → тип)
+     * @param pkOut   карта-приёмник: алиас таблицы → неизменяемый массив имён PK
+     * @param alias   публикуемый алиас таблицы (как есть)
+     * @param colsView неизменяемое представление колонок, привязываемое к алиасу
+     * @param pk      неизменяемый массив PK, привязываемый к алиасу
      */
     private static void putAlias(Map<String, Map<String, String>> colsOut,
                                  Map<String, String[]> pkOut,
                                  String alias,
                                  Map<String, String> colsView,
                                  String[] pk) {
-        colsOut.put(alias, colsView);
-        pkOut.put(alias, pk);
+        Map<String, String> prevCols = colsOut.put(alias, colsView);
+        String[] prevPk = pkOut.put(alias, pk);
+        if ((prevCols != null && prevCols != colsView) || (prevPk != null && prevPk != pk)) {
+            LOG.warn("Переопределение алиаса таблицы '{}': ранее в схеме уже была другая запись", alias);
+        }
     }
 
     /**
@@ -345,7 +586,7 @@ public final class JsonSchemaRegistry implements SchemaRegistry {
      * Возвращается копия массива, чтобы защитить неизменяемость снимка.
      *
      * @param table имя таблицы (не {@code null})
-     * @return массив имён PK в порядке следования в схеме; пустой массив, если PK не задан
+     * @return массив имён PK в порядке следования в схеме; пустой массив (не {@code null}), если PK не задан
      * @throws NullPointerException если {@code table} равен {@code null}
      */
     @Override
@@ -365,14 +606,14 @@ public final class JsonSchemaRegistry implements SchemaRegistry {
 
 
     /**
-     * Возвращает иммутабельную карту колонок для таблицы: пробует полное имя и короткое (после ':').
+     * Возвращает иммутабельную карту колонок для таблицы: сперва по полному имени,
+     * затем — по «короткому» имени (часть после двоеточия).
      *
-     * @param t объект имени таблицы
-     * @return карта колонок или пустая карта
+     * @param raw полное строковое имя таблицы (как возвращает {@link org.apache.hadoop.hbase.TableName#getNameAsString()})
+     * @return неизменяемая карта <qualifier(lower-case), PHOENIX_TYPE_NAME> или {@link java.util.Collections#emptyMap() emptyMap()}, если таблица не найдена
      */
-    private Map<String, String> resolveColumnsForTable(TableName t) {
+    private Map<String, String> resolveColumnsForTable(String raw) {
         Map<String, Map<String, String>> local = schemaRef.get();
-        String raw = t.getNameAsString();
         Map<String, String> found = local.get(raw);
         if (found == null) {
             int idx = raw.indexOf(':');
@@ -381,6 +622,56 @@ public final class JsonSchemaRegistry implements SchemaRegistry {
             }
         }
         return (found != null) ? found : Collections.emptyMap();
+    }
+
+    /**
+     * Возвращает карту колонок для таблицы, используя кэш с версионированием.
+     * Если в кэше нет актуальной записи, резолвит из текущего снимка и аккуратно размещает её в кэше.
+     * Промахи (пустые карты) в кэш не записываются.
+     *
+     * @param raw        полное строковое имя таблицы
+     * @param currentVer текущая версия опубликованной схемы
+     * @param vc         текущее значение из кэша (может быть {@code null})
+     * @return неизменяемая карта колонок; {@link java.util.Collections#emptyMap() emptyMap()}, если таблица не найдена
+     */
+    private Map<String, String> getColumnsWithCache(String raw, long currentVer, VersionedCols vc) {
+        // 1) Попытка хита в кэше
+        if (vc != null && vc.ver == currentVer) {
+            return vc.cols;
+        }
+
+        // 2) Резолвим из опубликованного снимка
+        Map<String, String> resolved = resolveColumnsForTable(raw);
+        if (resolved.isEmpty()) {
+            // Промахи не кэшируем — после refresh() таблица может появиться
+            return Collections.emptyMap();
+        }
+
+        VersionedCols fresh = new VersionedCols(currentVer, resolved);
+
+        // 3) Публикуем в кэш (без лишних аллокаций/копий)
+        if (vc == null) {
+            VersionedCols prev = tableCache.putIfAbsent(raw, fresh);
+            if (prev == null) {
+                return fresh.cols;
+            }
+            if (prev.ver == currentVer) {
+                return prev.cols;
+            }
+            return fresh.cols;
+        } else {
+            boolean replaced = tableCache.replace(raw, vc, fresh);
+            if (replaced) {
+                return fresh.cols;
+            }
+            // Кто-то другой уже заменил запись: используем актуальную, если она той же версии
+            VersionedCols after = tableCache.get(raw);
+            if (after != null && after.ver == currentVer) {
+                return after.cols;
+            }
+            // В сомнительных случаях возвращаем свежеразрешённую карту (она точно соответствует currentVer)
+            return fresh.cols;
+        }
     }
 
     /**
@@ -395,8 +686,16 @@ public final class JsonSchemaRegistry implements SchemaRegistry {
         java.util.Objects.requireNonNull(table, "table");
         java.util.Objects.requireNonNull(qualifier, "qualifier");
 
-        final Map<String, String> cols = tableCache.computeIfAbsent(table, this::resolveColumnsForTable);
-        if (cols.isEmpty()) return null;
+        final String raw = table.getNameAsString();
+        final long currentVer = schemaVersion.get();
+
+        // Пытаемся получить из кэша, при необходимости — резолвим и публикуем
+        VersionedCols vc = tableCache.get(raw);
+        Map<String, String> cols = getColumnsWithCache(raw, currentVer, vc);
+
+        if (cols.isEmpty()) {
+            return null;
+        }
         return cols.get(qualifier.toLowerCase(Locale.ROOT));
     }
 

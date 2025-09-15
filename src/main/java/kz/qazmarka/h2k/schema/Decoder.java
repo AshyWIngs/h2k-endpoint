@@ -74,21 +74,37 @@ public interface Decoder {
      * могут переопределить метод для нулевых аллокаций (не строить String для qualifier и не копировать value),
      * если это безопасно для их контракта и вызывающая сторона не мутирует массив.
      *
+     * Предусловия к параметрам-срезам:
+     *  — {@code qual != null} и диапазон {@code [qOff, qOff+qLen)} должен полностью попадать в {@code qual.length};
+     *  — если {@code value != null}, то диапазон {@code [vOff, vOff+vLen)} должен полностью попадать в {@code value.length};
+     *    при {@code value == null} параметры {@code vOff}/{@code vLen} игнорируются.
+     *
      * @param table  имя таблицы
      * @param qual   массив байт qualifier, не {@code null}
-     * @param qOff   смещение qualifier в массиве
-     * @param qLen   длина qualifier
-     * @param value  массив байт значения, допускается {@code null}
-     * @param vOff   смещение значения в массиве
-     * @param vLen   длина значения
+     * @param qOff   смещение qualifier в массиве (≥ 0)
+     * @param qLen   длина qualifier (≥ 0)
+     * @param value  массив байт значения; допускается {@code null}
+     * @param vOff   смещение значения в массиве (≥ 0, если {@code value != null})
+     * @param vLen   длина значения (≥ 0, если {@code value != null})
      * @return декодированное значение или {@code null}
+     * @throws NullPointerException     если {@code table} или {@code qual} равны {@code null}
+     * @throws IndexOutOfBoundsException если любой из срезов выходит за границы соответствующего массива
      */
     default Object decode(TableName table,
                           byte[] qual, int qOff, int qLen,
                           byte[] value, int vOff, int vLen) {
         Objects.requireNonNull(table, "table");
+        // Предусловия к срезам (ручные проверки совместимые с Java 8)
         if (qual == null) {
             throw new NullPointerException("qualifier");
+        }
+        if (qOff < 0 || qLen < 0 || qOff > qual.length - qLen) {
+            throw new IndexOutOfBoundsException(
+                    "срез qualifier вне границ массива: off=" + qOff + " len=" + qLen + " cap=" + qual.length);
+        }
+        if (value != null && (vOff < 0 || vLen < 0 || vOff > value.length - vLen)) {
+            throw new IndexOutOfBoundsException(
+                    "срез value вне границ массива: off=" + vOff + " len=" + vLen + " cap=" + value.length);
         }
         final String qualifier;
         if (qOff == 0 && qLen == qual.length) {
@@ -111,14 +127,19 @@ public interface Decoder {
     }
 
     /**
-     * Удобная перегрузка с целыми массивами qualifier/value.
-     * Делегирует на «быструю» перегрузку с оффсетами. Семантика копирования value по умолчанию
+     * Удобная перегрузка с целыми массивами {@code qualifier}/{@code value}.
+     * Делегирует на «быструю» перегрузку с оффсетами. Семантика копирования {@code value} по умолчанию
      * сохраняется в вызываемой перегрузке.
      *
-     * @param table имя таблицы
+     * Предусловия:
+     *  — {@code table} и {@code qual} обязательны и не могут быть {@code null};
+     *  — {@code value} допускается быть {@code null}.
+     *
+     * @param table имя таблицы, не {@code null}
      * @param qual  массив байт qualifier, не {@code null}
-     * @param value массив байт значения (допускается {@code null})
+     * @param value массив байт значения; допускается {@code null}
      * @return декодированное значение или {@code null}
+     * @throws NullPointerException если {@code table} или {@code qual} равны {@code null}
      */
     default Object decode(TableName table, byte[] qual, byte[] value) {
         Objects.requireNonNull(table, "table");
@@ -159,6 +180,14 @@ public interface Decoder {
         /**
          * Быстрая типобезопасная перегрузка (нулевые аллокации при корректной реализации).
          *
+         * Предусловия:
+         *  — если {@code qual != null}, диапазон {@code [qOff, qOff + qLen)} обязан полностью
+         *    находиться в пределах {@code qual.length};
+         *  — если {@code value != null}, диапазон {@code [vOff, vOff + vLen)} обязан полностью
+         *    находиться в пределах {@code value.length}.
+         *  Валидация диапазонов может не выполняться реализацией — ответственность вызывающей стороны;
+         *  при нарушении возможен {@link IndexOutOfBoundsException}.
+         *
          * @param table имя таблицы
          * @param qual  массив байт qualifier (или {@code null})
          * @param qOff  смещение qualifier
@@ -167,6 +196,7 @@ public interface Decoder {
          * @param vOff  смещение значения
          * @param vLen  длина значения
          * @return декодированное значение типа {@code T} или {@code null}
+         * @throws IndexOutOfBoundsException если указанные срезы выходят за границы соответствующих массивов
          */
         T decode(TableName table,
                  byte[] qual, int qOff, int qLen,
@@ -175,7 +205,7 @@ public interface Decoder {
         /**
          * Компактный срез массива байт (массив + смещение + длина).
          * Уменьшает количество параметров в сигнатурах и облегчает статический анализ.
-         * Валидность границ не проверяется — ответственность вызывающей стороны.
+         * Валидность границ **не** проверяется на уровне фабрик — ответственность вызывающей стороны.
          */
         final class Slice {
             /** Исходный массив (допускается {@code null}). */
@@ -243,6 +273,8 @@ public interface Decoder {
      * Контракт:
      * - Метод не бросает исключения; при отсутствии описания PK или невозможности декодирования — ничего не делает.
      * - Реализация, понимающая схему Phoenix, обязана учитывать соль ({@code saltBytes}) и корректно сдвигать/обрезать ключ.
+     *
+     * — Коллекция {@code out} не очищается реализацией; записи добавляются/переопределяются по месту.
      *
      * @param table     таблица, для которой декодируется ключ
      * @param rk        срез бинарного {@code rowkey}

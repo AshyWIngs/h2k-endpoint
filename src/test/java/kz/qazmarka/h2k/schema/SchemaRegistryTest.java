@@ -45,7 +45,7 @@ class SchemaRegistryTest {
     @Test
     @DisplayName("empty(): всегда null/false")
     void emptyRegistry() {
-        SchemaRegistry r = SchemaRegistry.empty();
+        SchemaRegistry r = SchemaRegistry.emptyRegistry();
         assertNull(r.columnType(TBL, "any"));
         assertNull(r.columnTypeRelaxed(TBL, "any"));
         assertFalse(r.hasColumn(TBL, "any"));
@@ -117,7 +117,7 @@ class SchemaRegistryTest {
     @Test
     @DisplayName("NPE: все default-методы валидируют аргументы (fail-fast)")
     void nullChecks() {
-        SchemaRegistry r = SchemaRegistry.empty();
+        SchemaRegistry r = SchemaRegistry.emptyRegistry();
 
         NullPointerException e1 = assertThrows(NullPointerException.class,
                 () -> r.columnTypeOrDefault(null, "q", "V"));
@@ -225,7 +225,7 @@ class SchemaRegistryTest {
     @Test
     @DisplayName("hasColumn: NPE на null table/qualifier (fail-fast)")
     void hasExactNullChecks() {
-        SchemaRegistry r = SchemaRegistry.empty();
+        SchemaRegistry r = SchemaRegistry.emptyRegistry();
         NullPointerException he1 = assertThrows(NullPointerException.class, () -> r.hasColumn(null, "q"));
         assertNotNull(he1.getMessage());
         NullPointerException he2 = assertThrows(NullPointerException.class, () -> r.hasColumn(TBL, null));

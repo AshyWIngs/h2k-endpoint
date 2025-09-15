@@ -1,7 +1,8 @@
 package kz.qazmarka.h2k.schema;
 
-import org.apache.hadoop.hbase.TableName;
 import java.util.Arrays;
+
+import org.apache.hadoop.hbase.TableName;
 
 /**
  * Простейший декодер значений HBase без знания схемы (raw/zero‑copy).
@@ -31,6 +32,8 @@ import java.util.Arrays;
  *  • Возвращаемый массив считается «логически неизменяемым». Не модифицируйте его,
  *    если массив планируется переиспользовать в других частях пайплайна.
  *  • Параметры table и qualifier обязательны; при null выбрасывается {@link NullPointerException}.
+ *
+ * Имплементационная заметка: класс никогда не копирует массив значения,
  *
  * @since 0.0.1
  * @see Decoder
@@ -92,6 +95,9 @@ public final class SimpleDecoder implements Decoder {
     /**
      * Перегрузка со срезами: если срез покрывает весь массив, возвращает исходный массив (zero‑copy),
      * иначе возвращает копию указанного диапазона.
+     *
+     * Примечание: параметры {@code qOff}/{@code qLen} умышленно игнорируются —
+     *  они присутствуют для унификации API с другими декодерами.
      *
      * @param table имя таблицы, не {@code null}
      * @param qual  массив байт qualifier, не {@code null}
