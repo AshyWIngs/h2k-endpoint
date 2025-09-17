@@ -2,9 +2,11 @@ package kz.qazmarka.h2k.schema;
 
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
-import java.util.Objects;
+import java.util.Map;
 
 import org.apache.hadoop.hbase.TableName;
+
+import kz.qazmarka.h2k.util.RowKeySlice;
 
 /**
  * Унифицированный интерфейс декодирования значений ячеек (Cell value bytes)
@@ -15,11 +17,11 @@ import org.apache.hadoop.hbase.TableName;
  *  - поддержать как «медленный совместимый путь» (через строковый qualifier),
  *    так и «быстрый путь без аллокаций» (через срезы byte[]).
  *  - обеспечить декодирование составного {@code rowkey} в именованные поля значения
- *    для таблиц с составным PK; см. {@link #decodeRowKey(TableName, kz.qazmarka.h2k.util.RowKeySlice, int, java.util.Map)}.
+ *    для таблиц с составным PK; см. {@link #decodeRowKey(TableName, RowKeySlice, int, Map)}.
  *
  * Производительность
  *  - для горячего пути используйте перегрузку с срезами байтов
- *    {@link #decode(org.apache.hadoop.hbase.TableName, byte[], int, int, byte[], int, int)} —
+ *    {@link #decode(TableName, byte[], int, int, byte[], int, int)} —
  *    она позволяет не создавать промежуточные строки/копии;
  *  - дефолтная реализация «быстрой» перегрузки намеренно делает безопасные копии/преобразования,
  *    сохраняя прежнюю семантику и изоляцию от внешних модификаций массивов; конкретные реализации
@@ -46,6 +48,8 @@ import org.apache.hadoop.hbase.TableName;
  *  - все ссылочные аргументы считаются обязательными; при {@code null} — {@link NullPointerException};
  *  - отсутствует I/O и избыточные аллокации на горячем пути; при необходимости конкретные реализации
  *    могут переопределять дефолтные методы для нулевых аллокаций.
+ *  - имена полей PK сохраняются такими, как заданы в схеме (переименование, например в {@code *_ms}, на уровне интерфейса не производится);
+ *  - нормализация временных типов Phoenix (TIMESTAMP/DATE/TIME → миллисекунды эпохи) выполняется конкретной реализацией декодера; в стандартной поставке это делает {@code ValueCodecPhoenix}.
  */
 @FunctionalInterface
 public interface Decoder {
@@ -93,10 +97,12 @@ public interface Decoder {
     default Object decode(TableName table,
                           byte[] qual, int qOff, int qLen,
                           byte[] value, int vOff, int vLen) {
-        Objects.requireNonNull(table, "table");
+        if (table == null) {
+            throw new NullPointerException("Аргумент 'table' (имя таблицы) не может быть null");
+        }
         // Предусловия к срезам (ручные проверки совместимые с Java 8)
         if (qual == null) {
-            throw new NullPointerException("qualifier");
+            throw new NullPointerException("Аргумент 'qualifier' (имя колонки) не может быть null");
         }
         if (qOff < 0 || qLen < 0 || qOff > qual.length - qLen) {
             throw new IndexOutOfBoundsException(
@@ -142,8 +148,12 @@ public interface Decoder {
      * @throws NullPointerException если {@code table} или {@code qual} равны {@code null}
      */
     default Object decode(TableName table, byte[] qual, byte[] value) {
-        Objects.requireNonNull(table, "table");
-        Objects.requireNonNull(qual, "qualifier");
+        if (table == null) {
+            throw new NullPointerException("Аргумент 'table' (имя таблицы) не может быть null");
+        }
+        if (qual == null) {
+            throw new NullPointerException("Аргумент 'qualifier' (имя колонки) не может быть null");
+        }
         int qLen = qual.length;
         int vLen = (value == null ? 0 : value.length);
         return decode(table, qual, 0, qLen, value, 0, vLen);
@@ -242,7 +252,7 @@ public interface Decoder {
         /**
          * Удобная обёртка с дефолтом и компактной сигнатурой (2 среза вместо 6 параметров).
          * Для максимальной производительности возможно прямое обращение к
-         * {@link #decode(org.apache.hadoop.hbase.TableName, byte[], int, int, byte[], int, int)}.
+         * {@link #decode(TableName, byte[], int, int, byte[], int, int)}.
          *
          * @param table        имя таблицы
          * @param qual         срез qualifier (или {@code null})
@@ -273,6 +283,8 @@ public interface Decoder {
      * Контракт:
      * - Метод не бросает исключения; при отсутствии описания PK или невозможности декодирования — ничего не делает.
      * - Реализация, понимающая схему Phoenix, обязана учитывать соль ({@code saltBytes}) и корректно сдвигать/обрезать ключ.
+     * Имена ключей PK помещаются в {@code out} без переименования (сохраняются исходные имена из схемы).
+     * Если PK-колонка имеет временной тип Phoenix, нормализация значения (например, в миллисекунды эпохи) выполняется реализацией декодера (в стандартной реализации — {@code ValueCodecPhoenix}).
      *
      * — Коллекция {@code out} не очищается реализацией; записи добавляются/переопределяются по месту.
      *
@@ -281,10 +293,10 @@ public interface Decoder {
      * @param saltBytes число байт соли Phoenix в начале ключа (0, если соли нет)
      * @param out       карта для помещения полей PK (например, {@code c}, {@code t}, {@code opd})
      */
-    default void decodeRowKey(org.apache.hadoop.hbase.TableName table,
-                              kz.qazmarka.h2k.util.RowKeySlice rk,
+    default void decodeRowKey(TableName table,
+                              RowKeySlice rk,
                               int saltBytes,
-                              java.util.Map<String, Object> out) {
+                              Map<String, Object> out) {
         // no-op по умолчанию
     }
 }

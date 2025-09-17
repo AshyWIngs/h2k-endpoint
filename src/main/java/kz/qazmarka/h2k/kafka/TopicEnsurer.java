@@ -2,17 +2,37 @@ package kz.qazmarka.h2k.kafka;
 
 import java.lang.management.ManagementFactory;
 import java.net.InetAddress;
+import java.net.UnknownHostException;
 import java.security.SecureRandom;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Objects;
+import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.LongAdder;
 
 import org.apache.kafka.clients.admin.AdminClient;
 import org.apache.kafka.clients.admin.AdminClientConfig;
+import org.apache.kafka.clients.admin.AlterConfigOp;
+import org.apache.kafka.clients.admin.Config;
+import org.apache.kafka.clients.admin.ConfigEntry;
+import org.apache.kafka.clients.admin.NewPartitions;
 import org.apache.kafka.clients.admin.NewTopic;
+import org.apache.kafka.clients.admin.TopicDescription;
+import org.apache.kafka.common.KafkaFuture;
+import org.apache.kafka.common.config.ConfigResource;
+import org.apache.kafka.common.errors.TopicExistsException;
 import org.apache.kafka.common.errors.UnknownTopicOrPartitionException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -117,90 +137,90 @@ public final class TopicEnsurer implements AutoCloseable {
          * @param names имена тем
          * @return карта topic → KafkaFuture с TopicDescription; get() может бросить Timeout/ExecutionException
          */
-        java.util.Map<String, org.apache.kafka.common.KafkaFuture<org.apache.kafka.clients.admin.TopicDescription>>
-        describeTopics(java.util.Set<String> names);
+        Map<String, KafkaFuture<TopicDescription>>
+        describeTopics(Set<String> names);
 
         /**
          * Создаёт несколько тем батчем.
          * @param newTopics список спецификаций новых тем
          * @return карта topic → KafkaFuture<Void> для ожидания результатов по отдельности
          */
-        java.util.Map<String, org.apache.kafka.common.KafkaFuture<Void>>
-        createTopics(java.util.List<org.apache.kafka.clients.admin.NewTopic> newTopics);
+        Map<String, KafkaFuture<Void>>
+        createTopics(List<NewTopic> newTopics);
 
         /**
          * Создаёт одну тему и блокирующе ожидает завершения с заданным таймаутом.
          * Может бросить InterruptedException/TimeoutException/ExecutionException.
          */
-        void createTopic(org.apache.kafka.clients.admin.NewTopic topic, long timeoutMs)
-                throws InterruptedException, java.util.concurrent.ExecutionException, java.util.concurrent.TimeoutException;
+        void createTopic(NewTopic topic, long timeoutMs)
+                throws InterruptedException, ExecutionException, TimeoutException;
 
         /** Закрывает клиент с ожиданием до указанного таймаута. */
-        void close(java.time.Duration timeout);
+        void close(Duration timeout);
 
         /** Увеличивает число партиций у темы до указанного значения. */
         void increasePartitions(String topic, int newCount, long timeoutMs)
-                throws InterruptedException, java.util.concurrent.ExecutionException, java.util.concurrent.TimeoutException;
+                throws InterruptedException, ExecutionException, TimeoutException;
 
         /** Описывает конфиги для набора ресурсов. */
-        java.util.Map<org.apache.kafka.common.config.ConfigResource, org.apache.kafka.common.KafkaFuture<org.apache.kafka.clients.admin.Config>>
-        describeConfigs(java.util.Collection<org.apache.kafka.common.config.ConfigResource> resources);
+        Map<ConfigResource, KafkaFuture<Config>>
+        describeConfigs(Collection<ConfigResource> resources);
 
         /** Применяет изменения конфигов (incrementalAlterConfigs) и ожидает завершения. */
         void incrementalAlterConfigs(
-                java.util.Map<org.apache.kafka.common.config.ConfigResource, java.util.Collection<org.apache.kafka.clients.admin.AlterConfigOp>> ops,
+                Map<ConfigResource, Collection<AlterConfigOp>> ops,
                 long timeoutMs)
-                throws InterruptedException, java.util.concurrent.ExecutionException, java.util.concurrent.TimeoutException;
+                throws InterruptedException, ExecutionException, TimeoutException;
     }
 
     /** Реализация TopicAdmin поверх реального AdminClient. Не содержит бизнес‑логики, только адаптация API. */
     private static final class AdminFacade implements TopicAdmin {
-        private final org.apache.kafka.clients.admin.AdminClient delegate;
-        AdminFacade(org.apache.kafka.clients.admin.AdminClient delegate) { this.delegate = delegate; }
+        private final AdminClient delegate;
+        AdminFacade(AdminClient delegate) { this.delegate = delegate; }
 
         @Override
-        public java.util.Map<String, org.apache.kafka.common.KafkaFuture<org.apache.kafka.clients.admin.TopicDescription>>
-        describeTopics(java.util.Set<String> names) {
+        public Map<String, KafkaFuture<TopicDescription>>
+        describeTopics(Set<String> names) {
             return delegate.describeTopics(names).values();
         }
 
         @Override
-        public java.util.Map<String, org.apache.kafka.common.KafkaFuture<Void>>
-        createTopics(java.util.List<org.apache.kafka.clients.admin.NewTopic> newTopics) {
+        public Map<String, KafkaFuture<Void>>
+        createTopics(List<NewTopic> newTopics) {
             return delegate.createTopics(newTopics).values();
         }
 
         @Override
-        public void createTopic(org.apache.kafka.clients.admin.NewTopic topic, long timeoutMs)
-                throws InterruptedException, java.util.concurrent.ExecutionException, java.util.concurrent.TimeoutException {
-            delegate.createTopics(java.util.Collections.singleton(topic))
+        public void createTopic(NewTopic topic, long timeoutMs)
+                throws InterruptedException, ExecutionException, TimeoutException {
+            delegate.createTopics(Collections.singleton(topic))
                     .all()
-                    .get(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+                    .get(timeoutMs, TimeUnit.MILLISECONDS);
         }
 
         @Override
-        public void close(java.time.Duration timeout) { delegate.close(timeout); }
+        public void close(Duration timeout) { delegate.close(timeout); }
 
         @Override
         public void increasePartitions(String topic, int newCount, long timeoutMs)
-                throws InterruptedException, java.util.concurrent.ExecutionException, java.util.concurrent.TimeoutException {
-            java.util.Map<String, org.apache.kafka.clients.admin.NewPartitions> req =
-                    java.util.Collections.singletonMap(topic, org.apache.kafka.clients.admin.NewPartitions.increaseTo(newCount));
-            delegate.createPartitions(req).all().get(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+                throws InterruptedException, ExecutionException, TimeoutException {
+            Map<String, NewPartitions> req =
+                    Collections.singletonMap(topic, NewPartitions.increaseTo(newCount));
+            delegate.createPartitions(req).all().get(timeoutMs, TimeUnit.MILLISECONDS);
         }
 
         @Override
-        public java.util.Map<org.apache.kafka.common.config.ConfigResource, org.apache.kafka.common.KafkaFuture<org.apache.kafka.clients.admin.Config>>
-        describeConfigs(java.util.Collection<org.apache.kafka.common.config.ConfigResource> resources) {
+        public Map<ConfigResource, KafkaFuture<Config>>
+        describeConfigs(Collection<ConfigResource> resources) {
             return delegate.describeConfigs(resources).values();
         }
 
         @Override
         public void incrementalAlterConfigs(
-                java.util.Map<org.apache.kafka.common.config.ConfigResource, java.util.Collection<org.apache.kafka.clients.admin.AlterConfigOp>> ops,
+                Map<ConfigResource, Collection<AlterConfigOp>> ops,
                 long timeoutMs)
-                throws InterruptedException, java.util.concurrent.ExecutionException, java.util.concurrent.TimeoutException {
-            delegate.incrementalAlterConfigs(ops).all().get(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+                throws InterruptedException, ExecutionException, TimeoutException {
+            delegate.incrementalAlterConfigs(ops).all().get(timeoutMs, TimeUnit.MILLISECONDS);
         }
     }
 
@@ -229,7 +249,7 @@ public final class TopicEnsurer implements AutoCloseable {
         static final class Builder {
             private int partitions;
             private short replication;
-            private Map<String, String> configs = java.util.Collections.emptyMap();
+            private Map<String, String> configs = Collections.emptyMap();
             private long unknownBackoffMs;
             private int topicNameMaxLen;
             private java.util.function.UnaryOperator<String> sanitizer = s -> s;
@@ -238,7 +258,7 @@ public final class TopicEnsurer implements AutoCloseable {
 
             Builder partitions(int v) { this.partitions = v; return this; }
             Builder replication(short v) { this.replication = v; return this; }
-            Builder configs(Map<String,String> v) { this.configs = (v == null ? java.util.Collections.emptyMap() : v); return this; }
+            Builder configs(Map<String,String> v) { this.configs = (v == null ? Collections.emptyMap() : v); return this; }
             Builder unknownBackoffMs(long v) { this.unknownBackoffMs = v; return this; }
             Builder topicNameMaxLen(int v) { this.topicNameMaxLen = v; return this; }
             Builder sanitizer(java.util.function.UnaryOperator<String> v) { this.sanitizer = v; return this; }
@@ -278,7 +298,7 @@ public final class TopicEnsurer implements AutoCloseable {
             return null;
         }
         // Базовые свойства AdminClient отдаёт H2kConfig (без дублирования строковых ключей)
-        java.util.Properties ap = cfg.kafkaAdminProps();
+        Properties ap = cfg.kafkaAdminProps();
         // Уникализируем client.id во избежание MBean-конфликта AppInfo (InstanceAlreadyExistsException)
         String baseId = ap.getProperty(AdminClientConfig.CLIENT_ID_CONFIG, "h2k-admin");
         ap.put(AdminClientConfig.CLIENT_ID_CONFIG, uniqueClientId(baseId));
@@ -315,8 +335,8 @@ public final class TopicEnsurer implements AutoCloseable {
         this.topicPartitions = p.partitions;
         this.topicReplication = p.replication;
         this.topicConfigs = (p.configs == null
-                ? java.util.Collections.emptyMap()
-                : java.util.Collections.unmodifiableMap(new java.util.HashMap<>(p.configs)));
+                ? Collections.emptyMap()
+                : Collections.unmodifiableMap(new HashMap<>(p.configs)));
         this.unknownBackoffMs = p.unknownBackoffMs;
         this.unknownBackoffNs = TimeUnit.MILLISECONDS.toNanos(p.unknownBackoffMs);
         this.backoff = new BackoffPolicy(TimeUnit.MILLISECONDS.toNanos(1), 20); // min=1ms, jitter≈20%
@@ -443,9 +463,9 @@ public final class TopicEnsurer implements AutoCloseable {
             markEnsured(t);
         } catch (InterruptedException ie) {
             onCreateInterrupted(t, ie);
-        } catch (java.util.concurrent.ExecutionException e) {
+        } catch (ExecutionException e) {
             onCreateExecException(t, e);
-        } catch (java.util.concurrent.TimeoutException te) {
+        } catch (TimeoutException te) {
             onCreateTimeout(t, te);
         } catch (RuntimeException re) {
             onCreateRuntime(t, re);
@@ -500,9 +520,9 @@ public final class TopicEnsurer implements AutoCloseable {
      * Замечания по производительности
      *  - Формирует краткое сообщение в WARN без stacktrace; полная трассировка — только в DEBUG.
      */
-    private void onCreateExecException(String t, java.util.concurrent.ExecutionException e) {
+    private void onCreateExecException(String t, ExecutionException e) {
         Throwable cause = e.getCause();
-        if (cause instanceof org.apache.kafka.common.errors.TopicExistsException) {
+        if (cause instanceof TopicExistsException) {
             createRace.increment();
             markEnsured(t);
             if (LOG.isDebugEnabled()) {
@@ -537,7 +557,7 @@ public final class TopicEnsurer implements AutoCloseable {
      * Замечания по производительности
      *  - Минимальные аллокации; детальная трассировка только при DEBUG.
      */
-    private void onCreateTimeout(String t, java.util.concurrent.TimeoutException te) {
+    private void onCreateTimeout(String t, TimeoutException te) {
         createFail.increment();
         LOG.warn("Не удалось создать Kafka-топик '{}': таймаут {} мс", t, adminTimeoutMs);
         if (LOG.isDebugEnabled()) {
@@ -597,11 +617,11 @@ public final class TopicEnsurer implements AutoCloseable {
      *
      * @param topics коллекция имён Kafka‑топиков
      */
-    public void ensureTopics(java.util.Collection<String> topics) {
+    public void ensureTopics(Collection<String> topics) {
         if (admin == null || topics == null || topics.isEmpty()) return;
         java.util.Set<String> toCheck = normalizeCandidates(topics);
         if (toCheck.isEmpty()) return;
-        java.util.List<String> missing = describeAndCollectMissing(toCheck);
+        List<String> missing = describeAndCollectMissing(toCheck);
         if (missing.isEmpty()) return;
         createMissingTopics(missing);
     }
@@ -613,8 +633,8 @@ public final class TopicEnsurer implements AutoCloseable {
      * @param topics исходные имена
      * @return отфильтрованный набор имён, которые имеет смысл проверять у брокера
      */
-    private java.util.LinkedHashSet<String> normalizeCandidates(java.util.Collection<String> topics) {
-        java.util.LinkedHashSet<String> toCheck = new java.util.LinkedHashSet<>(topics.size());
+    private LinkedHashSet<String> normalizeCandidates(Collection<String> topics) {
+        LinkedHashSet<String> toCheck = new LinkedHashSet<>(topics.size());
         for (String raw : topics) {
             String base = (raw == null) ? "" : raw.trim();
             String t = topicSanitizer.apply(base);
@@ -640,9 +660,9 @@ public final class TopicEnsurer implements AutoCloseable {
      * @param toCheck имена тем, прошедших нормализацию
      * @return список отсутствующих тем
      */
-    private java.util.ArrayList<String> describeAndCollectMissing(java.util.Set<String> toCheck) {
-        java.util.ArrayList<String> missing = new java.util.ArrayList<>(toCheck.size());
-        java.util.Map<String, org.apache.kafka.common.KafkaFuture<org.apache.kafka.clients.admin.TopicDescription>> fmap =
+    private ArrayList<String> describeAndCollectMissing(Set<String> toCheck) {
+        ArrayList<String> missing = new ArrayList<>(toCheck.size());
+        Map<String, KafkaFuture<TopicDescription>> fmap =
                 admin.describeTopics(toCheck);
         for (String t : toCheck) {
             classifyDescribeTopic(fmap, t, missing);
@@ -661,17 +681,17 @@ public final class TopicEnsurer implements AutoCloseable {
      * @param missing результирующий список отсутствующих тем
      */
     private void classifyDescribeTopic(
-            java.util.Map<String, org.apache.kafka.common.KafkaFuture<org.apache.kafka.clients.admin.TopicDescription>> fmap,
+            Map<String, KafkaFuture<TopicDescription>> fmap,
             String t,
-            java.util.List<String> missing) {
+            List<String> missing) {
         try {
             fmap.get(t).get(adminTimeoutMs, TimeUnit.MILLISECONDS);
             onDescribeOk(t);
         } catch (InterruptedException ie) {
             onDescribeInterrupted(t, ie);
-        } catch (java.util.concurrent.TimeoutException te) {
+        } catch (TimeoutException te) {
             onDescribeTimeout(t, te);
-        } catch (java.util.concurrent.ExecutionException ee) {
+        } catch (ExecutionException ee) {
             onDescribeExec(t, ee, missing);
         }
     }
@@ -707,7 +727,7 @@ public final class TopicEnsurer implements AutoCloseable {
             } else {
                 LOG.warn("Проверка/увеличение партиций прерваны для '{}'", t);
             }
-        } catch (java.util.concurrent.TimeoutException | java.util.concurrent.ExecutionException e) {
+        } catch (TimeoutException | ExecutionException e) {
             if (LOG.isDebugEnabled()) {
                 LOG.debug("Не удалось проверить/увеличить партиции Kafka-топика '{}'", t, e);
             } else {
@@ -723,16 +743,16 @@ public final class TopicEnsurer implements AutoCloseable {
     }
 
     private int currentPartitionCount(String t)
-            throws InterruptedException, java.util.concurrent.ExecutionException, java.util.concurrent.TimeoutException {
-        java.util.Map<String, org.apache.kafka.common.KafkaFuture<org.apache.kafka.clients.admin.TopicDescription>> m =
-                admin.describeTopics(java.util.Collections.singleton(t));
-        org.apache.kafka.clients.admin.TopicDescription d =
-                m.get(t).get(adminTimeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+            throws InterruptedException, ExecutionException, TimeoutException {
+        Map<String, KafkaFuture<TopicDescription>> m =
+                admin.describeTopics(Collections.singleton(t));
+        TopicDescription d =
+                m.get(t).get(adminTimeoutMs, TimeUnit.MILLISECONDS);
         return d.partitions().size();
     }
 
     private void decideAndMaybeIncreasePartitions(String t, int cur)
-            throws InterruptedException, java.util.concurrent.ExecutionException, java.util.concurrent.TimeoutException {
+            throws InterruptedException, ExecutionException, TimeoutException {
         if (cur < topicPartitions) {
             LOG.info("Увеличиваю партиции Kafka-топика '{}' {}→{}", t, cur, topicPartitions);
             admin.increasePartitions(t, topicPartitions, adminTimeoutMs);
@@ -745,48 +765,48 @@ public final class TopicEnsurer implements AutoCloseable {
     /** Приводит конфиги темы к заданным только по отличающимся ключам (incrementalAlterConfigs). */
     private void ensureConfigsIfEnabled(String t) {
         try {
-            org.apache.kafka.common.config.ConfigResource cr =
-                    new org.apache.kafka.common.config.ConfigResource(
-                            org.apache.kafka.common.config.ConfigResource.Type.TOPIC, t);
-            org.apache.kafka.clients.admin.Config cur = fetchCurrentTopicConfig(cr);
+            ConfigResource cr =
+                    new ConfigResource(
+                            ConfigResource.Type.TOPIC, t);
+            Config cur = fetchCurrentTopicConfig(cr);
 
-            java.util.List<org.apache.kafka.clients.admin.AlterConfigOp> ops = diffConfigOps(cur, topicConfigs);
+            List<AlterConfigOp> ops = diffConfigOps(cur, topicConfigs);
             if (!ops.isEmpty()) {
                 applyConfigChanges(t, cr, ops);
             }
         } catch (InterruptedException ie) {
             onConfigsInterrupted(t, ie);
-        } catch (java.util.concurrent.TimeoutException te) {
+        } catch (TimeoutException te) {
             onConfigsTimeout(t, te);
-        } catch (java.util.concurrent.ExecutionException ee) {
+        } catch (ExecutionException ee) {
             onConfigsExecution(t, ee);
         } catch (RuntimeException e) {
             onConfigsRuntime(t, e);
         }
     }
 
-    private org.apache.kafka.clients.admin.Config fetchCurrentTopicConfig(
-            org.apache.kafka.common.config.ConfigResource cr)
-            throws InterruptedException, java.util.concurrent.ExecutionException, java.util.concurrent.TimeoutException {
-        java.util.Map<org.apache.kafka.common.config.ConfigResource, org.apache.kafka.common.KafkaFuture<org.apache.kafka.clients.admin.Config>> vals =
-                admin.describeConfigs(java.util.Collections.singleton(cr));
-        return vals.get(cr).get(adminTimeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+    private Config fetchCurrentTopicConfig(
+            ConfigResource cr)
+            throws InterruptedException, ExecutionException, TimeoutException {
+        Map<ConfigResource, KafkaFuture<Config>> vals =
+                admin.describeConfigs(Collections.singleton(cr));
+        return vals.get(cr).get(adminTimeoutMs, TimeUnit.MILLISECONDS);
     }
 
-    private java.util.List<org.apache.kafka.clients.admin.AlterConfigOp> diffConfigOps(
-            org.apache.kafka.clients.admin.Config cur,
-            java.util.Map<String, String> desired) {
-        java.util.List<org.apache.kafka.clients.admin.AlterConfigOp> ops = new java.util.ArrayList<>();
+    private List<AlterConfigOp> diffConfigOps(
+            Config cur,
+            Map<String, String> desired) {
+        List<AlterConfigOp> ops = new ArrayList<>();
         if (desired == null || desired.isEmpty()) return ops;
-        for (java.util.Map.Entry<String, String> e : desired.entrySet()) {
+        for (Map.Entry<String, String> e : desired.entrySet()) {
             String k = e.getKey();
             String v = e.getValue();
-            org.apache.kafka.clients.admin.ConfigEntry ce = cur.get(k);
+            ConfigEntry ce = cur.get(k);
             String curV = (ce == null) ? null : ce.value();
             if (!eq(curV, v)) {
-                ops.add(new org.apache.kafka.clients.admin.AlterConfigOp(
-                        new org.apache.kafka.clients.admin.ConfigEntry(k, v),
-                        org.apache.kafka.clients.admin.AlterConfigOp.OpType.SET));
+                ops.add(new AlterConfigOp(
+                        new ConfigEntry(k, v),
+                        AlterConfigOp.OpType.SET));
             }
         }
         return ops;
@@ -794,11 +814,11 @@ public final class TopicEnsurer implements AutoCloseable {
 
     private void applyConfigChanges(
             String topic,
-            org.apache.kafka.common.config.ConfigResource cr,
-            java.util.List<org.apache.kafka.clients.admin.AlterConfigOp> ops)
-            throws InterruptedException, java.util.concurrent.ExecutionException, java.util.concurrent.TimeoutException {
-        java.util.Map<org.apache.kafka.common.config.ConfigResource, java.util.Collection<org.apache.kafka.clients.admin.AlterConfigOp>> req =
-                new java.util.LinkedHashMap<>(1);
+            ConfigResource cr,
+            List<AlterConfigOp> ops)
+            throws InterruptedException, ExecutionException, TimeoutException {
+        Map<ConfigResource, Collection<AlterConfigOp>> req =
+                new LinkedHashMap<>(1);
         req.put(cr, ops);
         LOG.info("Привожу конфиги Kafka-топика '{}' ({} ключ(а/ей))", topic, ops.size());
         admin.incrementalAlterConfigs(req, adminTimeoutMs);
@@ -813,7 +833,7 @@ public final class TopicEnsurer implements AutoCloseable {
         }
     }
 
-    private void onConfigsTimeout(String t, java.util.concurrent.TimeoutException te) {
+    private void onConfigsTimeout(String t, TimeoutException te) {
         if (LOG.isDebugEnabled()) {
             LOG.debug("Не удалось привести конфиги Kafka-топика '{}' из-за таймаута {}", t, adminTimeoutMs, te);
         } else {
@@ -821,7 +841,7 @@ public final class TopicEnsurer implements AutoCloseable {
         }
     }
 
-    private void onConfigsExecution(String t, java.util.concurrent.ExecutionException e) {
+    private void onConfigsExecution(String t, ExecutionException e) {
         if (LOG.isDebugEnabled()) {
             LOG.debug("Не удалось привести конфиги Kafka-топика '{}'", t, e);
         } else {
@@ -839,7 +859,7 @@ public final class TopicEnsurer implements AutoCloseable {
 
     /** Utility: null-safe string equals. */
     private static boolean eq(String a, String b) {
-        return java.util.Objects.equals(a, b);
+        return Objects.equals(a, b);
     }
 
     private void onDescribeInterrupted(String t, InterruptedException ie) {
@@ -851,7 +871,7 @@ public final class TopicEnsurer implements AutoCloseable {
         }
     }
 
-    private void onDescribeTimeout(String t, java.util.concurrent.TimeoutException te) {
+    private void onDescribeTimeout(String t, TimeoutException te) {
         existsUnknown.increment();
         scheduleUnknown(t);
         if (LOG.isDebugEnabled()) {
@@ -859,7 +879,7 @@ public final class TopicEnsurer implements AutoCloseable {
         }
     }
 
-    private void onDescribeExec(String t, java.util.concurrent.ExecutionException ee, java.util.List<String> missing) {
+    private void onDescribeExec(String t, ExecutionException ee, List<String> missing) {
         Throwable cause = ee.getCause();
         if (cause instanceof UnknownTopicOrPartitionException) {
             existsFalse.increment();
@@ -882,16 +902,16 @@ public final class TopicEnsurer implements AutoCloseable {
      *
      * @param missing имена отсутствующих тем
      */
-    private void createMissingTopics(java.util.List<String> missing) {
-        java.util.List<NewTopic> newTopics = new java.util.ArrayList<>(missing.size());
+    private void createMissingTopics(List<String> missing) {
+        List<NewTopic> newTopics = new ArrayList<>(missing.size());
         for (String t : missing) {
             NewTopic nt = new NewTopic(t, topicPartitions, topicReplication);
             if (!topicConfigs.isEmpty()) nt.configs(topicConfigs);
             newTopics.add(nt);
         }
-        java.util.Map<String, org.apache.kafka.common.KafkaFuture<Void>> cvals = admin.createTopics(newTopics);
+        Map<String, KafkaFuture<Void>> cvals = admin.createTopics(newTopics);
         // Первый проход
-        java.util.ArrayList<String> timedOut = new java.util.ArrayList<>(missing.size());
+        ArrayList<String> timedOut = new ArrayList<>(missing.size());
         for (String t : missing) {
             CreateOutcome r = processCreateResult(cvals, t);
             if (r == CreateOutcome.TIMEOUT) timedOut.add(t);
@@ -899,14 +919,14 @@ public final class TopicEnsurer implements AutoCloseable {
         if (timedOut.isEmpty()) return;
         // Короткий backoff и единичный повтор только для таймаутов
         long delay = backoff.nextDelayNanos(unknownBackoffNs);
-        try { Thread.sleep(java.util.concurrent.TimeUnit.NANOSECONDS.toMillis(delay)); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
-        java.util.List<NewTopic> retryTopics = new java.util.ArrayList<>(timedOut.size());
+        try { Thread.sleep(TimeUnit.NANOSECONDS.toMillis(delay)); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); }
+        List<NewTopic> retryTopics = new ArrayList<>(timedOut.size());
         for (String t : timedOut) {
             NewTopic nt = new NewTopic(t, topicPartitions, topicReplication);
             if (!topicConfigs.isEmpty()) nt.configs(topicConfigs);
             retryTopics.add(nt);
         }
-        java.util.Map<String, org.apache.kafka.common.KafkaFuture<Void>> rvals = admin.createTopics(retryTopics);
+        Map<String, KafkaFuture<Void>> rvals = admin.createTopics(retryTopics);
         for (String t : timedOut) {
             // во втором проходе используем те же хендлеры; повторные таймауты/ошибки попадут в обычную обработку
             processCreateResult(rvals, t);
@@ -921,7 +941,7 @@ public final class TopicEnsurer implements AutoCloseable {
      * @return результат обработки для возможного повторного шага
      */
     private CreateOutcome processCreateResult(
-            java.util.Map<String, org.apache.kafka.common.KafkaFuture<Void>> cvals,
+            Map<String, KafkaFuture<Void>> cvals,
             String t) {
         try {
             cvals.get(t).get(adminTimeoutMs, TimeUnit.MILLISECONDS);
@@ -930,10 +950,10 @@ public final class TopicEnsurer implements AutoCloseable {
         } catch (InterruptedException ie) {
             onCreateBatchInterrupted(t, ie);
             return CreateOutcome.FAIL;
-        } catch (java.util.concurrent.TimeoutException te) {
+        } catch (TimeoutException te) {
             onCreateBatchTimeout(t, te);
             return CreateOutcome.TIMEOUT;
-        } catch (java.util.concurrent.ExecutionException ee) {
+        } catch (ExecutionException ee) {
             return handleCreateExecution(t, ee);
         }
     }
@@ -942,9 +962,9 @@ public final class TopicEnsurer implements AutoCloseable {
      * Обработчик ExecutionException при createTopics (batch).
      * Выделен отдельно для снижения когнитивной сложности основного метода.
      */
-    private CreateOutcome handleCreateExecution(String t, java.util.concurrent.ExecutionException ee) {
+    private CreateOutcome handleCreateExecution(String t, ExecutionException ee) {
         final Throwable cause = ee.getCause();
-        if (cause instanceof org.apache.kafka.common.errors.TopicExistsException) {
+        if (cause instanceof TopicExistsException) {
             createRace.increment();
             markEnsured(t);
             if (LOG.isDebugEnabled()) {
@@ -976,7 +996,7 @@ public final class TopicEnsurer implements AutoCloseable {
         onCreateInterrupted(t, ie);
     }
 
-    private void onCreateBatchTimeout(String t, java.util.concurrent.TimeoutException te) {
+    private void onCreateBatchTimeout(String t, TimeoutException te) {
         onCreateTimeout(t, te);
     }
 
@@ -999,15 +1019,15 @@ public final class TopicEnsurer implements AutoCloseable {
      */
     private TopicExistence topicExists(String topic) {
         try {
-            java.util.Map<String, org.apache.kafka.common.KafkaFuture<org.apache.kafka.clients.admin.TopicDescription>> m =
-                    admin.describeTopics(java.util.Collections.singleton(topic));
-            m.get(topic).get(adminTimeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS);
+            Map<String, KafkaFuture<TopicDescription>> m =
+                    admin.describeTopics(Collections.singleton(topic));
+            m.get(topic).get(adminTimeoutMs, TimeUnit.MILLISECONDS);
             return onTopicExistsOk();
         } catch (InterruptedException ie) {
             return onTopicExistsInterrupted(topic, ie);
-        } catch (java.util.concurrent.TimeoutException te) {
+        } catch (TimeoutException te) {
             return onTopicExistsTimeout(topic, te);
-        } catch (java.util.concurrent.ExecutionException ee) {
+        } catch (ExecutionException ee) {
             return onTopicExistsExec(topic, ee);
         } catch (RuntimeException re) {
             return onTopicExistsRuntime(topic, re);
@@ -1028,7 +1048,7 @@ public final class TopicEnsurer implements AutoCloseable {
         return TopicExistence.UNKNOWN;
     }
 
-    private TopicExistence onTopicExistsTimeout(String topic, java.util.concurrent.TimeoutException te) {
+    private TopicExistence onTopicExistsTimeout(String topic, TimeoutException te) {
         if (LOG.isDebugEnabled()) {
             LOG.debug("Проверка Kafka-топика '{}' превысила таймаут {} мс", topic, adminTimeoutMs, te);
         }
@@ -1036,7 +1056,7 @@ public final class TopicEnsurer implements AutoCloseable {
         return TopicExistence.UNKNOWN;
     }
 
-    private TopicExistence onTopicExistsExec(String topic, java.util.concurrent.ExecutionException ee) {
+    private TopicExistence onTopicExistsExec(String topic, ExecutionException ee) {
         Throwable cause = ee.getCause();
         if (cause instanceof UnknownTopicOrPartitionException) {
             existsFalse.increment();
@@ -1147,16 +1167,16 @@ public final class TopicEnsurer implements AutoCloseable {
     /**
      * Создаёт одну тему и логирует факт/применённые конфиги.
      *
-     * Бросает {@link InterruptedException}, {@link java.util.concurrent.ExecutionException},
-     * {@link java.util.concurrent.TimeoutException}; вызывающая сторона отвечает за перевод в метрики/лог.
+     * Бросает {@link InterruptedException}, {@link ExecutionException},
+     * {@link TimeoutException}; вызывающая сторона отвечает за перевод в метрики/лог.
      *
      * @param topic имя Kafka‑топика
      * @throws InterruptedException если поток прерван
-     * @throws java.util.concurrent.ExecutionException ошибка выполнения на стороне брокера
-     * @throws java.util.concurrent.TimeoutException по истечении {@code adminTimeoutMs}
+     * @throws ExecutionException ошибка выполнения на стороне брокера
+     * @throws TimeoutException по истечении {@code adminTimeoutMs}
      */
     private void createTopic(String topic)
-            throws InterruptedException, java.util.concurrent.ExecutionException, java.util.concurrent.TimeoutException {
+            throws InterruptedException, ExecutionException, TimeoutException {
         NewTopic nt = new NewTopic(topic, topicPartitions, topicReplication);
         if (!topicConfigs.isEmpty()) {
             nt.configs(topicConfigs);
@@ -1177,7 +1197,7 @@ public final class TopicEnsurer implements AutoCloseable {
         String host = "host";
         try {
             host = InetAddress.getLocalHost().getHostName();
-        } catch (java.net.UnknownHostException ignore) { /* no-op */ }
+        } catch (UnknownHostException ignore) { /* no-op */ }
         String pid = ManagementFactory.getRuntimeMXBean().getName();
         int at = pid.indexOf('@');
         if (at > 0) pid = pid.substring(0, at);
@@ -1239,7 +1259,7 @@ public final class TopicEnsurer implements AutoCloseable {
      * @return карта «имя метрики → значение»
      */
     public Map<String, Long> getMetrics() {
-        java.util.Map<String, Long> m = new java.util.LinkedHashMap<>(13);
+        Map<String, Long> m = new LinkedHashMap<>(13);
         m.put("ensure.invocations", ensureInvocations.longValue());
         m.put("ensure.cache.hit",   ensureHitCache.longValue());
         m.put("exists.true",        existsTrue.longValue());
@@ -1249,7 +1269,7 @@ public final class TopicEnsurer implements AutoCloseable {
         m.put("create.race",        createRace.longValue());
         m.put("create.fail",        createFail.longValue());
         m.put("unknown.backoff.size", (long) unknownUntil.size());
-        return java.util.Collections.unmodifiableMap(m);
+        return Collections.unmodifiableMap(m);
     }
 
     /** Закрывает AdminClient через обёртку TopicAdmin с таймаутом adminTimeoutMs. Безопасен к повторным вызовам. */

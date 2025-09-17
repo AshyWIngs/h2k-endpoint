@@ -3,8 +3,11 @@ package kz.qazmarka.h2k.kafka;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
+import java.util.RandomAccess;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import org.apache.kafka.clients.producer.RecordMetadata;
 import org.slf4j.Logger;
@@ -56,9 +59,12 @@ public final class BatchSender implements AutoCloseable {
     private static final int AUTO_FLUSH_SUSPENDED = Integer.MAX_VALUE;
     /**
      * Коэффициент, при превышении которого после очень больших партий
-     * выполняется усадка внутреннего {@link java.util.ArrayList#trimToSize()}.
+     * выполняется усадка внутреннего {@link ArrayList#trimToSize()}.
      */
     private static final int TRIM_FACTOR = 8;
+
+    /** Антишум: минимальный интервал между DEBUG‑сообщениями о «тихих» неуспехах, наносекунды. */
+    private static final long QUIET_FAIL_LOG_THROTTLE_NS = TimeUnit.SECONDS.toNanos(5);
 
 
     /** Сколько отправок накапливать перед ожиданием подтверждений. */
@@ -87,6 +93,11 @@ public final class BatchSender implements AutoCloseable {
 
     /** Чтобы не «шуметь» в логах — предупреждаем об отключении авто‑сброса один раз. */
     private boolean warnedAutoFlush;
+
+    /** Время последнего DEBUG‑лога о «тихом» неуспехе (nanoTime), для троттлинга. */
+    private long lastQuietFailLogNs;
+    /** Длина текущей полосы «тихих» неуспехов (для логики «первый из серии»). */
+    private int quietFailStreak;
 
     /**
      * Упрощённый конструктор: счётчики и DEBUG отключены.
@@ -131,6 +142,8 @@ public final class BatchSender implements AutoCloseable {
         this.failedFlushes = 0L;
         this.autoFlushSuspended = false;
         this.warnedAutoFlush = false;
+        this.lastQuietFailLogNs = 0L;
+        this.quietFailStreak = 0;
     }
 
     /**
@@ -227,7 +240,7 @@ public final class BatchSender implements AutoCloseable {
         // Остаток < awaitEvery оставляем в буфере — поведение идентично множественным add()
     }
     /**
-     * Защита от переполнения при предварительном резервировании ёмкости {@link java.util.ArrayList}.
+     * Защита от переполнения при предварительном резервировании ёмкости {@link ArrayList}.
      *
      * @param base текущее количество элементов в буфере
      * @param extra предполагаемое число добавляемых элементов; отрицательные значения трактуются как 0
@@ -247,11 +260,11 @@ public final class BatchSender implements AutoCloseable {
      * @param futures список ожиданий (Future<RecordMetadata>) (null или пустой — быстрый выход)
      * @param timeoutMs общий таймаут ожидания в миллисекундах на весь набор
      * @throws InterruptedException если поток прерван (флаг прерывания сохраняется вызывающим кодом)
-     * @throws java.util.concurrent.ExecutionException при ошибке выполнения
-     * @throws java.util.concurrent.TimeoutException если дедлайн истёк
+     * @throws ExecutionException при ошибке выполнения
+     * @throws TimeoutException если дедлайн истёк
      */
     private static void waitAll(List<Future<RecordMetadata>> futures, int timeoutMs)
-            throws InterruptedException, java.util.concurrent.ExecutionException, java.util.concurrent.TimeoutException {
+            throws InterruptedException, ExecutionException, TimeoutException {
         if (futures == null || futures.isEmpty()) {
             return;
         }
@@ -262,7 +275,7 @@ public final class BatchSender implements AutoCloseable {
     @FunctionalInterface
     private interface FutureVisitor {
         void accept(Future<RecordMetadata> f, int index)
-                throws InterruptedException, java.util.concurrent.ExecutionException, java.util.concurrent.TimeoutException;
+                throws InterruptedException, ExecutionException, TimeoutException;
     }
 
     /**
@@ -272,15 +285,15 @@ public final class BatchSender implements AutoCloseable {
      * @param futures список ожиданий (может быть {@code null})
      * @param visitor обработчик элемента и его индекса
      * @throws InterruptedException если ожидание прервано
-     * @throws java.util.concurrent.ExecutionException при ошибке выполнения
-     * @throws java.util.concurrent.TimeoutException если истёк общий дедлайн
+     * @throws ExecutionException при ошибке выполнения
+     * @throws TimeoutException если истёк общий дедлайн
      */
     private static void forEachFuture(List<Future<RecordMetadata>> futures, FutureVisitor visitor)
-            throws InterruptedException, java.util.concurrent.ExecutionException, java.util.concurrent.TimeoutException {
+            throws InterruptedException, ExecutionException, TimeoutException {
         if (futures == null) {
             return;
         }
-        if (futures instanceof java.util.RandomAccess) {
+        if (futures instanceof RandomAccess) {
             for (int i = 0, n = futures.size(); i < n; i++) {
                 visitor.accept(futures.get(i), i);
             }
@@ -297,17 +310,17 @@ public final class BatchSender implements AutoCloseable {
      * @param f ожидание (Future<RecordMetadata>); если {@code null}, метод ничего не делает
      * @param deadlineNs абсолютный дедлайн в наносекундах (System.nanoTime())
      * @throws InterruptedException при прерывании ожидания (флаг прерывания сохраняется)
-     * @throws java.util.concurrent.ExecutionException при ошибке выполнения
-     * @throws java.util.concurrent.TimeoutException если дедлайн истёк
+     * @throws ExecutionException при ошибке выполнения
+     * @throws TimeoutException если дедлайн истёк
      */
     private static void awaitOne(Future<RecordMetadata> f, long deadlineNs)
-            throws InterruptedException, java.util.concurrent.ExecutionException, java.util.concurrent.TimeoutException {
+            throws InterruptedException, ExecutionException, TimeoutException {
         if (f == null) {
             return;
         }
         long leftNs = deadlineNs - System.nanoTime();
         if (leftNs <= 0L) {
-            throw new java.util.concurrent.TimeoutException(TIMEOUT_MSG);
+            throw new TimeoutException(TIMEOUT_MSG);
         }
         f.get(leftNs, TimeUnit.NANOSECONDS);
     }
@@ -323,11 +336,11 @@ public final class BatchSender implements AutoCloseable {
      * @param strict {@code true} — строгая семантика; {@code false} — «тихий» режим
      * @return {@code true} при успехе (в «тихом» режиме)
      * @throws InterruptedException см. {@link #waitAll(List, int)}
-     * @throws java.util.concurrent.ExecutionException при ошибке выполнения
-     * @throws java.util.concurrent.TimeoutException если дедлайн истёк
+     * @throws ExecutionException при ошибке выполнения
+     * @throws TimeoutException если дедлайн истёк
      */
     private boolean flushInternal(boolean strict)
-            throws InterruptedException, java.util.concurrent.ExecutionException, java.util.concurrent.TimeoutException {
+            throws InterruptedException, ExecutionException, TimeoutException {
         if (strict) {
             flushStrictInternal();
             return true;
@@ -338,11 +351,11 @@ public final class BatchSender implements AutoCloseable {
     /**
      * Строгий сброс: ожидает все futures и очищает буфер либо выбрасывает {@link java.util.concurrent.ExecutionException} или {@link java.util.concurrent.TimeoutException} при неуспехе.
      * @throws InterruptedException при прерывании ожидания
-     * @throws java.util.concurrent.ExecutionException при ошибке выполнения
-     * @throws java.util.concurrent.TimeoutException если дедлайн истёк
+     * @throws ExecutionException при ошибке выполнения
+     * @throws TimeoutException если дедлайн истёк
      */
     private void flushStrictInternal()
-            throws InterruptedException, java.util.concurrent.ExecutionException, java.util.concurrent.TimeoutException {
+            throws InterruptedException, ExecutionException, TimeoutException {
         if (sent.isEmpty()) {
             return;
         }
@@ -353,6 +366,7 @@ public final class BatchSender implements AutoCloseable {
             sent.trimToSize();
         }
         autoFlushSuspended = false; // успешный строгий сброс снимает блокировку
+        quietFailStreak = 0;
         if (enableCounters) {
             flushCalls++;
             confirmedCount += n;
@@ -383,6 +397,7 @@ public final class BatchSender implements AutoCloseable {
                 sent.trimToSize();
             }
             autoFlushSuspended = false; // успешный тихий сброс снимает блокировку
+            quietFailStreak = 0; // успешный тихий сброс сбрасывает полосу неуспехов
             if (enableCounters) {
                 flushCalls++;
                 confirmedCount += n;
@@ -393,13 +408,13 @@ public final class BatchSender implements AutoCloseable {
             if (enableCounters) {
                 failedFlushes++;
             }
-            if (dbg) LOG.debug("{}: тихий сброс прерван: size={}, pendingBeforeClear={}", where, n, sent.size(), ie);
+            if (dbg) maybeLogQuietFailure(where, n, ie, "прерван");
             return false;
-        } catch (java.util.concurrent.ExecutionException | java.util.concurrent.TimeoutException e) {
+        } catch (ExecutionException | TimeoutException e) {
             if (enableCounters) {
                 failedFlushes++;
             }
-            if (dbg) LOG.debug("{}: тихий сброс неуспешен: size={}, pendingBeforeClear={}", where, n, sent.size(), e);
+            if (dbg) maybeLogQuietFailure(where, n, e, "неуспешен");
             return false;
         }
     }
@@ -412,7 +427,7 @@ public final class BatchSender implements AutoCloseable {
      * произошёл первый сбой). Для обычной работы используйте {@link #flush()}.
      */
     public int flushUpToFirstFailure()
-            throws InterruptedException, java.util.concurrent.ExecutionException, java.util.concurrent.TimeoutException {
+            throws InterruptedException, ExecutionException, TimeoutException {
         if (sent.isEmpty()) {
             return 0;
         }
@@ -432,11 +447,11 @@ public final class BatchSender implements AutoCloseable {
      * @param okSoFar количество успешно подтверждённых элементов на момент вызова (для контекста лога)
      * @return 1 при успешном подтверждении; 0 если {@code f} == null
      * @throws InterruptedException при прерывании ожидания
-     * @throws java.util.concurrent.ExecutionException при ошибке выполнения
-     * @throws java.util.concurrent.TimeoutException при истечении дедлайна
+     * @throws ExecutionException при ошибке выполнения
+     * @throws TimeoutException при истечении дедлайна
      */
     private int awaitWithDebug(Future<RecordMetadata> f, long deadlineNs, boolean dbg, int okSoFar)
-            throws InterruptedException, java.util.concurrent.ExecutionException, java.util.concurrent.TimeoutException {
+            throws InterruptedException, ExecutionException, TimeoutException {
         if (f == null) {
             return 0;
         }
@@ -447,7 +462,7 @@ public final class BatchSender implements AutoCloseable {
             Thread.currentThread().interrupt();
             if (dbg) LOG.debug("flushUpToFirstFailure() прерван на индексе {}", okSoFar, ie);
             throw ie;
-        } catch (java.util.concurrent.ExecutionException | java.util.concurrent.TimeoutException e) {
+        } catch (ExecutionException | TimeoutException e) {
             if (dbg) LOG.debug("flushUpToFirstFailure() первый сбой на индексе {}", okSoFar, e);
             throw e;
         }
@@ -458,16 +473,16 @@ public final class BatchSender implements AutoCloseable {
      * Объединённый таймаут применяется на весь набор ожиданий.
      *
      * Семантика ошибок:
-     *  - при первой ошибке — ExecutionException;
-     *  - при таймауте — TimeoutException;
+     *  - при первой ошибке — {@link ExecutionException};
+     *  - при таймауте — {@link TimeoutException};
      *  - при прерывании — InterruptedException (флаг прерывания сохраняется).
      *
      * @throws InterruptedException при прерывании ожидания
-     * @throws java.util.concurrent.ExecutionException при ошибке выполнения
-     * @throws java.util.concurrent.TimeoutException при истечении общего дедлайна
+     * @throws ExecutionException при ошибке выполнения
+     * @throws TimeoutException при истечении общего дедлайна
      */
     public void flush()
-            throws InterruptedException, java.util.concurrent.ExecutionException, java.util.concurrent.TimeoutException {
+            throws InterruptedException, ExecutionException, TimeoutException {
         flushInternal(true);
     }
 
@@ -579,8 +594,19 @@ public final class BatchSender implements AutoCloseable {
 
     /** Закрывает отправитель: выполняет строгий {@link #flush()} и пробрасывает исключения наружу. */
     @Override
-    public void close() throws InterruptedException, java.util.concurrent.ExecutionException, java.util.concurrent.TimeoutException {
-        flushInternal(true);
+    public void close() throws InterruptedException, ExecutionException, TimeoutException {
+        final int pending = sent.size();
+        try {
+            flushInternal(true);
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("Закрытие BatchSender: pending={}, итог=успех", pending);
+            }
+        } catch (InterruptedException | ExecutionException | TimeoutException e) {
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("Закрытие BatchSender: pending={}, итог=ошибка ({})", pending, e.getClass().getSimpleName());
+            }
+            throw e;
+        }
     }
 
     /** Краткое текстовое описание состояния отправителя (может использоваться в логах). */
@@ -606,5 +632,22 @@ public final class BatchSender implements AutoCloseable {
     public void resumeAutoFlush() {
         autoFlushSuspended = false;
         warnedAutoFlush = false;
+    }
+
+    /**
+     * Антишум для DEBUG‑лога «тихих» неуспехов: логируем первый сбой в серии и затем не чаще,
+     * чем раз в {@link #QUIET_FAIL_LOG_THROTTLE_NS}. Сброс полосы происходит при успешном flush/tryFlush.
+     */
+    private void maybeLogQuietFailure(String where, int sizeAtStart, Exception e, String tag) {
+        long now = System.nanoTime();
+        boolean firstOfStreak = (quietFailStreak == 0);
+        boolean throttleOk = (now - lastQuietFailLogNs) >= QUIET_FAIL_LOG_THROTTLE_NS;
+        if (firstOfStreak || throttleOk) {
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("{}: тихий сброс {}: size={}, pendingBeforeClear={}", where, tag, sizeAtStart, sent.size(), e);
+            }
+            lastQuietFailLogNs = now;
+            quietFailStreak++;
+        }
     }
 }

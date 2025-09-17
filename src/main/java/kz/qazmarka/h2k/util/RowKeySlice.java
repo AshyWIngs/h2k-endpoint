@@ -1,7 +1,5 @@
 package kz.qazmarka.h2k.util;
 
-import java.util.Objects;
-
 import org.apache.hadoop.hbase.util.Bytes;
 
 /**
@@ -24,7 +22,7 @@ import org.apache.hadoop.hbase.util.Bytes;
  *  - для долговременного хранения используйте {@link #toByteArray()}.
  *
  * Контракт равенства/хеша:
- *  - {@link #hashCode()} совместим с {@code org.apache.hadoop.hbase.util.Bytes#hashCode(byte[], int, int)};
+ *  - {@link #hashCode()} совместим с {@link Bytes#hashCode(byte[], int, int)};
  *  - {@link #equals(Object)} сравнивает содержимое срезов (быстрый отсев по хешу и длине,
  *    затем побайтовое сравнение); корректен даже при редких коллизиях хеша.
  *
@@ -97,13 +95,14 @@ public final class RowKeySlice {
      * @param offset смещение начала среза в массиве
      * @param length длина среза
      * @throws NullPointerException если {@code array == null}
-     * @throws IllegalArgumentException если выход за границы массива
+     * @throws IndexOutOfBoundsException если выход за границы массива
      */
     public RowKeySlice(byte[] array, int offset, int length) {
-        Objects.requireNonNull(array, "array");
+        if (array == null) {
+            throw new NullPointerException("Аргумент 'array' (исходный байтовый массив) не может быть null");
+        }
         if (offset < 0 || length < 0 || offset > array.length || length > array.length - offset) {
-            throw new IllegalArgumentException(
-                "offset/length out of bounds: offset=" + offset + ", length=" + length + ", array.length=" + array.length);
+            throw new IndexOutOfBoundsException("Выход за границы массива: offset=" + offset + ", length=" + length + ", array.length=" + array.length);
         }
         this.array = array;
         this.offset = offset;

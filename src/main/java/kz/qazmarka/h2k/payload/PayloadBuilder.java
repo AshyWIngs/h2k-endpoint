@@ -1,6 +1,7 @@
 package kz.qazmarka.h2k.payload;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -20,10 +21,10 @@ import kz.qazmarka.h2k.util.RowKeySlice;
  *
  * Назначение
  *  - На основе данных WAL формирует одну JSON-строку на одну строку HBase: ключи — квалификаторы колонок.
- *  - Обрабатывает все ячейки строки; при необходимости фильтрация CF должна выполняться на уровне источника/сканера.
+ *  - обрабатывает все ячейки строки; фильтрация по целевому CF предполагается на уровне источника/сканера.
  *
  * PK из rowkey
- *  - Перед сериализацией выполняется декодирование rowkey: {@link kz.qazmarka.h2k.schema.Decoder#decodeRowKey}
+ *  - Перед сериализацией выполняется декодирование rowkey: {@link Decoder#decodeRowKey}
  *    обогащает карту значений расшифрованными компонентами PK (например, "c","t","opd"), чтобы PK были видны
  *    в Value как обычные колонки.
  *
@@ -36,7 +37,7 @@ import kz.qazmarka.h2k.util.RowKeySlice;
  *
  * Производительность и потокобезопасность
  *  - Без побочных эффектов; удобно тестировать.
- *  - Используется {@link java.util.LinkedHashMap} с заранее рассчитанной ёмкостью, порядок ключей стабилен.
+ *  - Используется {@link LinkedHashMap} с заранее рассчитанной ёмкостью, порядок ключей стабилен.
  *  - Строка qualifier создаётся один раз на ячейку напрямую из буфера без промежуточного копирования.
  *  - Декодер вызывается для всех ячеек строки (фильтрация CF — на уровне источника/сканера).
  */
@@ -50,7 +51,7 @@ public final class PayloadBuilder {
      * Общий Base64-энкодер для rowkey.
      * JDK 8 предоставляет только array‑based API (без (offset,len)), поэтому кодируем из временного среза.
      */
-    private static final java.util.Base64.Encoder BASE64 = java.util.Base64.getEncoder();
+    private static final Base64.Encoder BASE64 = Base64.getEncoder();
     /**
      * Ключи payload (исключаем "магические строки" по коду):
      *  - _table, _namespace, _qualifier, _cf — метаданные таблицы и CSV‑список целевых CF;
@@ -137,7 +138,7 @@ public final class PayloadBuilder {
      * Ёмкость результирующей мапы рассчитывается заранее из числа ячеек и флагов включения метаданных/rowkey.
      *
      * @param table        таблица HBase (для ключей _table/_namespace/_qualifier и для декодера)
-     * @param cells        список ячеек этой строки (все CF); внутри будут обработаны только ячейки целевого CF
+     * @param cells        список ячеек этой строки (обычно только целевой CF; фильтрация выполняется на источнике)
      * @param rowKey       срез rowkey (может быть {@code null}, если источник не предоставляет ключ)
      * @param walSeq       sequenceId записи WAL (или {@code < 0}, если недоступен)
      * @param walWriteTime время записи в WAL в мс (или {@code < 0}, если недоступно)
@@ -180,7 +181,10 @@ public final class PayloadBuilder {
 
         // Итоговые служебные поля
         addCellsCfIfMeta(obj, includeMeta, stats.cfCells);
-        obj.put(K_EVENT_VERSION, stats.maxTs);
+        // event_version пишем только если были обработанные ячейки целевого CF
+        if (stats.cfCells > 0) {
+            obj.put(K_EVENT_VERSION, stats.maxTs);
+        }
         addDeleteFlagIfNeeded(obj, stats.hasDelete);
 
         // RowKey (если включён и присутствует). При необходимости снимаем префикс соли Phoenix.
@@ -244,7 +248,7 @@ public final class PayloadBuilder {
      *  - если декодер вернул {@code null}, но значение непустое — сохраняем как UTF‑8 строку.
      *
      * Имплементационная заметка: используется «быстрая» перегрузка декодера
-     * {@link Decoder#decode(org.apache.hadoop.hbase.TableName, byte[], int, int, byte[], int, int)} (без копирования value).
+     * {@link Decoder#decode(TableName, byte[], int, int, byte[], int, int)} (без копирования value).
      * Преобразование в строку выполняется только в фоллбэке, когда декодер вернул {@code null}.
      *
      * @param table           таблица (контекст декодера)
@@ -424,7 +428,7 @@ public final class PayloadBuilder {
         if (a == null) return null;
         if (len <= 0) return "";
         // Скопировать ровно нужный срез (JDK8 Base64 не принимает (offset,len))
-        byte[] slice = new byte[len];
+        final byte[] slice = new byte[len];
         System.arraycopy(a, off, slice, 0, len);
         // Предвычислить длину Base64: 4 * ceil(len/3) и закодировать напрямую в готовый буфер
         int outLen = ((len + 2) / 3) * 4;
@@ -432,7 +436,6 @@ public final class PayloadBuilder {
         int n = BASE64.encode(slice, out); // n == outLen
         return new String(out, 0, n, StandardCharsets.US_ASCII);
     }
-
 
     /** Агрегаты по CF. */
     private static final class CellStats {

@@ -1,6 +1,7 @@
 package kz.qazmarka.h2k.schema;
 
 import java.util.Locale;
+import java.util.Objects;
 
 import org.apache.hadoop.hbase.TableName;
 
@@ -41,7 +42,7 @@ public interface SchemaRegistry {
      * Возвращает имя phoenix‑типа колонки либо {@code null}, если тип неизвестен.
      * Реализация сама выбирает источник (JSON, SYSTEM.CATALOG и т.д.) и политику нормализации.
      *
-     * @param table     имя таблицы (HBase TableName с namespace), не {@code null}
+     * @param table     имя таблицы ({@link TableName} с namespace), не {@code null}
      * @param qualifier имя колонки (Phoenix qualifier), не {@code null}
      * @return точное строковое имя phoenix‑типа или {@code null}
      */
@@ -49,7 +50,7 @@ public interface SchemaRegistry {
 
     /**
      * Возвращает тип из реестра или значение по умолчанию, если тип не найден.
-     * @implSpec Выполняет fail‑fast валидацию аргументов через {@link java.util.Objects#requireNonNull(Object, String)}.
+     * @implSpec Выполняет fail‑fast валидацию аргументов через {@link Objects#requireNonNull(Object, String)}.
      *
      * @param table       имя таблицы, не {@code null}
      * @param qualifier   имя колонки, не {@code null}
@@ -58,9 +59,9 @@ public interface SchemaRegistry {
      * @throws NullPointerException если любой из параметров равен {@code null}
      */
     default String columnTypeOrDefault(TableName table, String qualifier, String defaultType) {
-        java.util.Objects.requireNonNull(table, "table");
-        java.util.Objects.requireNonNull(qualifier, "qualifier");
-        java.util.Objects.requireNonNull(defaultType, "defaultType");
+        Objects.requireNonNull(table, "table");
+        Objects.requireNonNull(qualifier, "qualifier");
+        Objects.requireNonNull(defaultType, "defaultType");
         String t = columnType(table, qualifier);
         return (t != null) ? t : defaultType;
     }
@@ -77,8 +78,8 @@ public interface SchemaRegistry {
      * @throws NullPointerException если любой из параметров равен {@code null}
      */
     default String columnTypeRelaxed(TableName table, String qualifier) {
-        java.util.Objects.requireNonNull(table, "table");
-        java.util.Objects.requireNonNull(qualifier, "qualifier");
+        Objects.requireNonNull(table, "table");
+        Objects.requireNonNull(qualifier, "qualifier");
 
         // 1) Прямая попытка — самая частая и без аллокаций
         String t = columnType(table, qualifier);
@@ -133,9 +134,9 @@ public interface SchemaRegistry {
      * @throws NullPointerException если любой из параметров равен {@code null}
      */
     default String columnTypeOrDefaultRelaxed(TableName table, String qualifier, String defaultType) {
-        java.util.Objects.requireNonNull(table, "table");
-        java.util.Objects.requireNonNull(qualifier, "qualifier");
-        java.util.Objects.requireNonNull(defaultType, "defaultType");
+        Objects.requireNonNull(table, "table");
+        Objects.requireNonNull(qualifier, "qualifier");
+        Objects.requireNonNull(defaultType, "defaultType");
         String t = columnTypeRelaxed(table, qualifier);
         return (t != null) ? t : defaultType;
     }
@@ -151,8 +152,8 @@ public interface SchemaRegistry {
      * @throws NullPointerException если любой из параметров равен {@code null}
      */
     default boolean hasColumn(TableName table, String qualifier) {
-        java.util.Objects.requireNonNull(table, "table");
-        java.util.Objects.requireNonNull(qualifier, "qualifier");
+        Objects.requireNonNull(table, "table");
+        Objects.requireNonNull(qualifier, "qualifier");
         return columnType(table, qualifier) != null;
     }
 
@@ -171,12 +172,12 @@ public interface SchemaRegistry {
      *  - Реализации должны быть потокобезопасными или неизменяемыми.
      * @implSpec Реализация по умолчанию возвращает {@link #EMPTY} и никогда не возвращает {@code null}.
      *
-     * @param table имя таблицы (HBase TableName с namespace), не {@code null}
+     * @param table имя таблицы ({@link TableName} с namespace), не {@code null}
      * @return массив имён PK‑колонок (возможно пустой, но не {@code null})
      * @throws NullPointerException если {@code table == null}
      */
     default String[] primaryKeyColumns(TableName table) {
-        java.util.Objects.requireNonNull(table, "table");
+        Objects.requireNonNull(table, "table");
         return EMPTY;
     }
 

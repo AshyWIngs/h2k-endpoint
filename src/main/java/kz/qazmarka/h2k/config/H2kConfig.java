@@ -1,7 +1,10 @@
 package kz.qazmarka.h2k.config;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.Map;
+import java.util.Properties;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.TableName;
@@ -50,7 +53,7 @@ public final class H2kConfig {
     // ==== Ключи конфигурации (собраны в одном месте для устранения "хардкода") ====
     /**
      * Шаблон имени Kafka‑топика (поддерживаются плейсхолдеры ${table}, ${namespace}, ${qualifier}).
-     * Используется в {@link #topicFor(org.apache.hadoop.hbase.TableName)}.
+     * Используется в {@link #topicFor(TableName)}.
      */
     private static final String K_TOPIC_PATTERN = "h2k.topic.pattern";
     /** Максимально допустимая длина имени Kafka‑топика. */
@@ -291,9 +294,9 @@ public final class H2kConfig {
         this.awaitTimeoutMs = b.awaitTimeoutMs;
         this.producerBatchCountersEnabled = b.producerBatchCountersEnabled;
         this.producerBatchDebugOnFailure = b.producerBatchDebugOnFailure;
-        this.topicConfigs = java.util.Collections.unmodifiableMap(new java.util.HashMap<>(b.topicConfigs));
-        this.saltBytesByTable = java.util.Collections.unmodifiableMap(new java.util.HashMap<>(b.saltBytesByTable));
-        this.capacityHintByTable = java.util.Collections.unmodifiableMap(new java.util.HashMap<>(b.capacityHintByTable));
+        this.topicConfigs = Collections.unmodifiableMap(new HashMap<>(b.topicConfigs));
+        this.saltBytesByTable = Collections.unmodifiableMap(new HashMap<>(b.saltBytesByTable));
+        this.capacityHintByTable = Collections.unmodifiableMap(new HashMap<>(b.capacityHintByTable));
     }
 
     /**
@@ -359,11 +362,11 @@ public final class H2kConfig {
         boolean producerBatchDebugOnFailure;
 
         /** Дополнительные конфиги топика, собранные из префикса h2k.topic.config.* */
-        private Map<String, String> topicConfigs = java.util.Collections.emptyMap();
+        private Map<String, String> topicConfigs = Collections.emptyMap();
         /** Переопределения длины соли rowkey в байтах по таблицам. */
-        private Map<String, Integer> saltBytesByTable = java.util.Collections.emptyMap();
+        private Map<String, Integer> saltBytesByTable = Collections.emptyMap();
         /** Подсказки ёмкости корневого JSON по таблицам. */
-        private Map<String, Integer> capacityHintByTable = java.util.Collections.emptyMap();
+        private Map<String, Integer> capacityHintByTable = Collections.emptyMap();
         /**
          * Устанавливает карту переопределений соли по таблицам: имя → байты (0 — без соли).
          * Ожидается уже готовая карта (например, результат {@link Parsers#readSaltMap(Configuration, String)}).
@@ -784,8 +787,8 @@ public final class H2kConfig {
      * Содержит как минимум bootstrap.servers и client.id.
      * Значения таймаутов намеренно не устанавливаются здесь и задаются на стороне TopicEnsurer.
      */
-    public java.util.Properties kafkaAdminProps() {
-        java.util.Properties p = new java.util.Properties();
+    public Properties kafkaAdminProps() {
+        Properties p = new Properties();
         p.setProperty("bootstrap.servers", this.bootstrap);
         p.setProperty("client.id", this.adminClientId);
         return p;

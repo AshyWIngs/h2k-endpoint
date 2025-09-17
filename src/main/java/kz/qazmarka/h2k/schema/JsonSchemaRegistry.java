@@ -13,6 +13,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 import org.apache.hadoop.hbase.TableName;
@@ -48,13 +50,15 @@ import com.google.gson.JsonParser;
  *  - для имён таблиц и колонок публикуются алиасы: исходное, верхний и нижний регистры;
  *  - строковые значения типов канонизируются в верхний регистр (Locale.ROOT);
  *  - после загрузки структура иммутабельна (unmodifiable) и атомарно обновляется методом {@link #refresh()};
- *  - чтение потокобезопасно без синхронизации: используется {@link java.util.concurrent.atomic.AtomicReference}
+ *  - чтение потокобезопасно без синхронизации: используется {@link AtomicReference}
  *    для публикации корня и локальный {@link java.util.concurrent.ConcurrentMap}‑кэш по таблицам.
  *  - типы массивов Phoenix (например, "VARCHAR ARRAY") считаются корректными и не генерируют предупреждений;
  *  - default-namespace можно опускать: записи вида "DEFAULT:TBL" и "TBL" будут доступны при поиске.
  *  - секция {@code "pk": [...] } (необязательно) может содержать имена колонок PK; метод
  *    {@link #primaryKeyColumns(org.apache.hadoop.hbase.TableName)} вернёт их в порядке следования;
  *    при отсутствии секции возвращается пустой массив.
+ *  - имена ключей PK не переименовываются реестром — публикуются ровно такие, как указаны в схеме (с учётом нормализации регистра имён, описанной выше);
+ *  - нормализация временных типов Phoenix (TIMESTAMP/DATE/TIME) — обязанность реализации декодера значений, а не реестра типов; в проекте это делает {@code ValueCodecPhoenix}.
  *  - контракт аргументов: методы API требуют не-null параметров table/qualifier; при null выбрасывается {@link NullPointerException}.
  *  - реестр не выполняет глобальных эвристик — только поиск по паре (table, qualifier) с нормализацией регистра и поддержкой короткого имени (после ':').
  *
@@ -110,8 +114,8 @@ public final class JsonSchemaRegistry implements SchemaRegistry {
      * Флаг «уже логировали» для версии Phoenix.
      * Логируем версию Phoenix ровно один раз за процесс, чтобы не дублировать сообщения в логах.
      */
-    private static final java.util.concurrent.atomic.AtomicBoolean PHOENIX_LOGGED =
-            new java.util.concurrent.atomic.AtomicBoolean(false);
+    private static final AtomicBoolean PHOENIX_LOGGED =
+            new AtomicBoolean(false);
 
     /**
      * Проверяет, является ли указанное строковое представление типа допустимым.
@@ -159,8 +163,8 @@ public final class JsonSchemaRegistry implements SchemaRegistry {
     private final AtomicReference<Map<String, String[]>> pkRef = new AtomicReference<>();
 
     /** Версия опубликованной схемы; инкрементируется при каждом refresh(). */
-    private final java.util.concurrent.atomic.AtomicLong schemaVersion =
-            new java.util.concurrent.atomic.AtomicLong(0L);
+    private final AtomicLong schemaVersion =
+            new AtomicLong(0L);
 
     /**
      * Запись для кэша колонок с привязкой к версии опубликованной схемы.
@@ -195,7 +199,10 @@ public final class JsonSchemaRegistry implements SchemaRegistry {
      * @param path путь к JSON-файлу (UTF-8), не {@code null}
      */
     public JsonSchemaRegistry(String path) {
-        this.sourcePath = java.util.Objects.requireNonNull(path, "schemaPath");
+        if (path == null) {
+            throw new NullPointerException("Аргумент 'schemaPath' (путь к JSON‑схеме) не может быть null");
+        }
+        this.sourcePath = path;
         this.schemaRef = new AtomicReference<>(Collections.emptyMap());
         this.pkRef.set(Collections.emptyMap());
         refresh();
@@ -220,7 +227,7 @@ public final class JsonSchemaRegistry implements SchemaRegistry {
             // кэш наполняется лениво при первых обращениях (без кеширования промахов).
             schemaVersion.incrementAndGet();
             tableCache.clear();
-        } catch (java.io.IOException | RuntimeException e) {
+        } catch (IOException | RuntimeException e) {
             if (LOG.isDebugEnabled()) {
                 LOG.warn("Не удалось загрузить файл схемы '{}'; сохранён предыдущий снимок", sourcePath, e);
             } else {
@@ -591,7 +598,9 @@ public final class JsonSchemaRegistry implements SchemaRegistry {
      */
     @Override
     public String[] primaryKeyColumns(TableName table) {
-        java.util.Objects.requireNonNull(table, "table");
+        if (table == null) {
+            throw new NullPointerException("Аргумент 'table' (имя таблицы) не может быть null");
+        }
         Map<String, String[]> local = pkRef.get();
         String raw = table.getNameAsString();
         String[] found = local.get(raw);
@@ -610,7 +619,7 @@ public final class JsonSchemaRegistry implements SchemaRegistry {
      * затем — по «короткому» имени (часть после двоеточия).
      *
      * @param raw полное строковое имя таблицы (как возвращает {@link org.apache.hadoop.hbase.TableName#getNameAsString()})
-     * @return неизменяемая карта <qualifier(lower-case), PHOENIX_TYPE_NAME> или {@link java.util.Collections#emptyMap() emptyMap()}, если таблица не найдена
+     * @return неизменяемая карта <qualifier(lower-case), PHOENIX_TYPE_NAME> или {@link Collections#emptyMap() emptyMap()}, если таблица не найдена
      */
     private Map<String, String> resolveColumnsForTable(String raw) {
         Map<String, Map<String, String>> local = schemaRef.get();
@@ -632,7 +641,7 @@ public final class JsonSchemaRegistry implements SchemaRegistry {
      * @param raw        полное строковое имя таблицы
      * @param currentVer текущая версия опубликованной схемы
      * @param vc         текущее значение из кэша (может быть {@code null})
-     * @return неизменяемая карта колонок; {@link java.util.Collections#emptyMap() emptyMap()}, если таблица не найдена
+     * @return неизменяемая карта колонок; {@link Collections#emptyMap() emptyMap()}, если таблица не найдена
      */
     private Map<String, String> getColumnsWithCache(String raw, long currentVer, VersionedCols vc) {
         // 1) Попытка хита в кэше
@@ -683,8 +692,12 @@ public final class JsonSchemaRegistry implements SchemaRegistry {
      */
     @Override
     public String columnType(TableName table, String qualifier) {
-        java.util.Objects.requireNonNull(table, "table");
-        java.util.Objects.requireNonNull(qualifier, "qualifier");
+        if (table == null) {
+            throw new NullPointerException("Аргумент 'table' (имя таблицы) не может быть null");
+        }
+        if (qualifier == null) {
+            throw new NullPointerException("Аргумент 'qualifier' (имя колонки) не может быть null");
+        }
 
         final String raw = table.getNameAsString();
         final long currentVer = schemaVersion.get();

@@ -29,9 +29,12 @@ import org.apache.hadoop.hbase.TableName;
  *    (например, {@code ValueCodecPhoenix}).
  *
  * Соглашения:
- *  • Возвращаемый массив считается «логически неизменяемым». Не модифицируйте его,
- *    если массив планируется переиспользовать в других частях пайплайна.
  *  • Параметры table и qualifier обязательны; при null выбрасывается {@link NullPointerException}.
+ *
+ * Ключи и нормализация:
+ *  • Имена ключей PK не переименовываются декодером — используются ровно те, что заданы в схеме.
+ *  • Нормализация временных типов (timestamp/date/time) выполняется реализацией декодера; данный класс ничего не нормализует.
+ *    В проекте это делает {@code ValueCodecPhoenix}.
  *
  * Имплементационная заметка: класс никогда не копирует массив значения,
  *
@@ -64,10 +67,10 @@ public final class SimpleDecoder implements Decoder {
     public Object decode(TableName unusedTable, String unusedQualifier, byte[] value) {
         // Валидация обязательных параметров согласно контракту Decoder.
         if (unusedTable == null) {
-            throw new NullPointerException("table");
+            throw new NullPointerException("Аргумент 'table' (имя таблицы) не может быть null");
         }
         if (unusedQualifier == null) {
-            throw new NullPointerException("qualifier");
+            throw new NullPointerException("Аргумент 'qualifier' (имя колонки) не может быть null");
         }
         return value;
     }
@@ -84,10 +87,10 @@ public final class SimpleDecoder implements Decoder {
     @Override
     public Object decode(TableName table, byte[] qual, byte[] value) {
         if (table == null) {
-            throw new NullPointerException("table");
+            throw new NullPointerException("Аргумент 'table' (имя таблицы) не может быть null");
         }
         if (qual == null) {
-            throw new NullPointerException("qualifier");
+            throw new NullPointerException("Аргумент 'qualifier' (имя колонки) не может быть null");
         }
         return value;
     }
@@ -113,17 +116,17 @@ public final class SimpleDecoder implements Decoder {
     @Override
     public Object decode(TableName table, byte[] qual, int qOff, int qLen, byte[] value, int vOff, int vLen) {
         if (table == null) {
-            throw new NullPointerException("table");
+            throw new NullPointerException("Аргумент 'table' (имя таблицы) не может быть null");
         }
         if (qual == null) {
-            throw new NullPointerException("qualifier");
+            throw new NullPointerException("Аргумент 'qualifier' (имя колонки) не может быть null");
         }
         if (value == null) {
             return null;
         }
         // Проверка границ
         if (vOff < 0 || vLen < 0 || vOff > value.length || vOff + vLen > value.length) {
-            throw new IllegalArgumentException("invalid value slice: off=" + vOff + ", len=" + vLen +
+            throw new IllegalArgumentException("Некорректные границы среза значения: off=" + vOff + ", len=" + vLen +
                     ", value.length=" + value.length);
         }
         // Zero‑copy если запрошен весь массив

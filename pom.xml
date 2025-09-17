@@ -20,7 +20,7 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>kz.qazmarka</groupId>
   <artifactId>h2k-endpoint</artifactId>
-  <version>0.0.4</version>
+  <version>0.0.5</version>
   <name>HBase 1.4.13 -> Kafka 2.3.1 ReplicationEndpoint</name>
 
   <properties>

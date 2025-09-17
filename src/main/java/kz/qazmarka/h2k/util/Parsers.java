@@ -1,7 +1,10 @@
 package kz.qazmarka.h2k.util;
 
+import java.net.InetAddress;
+import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
@@ -293,7 +296,7 @@ public final class Parsers {
     public static Map<String, Integer> readSaltMap(Configuration cfg, String key) {
         String raw = cfg.get(key);
         if (raw == null || raw.trim().isEmpty()) {
-            return java.util.Collections.emptyMap();
+            return Collections.emptyMap();
         }
         Map<String, Integer> out = new HashMap<>();
         String[] parts = raw.split(",");
@@ -414,8 +417,8 @@ public final class Parsers {
             return adminClientId;
         }
         try {
-            return defaultId + "-" + java.net.InetAddress.getLocalHost().getHostName();
-        } catch (java.net.UnknownHostException e) {
+            return defaultId + "-" + InetAddress.getLocalHost().getHostName();
+        } catch (UnknownHostException e) {
             return defaultId;
         }
     }
