@@ -21,7 +21,7 @@ enable 'TBL_JTI_TRACE_CIS_HISTORY'
 
 # --- Добавление peer со сбалансированным профилем ---
 #  acks=all, idempotence=true, max.in.flight=5 — компромисс скорость/надёжность.
-#  При idempotence=true: max.in.flight ≤ 5, acks=all и retries &gt; 0 — обязательные условия сохранения порядка и идемпотентности.
+#  При idempotence=true: max.in.flight ≤ 5, acks=all и retries > 0 — обязательные условия сохранения порядка и идемпотентности.
 #  Чуть больший linger и batch.size для лучшей утилизации сети/CPU.
 add_peer 'h2k_balanced',
   {

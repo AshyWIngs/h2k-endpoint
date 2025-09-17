@@ -1,9 +1,9 @@
-# HBase 1.4.13 → Kafka 2.3.1 ReplicationEndpoint (JSONEachRow)
+## HBase 1.4.13 → Kafka 2.3.1 ReplicationEndpoint (JSONEachRow)
 
 **Пакет:** `kz.qazmarka.h2k.endpoint`  
 **Endpoint‑класс:** `kz.qazmarka.h2k.endpoint.KafkaReplicationEndpoint`
 
-Лёгкий и быстрый `ReplicationEndpoint` для HBase 1.4.x, публикующий изменения строк в Kafka как **одну JSON‑строку на событие** (формат JSONEachRow). Код и конфиги ориентированы на минимальные аллокации и высокую пропускную способность, с приоритетом стабильности.
+Лёгкий и быстрый `ReplicationEndpoint` для HBase 1.4.x, публикующий **одну JSON‑строку на строку HBase** (формат JSONEachRow). Минимум аллокаций, стабильный порядок ключей, дружелюбные логи на русском.
 
 ---
 
@@ -11,320 +11,146 @@
 
 - [Быстрый старт](#быстрый-старт)
 - [Поддерживаемые версии](#поддерживаемые-версии)
-- [Сборка](#сборка)
-- [Деплой](#деплой)
-- [Конфигурация: где задавать ключи](#конфигурация-где-задавать-ключи)
-- [Ключи `h2k.*`](#ключи-h2k)
-- [Таблица ключей (сводно)](#таблица-ключей-сводно)
-- [Именование топиков: как формируется имя](#именование-топиков-как-формируется-имя)
-- [Подсказки ёмкости и метаданные (как выбрать значения)](#подсказки-ёмкости-и-метаданные-как-выбрать-значения)
-- [Включение репликации нужных CF (в HBase shell)](#включение-репликации-нужных-cf-в-hbase-shell)
-- [Профили peer (готовые скрипты)](#профили-peer-готовые-скрипты)
-- [HBase 1.4.13: быстрые команды (peer shell)](#hbase-1413-быстрые-команды-peer-shell)
-- [Проверка peer-конфига в ZooKeeper](#проверка-peer-конфига-в-zookeeper)
-- [Матрица профилей (ключевые отличия)](#матрица-профилей-ключевые-отличия)
-- [Формат сообщения (JSONEachRow)](#формат-сообщения-jsoneachrow)
-- [Схема Phoenix (`conf/schema.json`)](#схема-phoenix-confschemajson)
-- [ClickHouse: чтение JSONEachRow из Kafka](#clickhouse-чтение-jsoneachrow-из-kafka)
-- [Логирование](#логирование)
-- [Диагностика и эксплуатация](#диагностика-и-эксплуатация)
-- [Смена профиля и обновление конфигурации peer](#смена-профиля-и-обновление-конфигурации-peer)
-- [Типовые ошибки и что посмотреть в логах](#типовые-ошибки-и-что-посмотреть-в-логах)
-- [Что тюнить, если…](#что-тюнить-если)
-- [Архитектура (кратко)](#архитектура-кратко)
-- [Безопасность](#безопасность)
-- [Ограничения](#ограничения)
-- [FAQ](#faq)
-- [Чек-лист запуска](#чек-лист-запуска)
-- [TODO: Реализация варианта через Avro (open-source Schema Registry)](#todo-реализация-варианта-через-avro-open-source-schema-registry)
-  - [Зачем Avro](#зачем-avro)
-  - [Совместимость стенда](#совместимость-стенда)
-  - [Совместимость: короткий чек-лист](#совместимость-короткий-чек-лист)
-  - [Развёртывание Schema Registry 5.3.x (open-source)](#развёртывание-schema-registry-53x-open-source)
-    - [Вариант A — tar из Confluent Platform 5.3.x](#вариант-a--tar-из-confluent-platform-53x)
-    - [Вариант B — сборка из исходников](#вариант-b--сборка-из-исходников)
-  - [Avro-схема: `TBL_JTI_TRACE_CIS_HISTORY`](#avro-схема-tbl_jti_trace_cis_history)
-  - [ClickHouse 24.8: чтение AvroConfluent](#clickhouse-248-чтение-avroconfluent)
-  - [Изменения в h2k-endpoint (план; не реализовано)](#изменения-в-h2k-endpoint-план-не-реализовано)
-  - [Порядок включения (минимум)](#порядок-включения-минимум)
-  - [Коротко: проверьте перед стартом Avro](#коротко-проверьте-перед-стартом-avro)
+- [Установка](#установка)
+- [Минимальная конфигурация](#минимальная-конфигурация)
+- [Профили peer](#профили-peer)
+- [Полная документация](#полная-документация)
+
+---
 
 ## Быстрый старт
 
 1) **Соберите и разложите JAR** на все RegionServer:
-   ```bash
-   mvn -q -DskipTests clean package
-   cp target/h2k-endpoint-*.jar /opt/hbase-default-current/lib/
-   ```
-2) **Подготовьте схему Phoenix** (если используете `json-phoenix`), файл:
-   `/opt/hbase-default-current/conf/schema.json` (см. раздел «Схема Phoenix»).
-3) **Включите репликацию CF** в нужных таблицах (см. раздел «Включение репликации нужных CF» ниже). Также убедитесь, что в глобальном `hbase-site.xml` включена репликация кластера:
-   ```
-   <property><name>hbase.replication</name><value>true</value></property>
-   ```
-4) **Создайте peer** готовым скриптом (HBase 1.4.13), выберите профиль:
-   - `conf/add_peer_shell_balanced.txt` — **BALANCED** (рекомендуется для прод)
-   - `conf/add_peer_shell_reliable.txt` — **RELIABLE** (максимальные гарантии/порядок)
-   - `conf/add_peer_shell_fast.txt` — **FAST** (максимальная скорость; без строгих гарантий)
-   
-   Запуск (пример): `bin/hbase shell conf/add_peer_shell_balanced.txt`  
-   Подробности: см. раздел «Профили peer (готовые скрипты)».
-5) **Проверьте доставку**: сообщения появляются в Kafka‑топике `${table}`.
+```bash
+mvn -q -DskipTests clean package
+cp target/h2k-endpoint-*.jar /opt/hbase-default-current/lib/
+```
+
+2) **(Опционально) Подготовьте Phoenix‑схему** для режима `json-phoenix`:  
+`/opt/hbase-default-current/conf/schema.json`.
+
+3) **Включите репликацию CF** в нужных таблицах и глобально:
+```xml
+<!-- hbase-site.xml (на RS) -->
+<property><name>hbase.replication</name><value>true</value></property>
+```
+```HBase shell
+# пример: включить CF 'd'
+disable 'TBL_JTI_TRACE_CIS_HISTORY'
+alter  'TBL_JTI_TRACE_CIS_HISTORY', { NAME => 'd', REPLICATION_SCOPE => 1 }
+enable 'TBL_JTI_TRACE_CIS_HISTORY'
+```
+
+4) **Создайте peer** готовым скриптом (рекомендуется BALANCED):
+```bash
+bin/hbase shell conf/add_peer_shell_balanced.txt
+```
+
+5) **Проверьте доставку**: сообщения появляются в топике `${table}`.
+
+---
 
 ## Поддерживаемые версии
 
 - **Java:** 8 (target 1.8)
 - **HBase:** 1.4.13 (совместимо с 1.4.x)
 - **Kafka (клиенты):** 2.3.1
-- **Phoenix:** 4.14/4.15 для HBase‑1.4 (опционально, для режима `json-phoenix`)
+- **Phoenix:** 4.14/4.15 (только для `json-phoenix`)
+
+> RegionServer и Endpoint должны работать на **Java 8**.
 
 ---
 
-## Сборка
+## Установка
 
-```bash
-mvn -q -DskipTests clean package
-# Артефакт: target/h2k-endpoint-${project.version}.jar
-```
-
-**Тесты (опционально):**
-
-```bash
-mvn -q test                      # все тесты
-mvn -q test -Dtest=Value*Test    # выборочно
-```
-
----
-
-## Деплой
-
-1. Скопируйте JAR на **все RegionServer** в каталог **`/opt/hbase-default-current/lib/`**.  
-   Если используете другой путь — добавьте его в `HBASE_CLASSPATH`.
-2. Убедитесь, что на RS установлены зависимости **с `scope=provided`**:
-   - `kafka-clients-2.3.1.jar`  (Для всех peer)
-   - `lz4-java-1.6.0+.jar`      (Только для peer FAST (макс. скорость) и BALANCED (компромисс))
-   - `snappy-java-1.1.x+.jar`   (Только для peer RELIABLE (надёжность), если используете `compression.type=snappy`)
-   Проверка:
-   ```bash
-   hbase classpath | tr ':' '\n' | egrep -i 'kafka-clients|lz4|snappy'
-   ```
-   При отсутствии — скопируйте из каталога Kafka в `/opt/hbase-default-current/lib/` и перезапустите RS.
+1. Скопируйте JAR в `/opt/hbase-default-current/lib/`.  
+2. Убедитесь, что на RS есть зависимости (scope=provided):
+   - `kafka-clients-2.3.1.jar`
+   - `lz4-java-1.6.0+.jar` (для FAST/BALANCED)
+   - `snappy-java-1.1.x+.jar` (для RELIABLE, если `compression.type=snappy`)
 3. Перезапустите RegionServer.
 
-**Размещение в продакшене (рекомендации):**
-
-- JAR: `/opt/hbase-default-current/lib/`
-- HBase‑конфиги: `/opt/hbase-default-current/conf/`
-- Схема Phoenix (если включена): `/opt/hbase-default-current/conf/schema.json` и ключ `h2k.schema.path=/opt/hbase-default-current/conf/schema.json`
-
----
-
-## Конфигурация: где задавать ключи
-
-Используются **оба** источника:
-
-1) **Системный** `hbase-site.xml` (на RS) — базовые значения по умолчанию.  
-2) **Конфиг peer** (через HBase shell API) — **имеет приоритет**, удобно для разных пир‑профилей.
-
-Рекомендация: **не заменять** штатный `hbase-site.xml`, а добавлять свои ключи с префиксом `h2k.*`. Для таблиц из `DEFAULT`‑неймспейса имена допускаются без префикса `DEFAULT.` (например: `TBL_JTI_TRACE_CIS_HISTORY`).
-
-*Примечание про `DEFAULT`‑неймспейс.*  
-В HBase shell таблицы из `DEFAULT` указываются **без префикса** (`TBL...`). В Phoenix SQL также используйте просто имя без `DEFAULT.` — запись `DEFAULT.TBL...` не поддерживается и приведёт к ошибке парсера.
+Быстрая проверка:
+```bash
+hbase classpath | tr ':' '\n' | egrep -i 'kafka-clients|lz4|snappy'
+```
 
 ---
 
-## Ключи `h2k.*`
+## Минимальная конфигурация
 
+**Откуда читаются ключи:**  
+- системный `hbase-site.xml` (дефолты),  
+- *и/или* карта `CONFIG` у peer (имеет приоритет).
 
-### Кратко: минимально достаточный набор для запуска
-
-Если вы реплицируете `TBL_JTI_TRACE_CIS_HISTORY` (CF `d`) в режиме Phoenix‑декодера:
+**Минимально для запуска** (пример для `TBL_JTI_TRACE_CIS_HISTORY`, CF `d`):
 ```properties
 h2k.kafka.bootstrap.servers=10.254.3.111:9092,10.254.3.112:9092,10.254.3.113:9092
 h2k.cf.list=d
+# Декодирование:
 h2k.decode.mode=json-phoenix
 h2k.schema.path=/opt/hbase-default-current/conf/schema.json
-h2k.salt.map=TBL_JTI_TRACE_CIS_HISTORY=1
+# Подсказки/соль (по необходимости):
 h2k.capacity.hints=TBL_JTI_TRACE_CIS_HISTORY=32
-# опционально:
+h2k.salt.map=TBL_JTI_TRACE_CIS_HISTORY=1
+# Топик:
 h2k.ensure.topics=true
 h2k.topic.pattern=${table}
 ```
 
-#### Мини‑таблица: «минимум для запуска» → где применяется
+**Ключевые опции (коротко):**
 
-| Ключ | Где применяется | Назначение |
+| Ключ | Назначение | Примечание |
 |---|---|---|
-| `h2k.kafka.bootstrap.servers` | **KafkaReplicationEndpoint → KafkaProducer** | Список брокеров Kafka |
-| `h2k.cf.list` | **PayloadBuilder** | Какие CF экспортируем (через запятую) |
-| `h2k.decode.mode` | **KafkaReplicationEndpoint** | Режим декодирования: `simple` или `json-phoenix` |
-| `h2k.schema.path` | **JsonSchemaRegistry** | Путь к `schema.json` (нужен только для `json-phoenix`) |
-| `h2k.salt.map` | **PayloadBuilder / Decoder** | Длина префикса соли для «salted» таблиц (у Phoenix всегда `1`) |
-| `h2k.capacity.hints` | **PayloadBuilder** | Подсказка ёмкости корневого JSON‑объекта (избегаем расширений) |
+| `h2k.kafka.bootstrap.servers` | Список брокеров Kafka | `host:port[,host2:port2]` |
+| `h2k.cf.list` | Список CF для экспорта | CSV |
+| `h2k.decode.mode` | `simple` \| `json-phoenix` | Для Phoenix нужен `schema.json` |
+| `h2k.schema.path` | Путь к `schema.json` | Только для `json-phoenix` |
+| `h2k.topic.pattern` | Шаблон имени топика | `${table}` по умолчанию |
+| `h2k.ensure.topics` | Автосоздание тем | true/false |
+| `h2k.payload.include.meta` | Добавлять служебные поля | +`event_version`,`delete` и т.д. |
+| `h2k.payload.include.meta.wal` | Добавлять `_wal_seq`,`_wal_write_time` | требует включить meta |
+| `h2k.payload.include.rowkey` | Включать `_rowkey` | `BASE64`/`HEX` управляется `h2k.rowkey.encoding` |
 
-
-## Таблица ключей (сводно)
-
-| Ключ | Дефолт | Единицы | Где применяется | Назначение / примечание |
-|---|---|---|---|---|
-| `h2k.kafka.bootstrap.servers` | — | `host:port` через запятую | KafkaReplicationEndpoint → KafkaProducer | Список брокеров Kafka |
-| `h2k.topic.pattern` | `${table}` | шаблон | KafkaReplicationEndpoint | Шаблон имени топика. Плейсхолдеры: \`\${namespace}\`, \`\${qualifier}\`, \`\${table}\` (если \`namespace=default\` → \`\${qualifier}\`, иначе \`\${namespace}_\${qualifier}\`). |
-| `h2k.cf.list` | — | CSV | PayloadBuilder | Список CF для экспорта (`d,b,0`). Не существующие CF игнорируются без ошибок |
-| `h2k.decode.mode` | `simple` | enum | KafkaReplicationEndpoint | Режим декодирования: `simple` или `json-phoenix` |
-| `h2k.schema.path` | — | путь | JsonSchemaRegistry | Путь к единственному файлу `schema.json`. Используется только в режиме `json-phoenix`. |
-| `h2k.json.serialize.nulls` | `false` | boolean | Gson в Endpoint | Добавлять ли `null` в JSON |
-| `h2k.payload.include.meta` | `false` | boolean | PayloadBuilder | Добавлять служебные поля (+8 ключей) |
-| `h2k.payload.include.meta.wal` | `false` | boolean | PayloadBuilder | Добавлять WAL‑метаданные (+2 ключа) |
-| `h2k.payload.include.rowkey` | `false` | boolean | PayloadBuilder | Включать `_rowkey` (+1 ключ) |
-| `h2k.rowkey.encoding` | `BASE64` | enum | PayloadBuilder | Формат rowkey: `BASE64` или `HEX` (используется только если `include.rowkey=true`) |
-| `h2k.filter.by.wal.ts` | `false` | boolean | KafkaReplicationEndpoint | Включить фильтрацию по минимальному WAL‑времени |
-| `h2k.wal.min.ts` (мс) | `-1` | миллисекунды epoch | KafkaReplicationEndpoint | Минимальный `timestamp`; применяется при `filter.by.wal.ts=true` |
-| `h2k.salt.map` (байты префикса) | — | `TABLE=bytes` (CSV) | PayloadBuilder / Decoder | Длина префикса соли per‑table. Для Phoenix‑salted (`SALT_BUCKETS>0`) всегда `1` |
-| `h2k.capacity.hints` (ключи) | — | `TABLE=keys` (CSV) | PayloadBuilder | Подсказка ёмкости корневого JSON (ожидаемое число ключей) |
-| `h2k.producer.await.every` (шт.) | `500` | отправок | BatchSender | Порог дозированного ожидания подтверждений |
-| `h2k.producer.await.timeout.ms` (мс) | `180000` | миллисекунды | BatchSender | Таймаут ожидания группы futures |
-| `h2k.producer.batch.counters.enabled` | `false` | boolean | BatchSender | Внутренние счётчики (DEBUG) |
-| `h2k.producer.batch.debug.on.failure` | `false` | boolean | BatchSender | DEBUG‑диагностика ошибок авто‑сброса |
-| `h2k.ensure.topics` | `true` | boolean | TopicEnsurer | Автопроверка/создание тем |
-| `h2k.topic.partitions` (шт.) | — | число | TopicEnsurer | Число партиций при создании темы |
-| `h2k.topic.replication` (фактор) | — | число | TopicEnsurer | Фактор репликации при создании темы |
-| `h2k.topic.config.*` | — | ключи Kafka | TopicEnsurer | Свойства создаваемой темы (pass‑through) |
-| `h2k.admin.timeout.ms` (мс) | `30000` | миллисекунды | TopicEnsurer | Таймаут операций AdminClient |
-| `h2k.log.dir` | `${hbase.log.dir}` или `./logs` | путь | Логирование | Каталог логов endpoint |
-| `h2k.log.maxFileSize` (байты/строка) | `64MB` | строка | Логирование | Максимальный размер файла лога (RollingFileAppender) |
-| `h2k.log.maxBackupIndex` | `10` | число | Логирование | Количество архивных лог‑файлов |
-| `h2k.producer.acks` | 1 | enum | KafkaProducer | Уровень подтверждений: 0/1/all. [см. матрицу](#матрица-профилей-ключевые-отличия) |
-| `h2k.producer.enable.idempotence` | false | boolean | KafkaProducer | Идемпотентность продьюсера. [см. матрицу](#матрица-профилей-ключевые-отличия) |
-| `h2k.producer.max.in.flight` (шт.) | 5 | число | KafkaProducer | Максимум запросов «в полёте» на одно соединение. Поддерживается только ключ `h2k.producer.max.in.flight`. [см. матрицу](#матрица-профилей-ключевые-отличия) |
-| `h2k.producer.linger.ms` (мс) | 0 | миллисекунды | KafkaProducer | Задержка на набор батча перед отправкой. [см. матрицу](#матрица-профилей-ключевые-отличия) |
-| `h2k.producer.batch.size` (байты) | 16384 | байты | KafkaProducer | Целевой размер батча. [см. матрицу](#матрица-профилей-ключевые-отличия) |
-| `h2k.producer.compression.type` | none | enum | KafkaProducer | Тип компрессии: `lz4`/`snappy`/`none`. [см. матрицу](#матрица-профилей-ключевые-отличия) |
-| `h2k.producer.retries` (шт.) | 2147483647 | число | KafkaProducer | Количество ретраев при временных ошибках (ограничено `delivery.timeout.ms`). [см. матрицу](#матрица-профилей-ключевые-отличия) |
-| `h2k.producer.request.timeout.ms` (мс) | 30000 | миллисекунды | KafkaProducer | Таймаут одного RPC к брокеру. [см. матрицу](#матрица-профилей-ключевые-отличия) |
-| `h2k.producer.delivery.timeout.ms` (мс) | 120000 | миллисекунды | KafkaProducer | Общий дедлайн доставки записи. [см. матрицу](#матрица-профилей-ключевые-отличия) |
-| `h2k.producer.buffer.memory` (байты) | 33554432 | байты | KafkaProducer | Объём внутреннего буфера продьюсера |
-| `h2k.producer.max.request.size` (байты) | 1048576 | байты | KafkaProducer | Максимальный размер одного запроса к брокеру |
-| `h2k.producer.client.id` | не задан | строка | KafkaProducer | Идентификатор клиента; по умолчанию не задаём — endpoint сам формирует уникальный (hostname → UUID фолбэк) |
-| `h2k.producer.*` | как в Kafka 2.3.1 | — | KafkaProducer | Любые нативные свойства Kafka Producer (pass‑through) |
-
-**Примечания:**
-- Все значения «Дефолт» в таблице указаны для Kafka 2.3.1 (клиент).
-- Размеры (`*.size`, `buffer.memory`, `max.request.size`) указаны в байтах; параметры `*.ms` — в миллисекундах.
-
-## Именование топиков: как формируется имя
-
-Имя топика получается как интерполяция шаблона `h2k.topic.pattern` по данным HBase:
-
-- `namespace` = `TableName.getNamespaceAsString()`; для дефолтного неймспейса это строка `"default"`.
-- `qualifier` = `TableName.getQualifierAsString()`; это собственно имя таблицы **без** неймспейса.
-- `${table}` — удобный шорткат:  
-  если `namespace == "default"` → берётся только `${qualifier}`;  
-  иначе → `${namespace}_${qualifier}`.  
-  Если нужен другой формат — сформируйте его прямо в шаблоне (например, `${namespace}.${qualifier}`).
-
-**Примеры (при `h2k.topic.pattern=${table}`):**
-- `DEFAULT`:`TBL_JTI_TRACE_CIS_HISTORY` → топик **`TBL_JTI_TRACE_CIS_HISTORY`**
-- `WORK`:`CIS_HISTORY` → топик **`WORK_CIS_HISTORY`**
-
-**Если создаёте топики вручную**, убедитесь, что имена совпадают с тем, что вычислится из шаблона.  
-Или задайте явный шаблон, например:
-- `${qualifier}` — всегда только имя таблицы;
-- `${namespace}.${qualifier}` — через точку;
-- `hbase_${namespace}__${qualifier}` — с префиксом.
-
-**Автосоздание тем (`h2k.ensure.topics=true`):**
-- Создание выполняет `TopicEnsurer` при первом обращении к таблице.
-- Используются параметры `h2k.topic.partitions`, `h2k.topic.replication` и любые `h2k.topic.config.*`.
-- Валидные имена Kafka: символы `[a-zA-Z0-9._-]`, длина 1..249; запрещены `'.'` и `'..'`.
-
-### Устаревшие ключи
-
-- `h2k.rowkey.base64` — не используется. Вместо него применяйте `h2k.rowkey.encoding=BASE64|HEX`.
+> Полная справка по ключам и значениям — см. **docs/config.md**.
 
 ---
 
-## Подсказки ёмкости и метаданные (как выбрать значения)
+## Профили peer
 
-**Зачем нужны `h2k.capacity.hints`:** PayloadBuilder создаёт корневой `LinkedHashMap` с заранее рассчитанной ёмкостью, чтобы **избежать внутренних расширений** и лишних копирований. Это заметно снижает нагрузку GC на больших сообщениях.
+Готовые скрипты (каталог `conf/`):
 
-**Как считать hint для таблицы:**  
-Возьмите «типичный максимум не‑`null` полей» в ваших данных **по выбранным CF**, и **если включены мета‑поля**, добавьте:
+- **BALANCED** — `conf/add_peer_shell_balanced.txt` (рекомендуется для прод)
+- **RELIABLE** — `conf/add_peer_shell_reliable.txt` (строгие гарантии/порядок)
+- **FAST** — `conf/add_peer_shell_fast.txt` (максимальная скорость)
 
-- если `h2k.payload.include.meta=true` → `+8` ключей: `_table,_namespace,_qualifier,_cf,_cells_total,_cells_cf,event_version,delete`;
-- если `h2k.payload.include.meta.wal=true` → `+2` ключа: `_wal_seq,_wal_write_time`;
-- если `h2k.payload.include.rowkey=true` → `+1` ключ: `_rowkey` (формат по `h2k.rowkey.encoding`: `BASE64` или `HEX`).
-- **PK-колонки:** добавьте число ключей, равное количеству колонок первичного ключа (обычно 2–3), т.к. PK всегда включается в payload.
+Краткие отличия:
 
-**Пример:**  
-По вашему DDL у `TBL_JTI_TRACE_CIS_HISTORY` **32 колонки всего** (включая PK `c`,`t`,`opd`). Поэтому при текущих настройках (`h2k.payload.include.meta=false`, `h2k.payload.include.meta.wal=false`, `h2k.payload.include.rowkey=false`) базовый hint = **`32`**.  
-Если где‑то считаете только колонки CF (без учёта PK), используйте правило: **`hint = N(CF) + N(PK)`**; для этой таблицы `N(PK)=3`.  
-Если позже включите базовые мета‑поля и rowkey, получится **`32 + 8 + 1 = 41`**; при добавлении WAL‑метаданных — **`41 + 2 = 43`**. Для запаса допускается округлить вверх до ближайшей «красивой» величины.
+| Профиль | acks | idempotence | max.in.flight | compression | batch/linger |
+|---|---|---|---|---|---|
+| FAST | `1` | `false` | `5` | `lz4` | `524288 / 100ms` |
+| BALANCED | `all` | `true` | `5` | `lz4` | `524288 / 100ms` |
+| RELIABLE | `all` | `true` | `1` | `snappy` | `65536 / 50ms` |
 
-**Где задавать:**  
-В peer‑конфиге (имеет приоритет) или в `hbase-site.xml`:
-```
-# одно значение или список через запятую
-h2k.capacity.hints = TBL_JTI_TRACE_CIS_HISTORY=32,AGG.INC_DOCS_ACT=18
-```
-
-**О соли (`h2k.salt.map`):**  
-Если таблица **Phoenix‑salted** (`SALT_BUCKETS > 0`), префикс соли занимает **ровно 1 байт**.  
-Укажите `table=1` в `h2k.salt.map`, чтобы PayloadBuilder/Decoder корректно работали с rowkey.  
-Для таблиц без соли задавать ничего не нужно.
+> Подробная матрица и команды администрирования — см. **docs/peer-profiles.md** и **docs/hbase.md**.
 
 ---
 
+## Полная документация
 
-### Включение репликации нужных CF (в HBase shell)
+- **Конфигурация (все ключи):** `docs/config.md`  
+- **Phoenix и `schema.json`:** `docs/phoenix.md`  
+- **Подсказки ёмкости и метаданные:** `docs/capacity.md`  
+- **HBase shell / ZooKeeper / операции:** `docs/hbase.md`, `docs/operations.md`  
+- **ClickHouse ingest (JSONEachRow):** `docs/clickhouse.md`  
+- **Диагностика и типовые ошибки:** `docs/troubleshooting.md`  
+- **Профили peer (полная матрица):** `docs/peer-profiles.md`  
+- **Roadmap (Avro/Schema Registry):** `docs/roadmap-avro.md`
 
-```HBase shell
-# Пример: TBL_JTI_TRACE_CIS_HISTORY, включаем CF 'd'
-disable 'TBL_JTI_TRACE_CIS_HISTORY'
-alter  'TBL_JTI_TRACE_CIS_HISTORY', { NAME => 'd', REPLICATION_SCOPE => 1 }
-enable 'TBL_JTI_TRACE_CIS_HISTORY'
-```
-
-```HBase shell
-# Пример: таблица RECEIPT, включаем 'b' и 'd'
-disable 'RECEIPT'
-alter  'RECEIPT', { NAME => 'b', REPLICATION_SCOPE => 1 }
-alter  'RECEIPT', { NAME => 'd', REPLICATION_SCOPE => 1 }
-enable 'RECEIPT'
-
-# Пример: DOCUMENTS с CF '0' и 'DOCUMENTS'
-disable 'DOCUMENTS'
-alter  'DOCUMENTS', { NAME => '0',         REPLICATION_SCOPE => 1 }
-alter  'DOCUMENTS', { NAME => 'DOCUMENTS', REPLICATION_SCOPE => 1 }
-enable 'DOCUMENTS'
-```
-
-## Профили peer (готовые скрипты)
-
-Скрипты для создания peer находятся в каталоге `conf/`:
-- BALANCED — `conf/add_peer_shell_balanced.txt` (**основной/рекомендуемый прод-профиль**)
-- RELIABLE — `conf/add_peer_shell_reliable.txt` (строжайшие гарантии/порядок; медленнее)
-- FAST — `conf/add_peer_shell_fast.txt` (максимальная скорость; допускает риск повторов/потерь при сбоях)
-
-Как запускать:
-```
-# выполнить скрипт целиком (выберите профиль)
-bin/hbase shell conf/add_peer_shell_balanced.txt    # прод-профиль (рекомендуется)
-# bin/hbase shell conf/add_peer_shell_reliable.txt  # строгие гарантии/порядок; медленнее
-# bin/hbase shell conf/add_peer_shell_fast.txt      # максимум скорости; допускает риски
-
-# или открыть, скопировать и вставить содержимое в интерактивный shell
-bin/hbase shell
-```
-
-Проверка:
-```
-list_peers
-show_peer_tableCFs 'h2k_balanced'   # вернёт nil, если ограничений нет
-# show_peer_tableCFs 'h2k_fast'
-# show_peer_tableCFs 'h2k_reliable'
-```
 ---
-### HBase 1.4.13: быстрые команды (peer shell)
+
+_Этот README умышленно короткий. Всё подробное — в `docs/`._ 
+### hbase 1.4.13: быстрые команды (peer shell)
 
 Ниже — проверенные команды для **обновления существующего peer без рестарта RS** и для точечных правок конфигурации.
 
@@ -382,7 +208,7 @@ update_peer_config 'h2k_fast',
 enable_peer 'h2k_fast'
 ---
 
-## Проверка peer-конфига в ZooKeeper
+## проверка peer-конфига в zookeeper
 
 **Куда:** СРАЗУ после предыдущего подпункта (как отдельный `##`-раздел).
 
@@ -402,10 +228,21 @@ bin/hbase org.apache.zookeeper.ZooKeeperMain \
 bin/hbase org.apache.zookeeper.ZooKeeperMain \
   -server 10.254.3.111,10.254.3.112,10.254.3.113:2181 \
   get /hbase/replication/peers/h2k_fast/peer-state 2>/dev/null | strings
+```
+
+```bash
+# аналоги для профиля BALANCED
+bin/hbase org.apache.zookeeper.ZooKeeperMain \
+  -server 10.254.3.111,10.254.3.112,10.254.3.113:2181 \
+  get /hbase/replication/peers/h2k_balanced 2>/dev/null | strings | egrep 'h2k\.|KafkaReplicationEndpoint'
+
+bin/hbase org.apache.zookeeper.ZooKeeperMain \
+  -server 10.254.3.111,10.254.3.112,10.254.3.113:2181 \
+  get /hbase/replication/peers/h2k_balanced/peer-state 2>/dev/null | strings
 
 ---
 
-## Подсказки ёмкости — доп. пояснение под наши настройки
+## подсказки ёмкости — дополнительные пояснения
 
 **Куда:** в разделе «## Подсказки ёмкости и метаданные…», сразу после абзаца с расчётом и фразой «Для запаса допускается округлить вверх…».
 
@@ -415,7 +252,7 @@ bin/hbase org.apache.zookeeper.ZooKeeperMain \
 базовый hint = **32** (все колонки, включая PK);  
 при `h2k.payload.include.meta.wal=true` и остальных выключенных метаполях → **`32 + 2 = 34`**.
 
-#### Ограничить набор таблиц/CF на стороне HBase (опционально)
+#### ограничить набор таблиц/cf на стороне hbase (опционально)
 По умолчанию `TABLE_CFS = nil` → HBase отдаёт в Endpoint все таблицы/CF, у которых `REPLICATION_SCOPE => 1`. 
 Чтобы сузить поток **ещё на стороне HBase**, используйте:
 ```
@@ -427,7 +264,9 @@ show_peer_tableCFs 'h2k_balanced'   # проверка
 
 ---
 
-## Матрица профилей (ключевые отличия)
+## матрица профилей (ключевые отличия)
+
+Файлы скриптов для создания peer: `conf/add_peer_shell_fast.txt`, `conf/add_peer_shell_balanced.txt`, `conf/add_peer_shell_reliable.txt`.
 
 Ниже сводная таблица ключей, которые различаются между профилями. Единицы измерения: `*.ms` — миллисекунды; размеры (`batch.size`, `buffer.memory`, `max.request.size`) — байты.
 
@@ -453,7 +292,7 @@ show_peer_tableCFs 'h2k_balanced'   # проверка
 
 ---
 
-## Формат сообщения (JSONEachRow)
+## формат сообщения (jsoneachrow)
 
 _Пример ниже — реальная строка из `TBL_JTI_TRACE_CIS_HISTORY` (PK: `c` VARCHAR, `t` UNSIGNED_TINYINT, `opd` TIMESTAMP)._
 Пример получен при включённом `include.meta=true`; при `include.meta=false` поля `event_version` и `delete` отсутствуют.
@@ -494,7 +333,7 @@ _Пример ниже — реальная строка из `TBL_JTI_TRACE_CIS
 
 ---
 
-## Схема Phoenix (`conf/schema.json`)
+## схема phoenix (`conf/schema.json`)
 
 В режиме `h2k.decode.mode=json-phoenix` endpoint использует компактное описание таблиц (карта *таблица → {pk, columns}*), чтобы строго и быстро привести байтовые значения к типам Phoenix. Теперь, помимо описания колонок, в `schema.json` указывается **первичный ключ** (`pk`) — упорядоченный список имён PK-колонок, как они лежат в HBase (регистр важен).
 
@@ -583,7 +422,7 @@ _Пример ниже — реальная строка из `TBL_JTI_TRACE_CIS
 Примечание: для колонок типа `TIMESTAMP` (включая те, что входят в PK) при сериализации в JSON используется имя с суффиксом `*_ms` и значение в миллисекундах epoch (например, `opd` → `opd_ms`).
 
 
-## ClickHouse: чтение JSONEachRow из Kafka
+## clickhouse: чтение jsoneachrow из kafka
 
 Ниже — минимальный кластерный ingest потока JSONEachRow из Kafka в ClickHouse **без параметров**. Он состоит из трёх объектов: источника Kafka, RAW‑таблицы и материализованного представления (MV), которое конвертирует `*_ms` в `DateTime64(3,'UTC')`.
 
@@ -746,7 +585,7 @@ FROM stg.kafka_tbl_jti_trace_cis_history_src;
 - Вставки в RAW: `SELECT count() FROM stg.tbl_jti_trace_cis_history_raw`.
 - При необходимости измените `kafka_group_name`, чтобы начать чтение «с нуля» другой группой.
 
-## Логирование
+## логирование
 
 Мы используем Log4j с консольным выводом и ротацией файлов (RollingFileAppender).
 
@@ -781,9 +620,9 @@ Environment="HBASE_OPTS=${HBASE_OPTS} -Dh2k.log.dir=/opt/hbase-default-current/l
 
 ---
 
-## Диагностика и эксплуатация
+## диагностика и эксплуатация
 
-### Быстрая верификация (3 шага)
+### быстрая верификация (3 шага)
 
 1. **Пир виден и включён в HBase.**  
    В HBase shell:
@@ -800,7 +639,7 @@ Environment="HBASE_OPTS=${HBASE_OPTS} -Dh2k.log.dir=/opt/hbase-default-current/l
    Топик по умолчанию — имя таблицы (см. `h2k.topic.pattern`, по дефолту `${table}`).
 
 
-**Полезные операции (HBase 1.4.13):**
+**Полезные операции (hbase 1.4.13):**
 
 ```HBase shell
 # HBase shell
@@ -842,12 +681,12 @@ current.getConfiguration().putAll(newcfg)
 rep_admin.updatePeerConfig(peer_id, current)
 ```
 
-**JMX/метрики:**
+**JMX и метрики:**
 
 - `Hadoop:service=HBase,name=RegionServer,sub=Replication` — задержки, очереди.
 - `kafka.producer:type=producer-metrics,client-id=*` и `...producer-topic-metrics...`.
 
-**Быстрая проверка Kafka:**
+**Быстрая проверка kafka:**
 
 ```bash
 kafka-console-consumer.sh \
@@ -857,11 +696,11 @@ kafka-console-consumer.sh \
 
 ---
 
-### Смена профиля и обновление конфигурации peer
+### смена профиля и обновление конфигурации peer
 
 В HBase 1.4 удобнее **обновлять конфиг существующего peer** (без создания нового ID), чем пересоздавать его — так не будет дублей в Kafka и не потеряется прогресс очередей.
 
-**A) Обновить конфиг существующего peer (рекомендуется):**
+**A) обновить конфиг существующего peer (рекомендуется):**
 ```HBase shell
 rep_admin = org.apache.hadoop.hbase.client.replication.ReplicationAdmin.new(@hbase.configuration)
 
@@ -894,7 +733,7 @@ rep_admin.updatePeerConfig(peer_id, current)
 
 > Примечание: В HBase 1.4 `ReplicationPeerConfig` хранит карту `CONFIG`, которую читает наш Endpoint на старте и при следующих WALEntry. Изменение этих ключей **не требует** перезапуска RS.
 
-**B) Пересоздать peer (альтернативно):**
+**B) пересоздать peer (альтернативно):**
 ```HBase shell
 # 1) Выключить текущий peer (например, FAST)
 disable_peer 'h2k_fast'
@@ -914,10 +753,10 @@ set_peer_tableCFs 'h2k_balanced', 'DOCUMENTS:0;RECEIPT:b,d'
 show_peer_tableCFs 'h2k_balanced'
 ```
 
-**Переименовать peer:**
-Неподдерживаемо напрямую. Создайте новый peer с нужным ID, перенесите конфиг, затем удалите старый.
+**Переименовать peer:**  
+Неподдерживается напрямую. Создайте новый peer с нужным ID, перенесите конфиг, затем удалите старый
 
-## Типовые ошибки и что посмотреть в логах
+## типовые ошибки и что посмотреть в логах
 
 - **`NoClassDefFoundError: ...KafkaProducer`** — на RS нет `kafka-clients`.  
   Проверьте `hbase classpath`, при необходимости скопируйте `kafka-clients-2.3.1.jar` и `lz4-java` в `/opt/hbase-default-current/lib/`.
@@ -934,7 +773,7 @@ show_peer_tableCFs 'h2k_balanced'
 - Опечатка в ключе `h2k.topic.pattern` (часто пишут `h2k.topic.patter`). Симптом: сообщения уходят не в тот топик или не создаётся тема. Проверьте через `get_peer_config` и исправьте через `update_peer_config`.
 - `NoSuchMethodError: com.google.gson.JsonParser.parseString` — конфликт API Gson (в системном classpath HBase 1.4 есть `gson-2.2.4`). В нашем коде применены совместимые вызовы (`new JsonParser().parse(...)`). Если пересобираете форк — используйте эти же вызовы или подтяните совместимую Gson в теневом (shaded) варианте.
 
-## «Что тюнить, если…»
+## что тюнить, если…
 
 - **Пики задержек** — снижайте `linger.ms`; проверьте сеть/GC; при `acks=all` — здоровье ISR/диск.
 - **Timeout/NotEnoughReplicas** — увеличьте `delivery.timeout.ms`, уменьшите `max.in.flight`/`batch.size`, проверьте ISR.
@@ -942,7 +781,7 @@ show_peer_tableCFs 'h2k_balanced'
 
 ---
 
-## Архитектура (кратко)
+## архитектура (кратко)
 
 ```
 HBase RegionServer
@@ -964,7 +803,7 @@ HBase RegionServer
 
 ---
 
-## Безопасность
+## безопасность
 
 - В коде не используются небезопасные PRNG для целей безопасности в горячем пути.  
   `SecureRandom` применяется только в не‑критичной по производительности части (backoff в TopicEnsurer).
@@ -972,14 +811,14 @@ HBase RegionServer
 
 ---
 
-## Ограничения
+## ограничения
 
 - Phoenix PK: поддерживаются **ASC**‑колонки.
 - Подключение к Kafka — по умолчанию **PLAINTEXT** (SASL/SSL не настраивается этим компонентом).
 
 ---
 
-## FAQ
+## faq
 
 **Почему нельзя указывать `DEFAULT.TBL_NAME`?**  
 В Phoenix таблицы из дефолт-неймспейса указываются как `TBL_NAME` без префикса `DEFAULT.`. Запись `DEFAULT.TBL_NAME` приводит к ошибке парсера.
@@ -1001,7 +840,7 @@ Endpoint всегда инъектирует PK из rowkey в payload, чтоб
 
 ---
 
-## Чек-лист запуска
+## чек-лист запуска
 
 1. JAR в `/opt/hbase-default-current/lib/`.
 2. На RS есть `kafka-clients-2.3.1.jar` и `lz4-java-1.6.0+.jar` (`hbase classpath` это показывает).
@@ -1011,24 +850,26 @@ Endpoint всегда инъектирует PK из rowkey в payload, чтоб
 
 ---
 
-## TODO: Реализация варианта через Avro (open-source Schema Registry)
+## todo: реализация варианта через avro (open-source schema registry)
+
+> ⚠️ **Внимание:** всё в этом разделе — **план внедрения**. Сейчас endpoint публикует **только JSON (JSONEachRow)**. Любые ключи, параметры и примеры ниже **не работают**, пока соответствующий код не появится в репозитории.
 
 **Статус:** план внедрения. Сейчас endpoint публикует **только JSON (JSONEachRow)**. Всё ниже — дорожная карта. Любые ключи из этого раздела **не работают**, пока соответствующий код не появится в репозитории. Мы придерживаемся правила: **источник истины — фактический исходный код**.
 
-### Зачем Avro
+### зачем avro
 
 - Бинарный компактный формат → меньше трафика/CPU по сравнению с JSON на объёмах 100M+ событий/день.
 - Строгая схема и эволюция полей (backward-compatible изменения).
 - С Confluent-совместимым реестром используется «AvroConfluent»: `magic byte (0) + schemaId + Avro-payload`.
 
-### Совместимость стенда
+### совместимость стенда
 
 - **Kafka (клиенты/брокеры):** 2.3.1 — совместимы с **Schema Registry 5.3.x** (open-source).
 - **Java:** 8 (target 1.8) — ок.
 - **HBase 1.4.13 / Phoenix 4.14:** на SR напрямую не влияют.
 - **ClickHouse 24.8:** умеет читать `AvroConfluent` из Kafka.
 
-### Узлы QA (в примерах ниже)
+### узлы qa (в примерах ниже)
 
 - Kafka брокеры: `10.254.3.111:9092,10.254.3.112:9092,10.254.3.113:9092`
 - Schema Registry (план): порт `8081` на этих же узлах (можно начать с одного, затем 3 для HA).
@@ -1036,7 +877,7 @@ Endpoint всегда инъектирует PK из rowkey в payload, чтоб
 ---
 
 
-### Развёртывание Schema Registry 5.3.x (open-source)
+### развёртывание schema registry 5.3.x (open-source)
 
 **Ссылки (точные):**
 - Исходники (GitHub): <https://github.com/confluentinc/schema-registry>
@@ -1045,7 +886,7 @@ Endpoint всегда инъектирует PK из rowkey в payload, чтоб
 
 _Альтернатива:_ допустимо пробовать Schema Registry **5.5.x/6.x**, но такие версии могут тянуть иные зависимости/минимальные версии JDK/Kafka. Перед апгрейдом обязателен нагрузочный прогон на QA (регистрация/валидация схем, публикация AvroConfluent, потребление в ClickHouse). При отсутствии явной необходимости остаёмся на **5.3.x**.
 
-### Совместимость: короткий чек-лист
+### совместимость: короткий чек-лист
 
 - **JDK:** Java 8 (1.8) на всех RegionServer, узлах Schema Registry и ClickHouse.
 - **Kafka:** брокеры 2.3.1; системный топик `_schemas` с `replication.factor ≥ 3`; доступность брокеров с узлов SR и RS.
@@ -1056,7 +897,7 @@ _Альтернатива:_ допустимо пробовать Schema Registr
 - **Время:** синхронизация NTP/PTP на всех узлах (важно для таймаутов/метрик).
 - **Альтернативные SR:** 5.5.x/6.x допустимы, но требуются нагрузочные и длительные (soak) тесты с Kafka 2.3.1 перед продом.
 
-#### Вариант A — tar из Confluent Platform 5.3.x
+#### вариант a — tar из confluent platform 5.3.x
 
 1. Распакуйте платформу, оставьте только каталог **`schema-registry/`** (со скриптами `bin/schema-registry-start|stop`).
 2. Разложите по узлам:
@@ -1105,7 +946,7 @@ _Альтернатива:_ допустимо пробовать Schema Registr
    curl -s http://10.254.3.111:8081/subjects   # ожидаем: []
    ```
 
-#### Вариант B — сборка из исходников
+#### вариант b — сборка из исходников
 
 > На том же репозитории/теге: <https://github.com/confluentinc/schema-registry/tree/v5.3.6>
 
@@ -1119,7 +960,7 @@ mvn -q -DskipTests package
 
 ---
 
-### Avro-схема: `TBL_JTI_TRACE_CIS_HISTORY`
+### avro-схема: `TBL_JTI_TRACE_CIS_HISTORY`
 
 Конвенции сериализации: `TIMESTAMP → *_ms (epoch-millis, long)`, `UNSIGNED_* → int`, `VARCHAR ARRAY → array<string>`.  
 PK: `c` (string), `t` (int), `opd_ms` (long).  
@@ -1176,7 +1017,7 @@ PK: `c` (string), `t` (int), `opd_ms` (long).
 }
 ```
 
-**Регистрация схемы** (subject = `<topic>-value`):
+**Регистрация схемы** (subject = `<topic>-value`)
 ```bash
 curl -s -X POST http://10.254.3.111:8081/subjects/TBL_JTI_TRACE_CIS_HISTORY-value/versions \
   -H "Content-Type: application/vnd.schemaregistry.v1+json" \
@@ -1185,9 +1026,9 @@ curl -s -X POST http://10.254.3.111:8081/subjects/TBL_JTI_TRACE_CIS_HISTORY-valu
 
 ---
 
-### ClickHouse 24.8: чтение AvroConfluent
+### clickhouse 24.8: чтение avroconfluent
 
-**RAW-таблица (Kafka-engine):**
+**RAW-таблица (Kafka-engine)**
 ```sql
 CREATE TABLE raw_tbl_jti_trace_cis_history_kafka
 (
@@ -1222,7 +1063,7 @@ SETTINGS
   kafka_skip_broken_messages = 1;
 ```
 
-**Целевая MergeTree + MV:**
+**Целевая MergeTree + MV**
 ```sql
 CREATE TABLE tbl_jti_trace_cis_history
 (
@@ -1277,7 +1118,7 @@ FROM raw_tbl_jti_trace_cis_history_kafka;
 
 ---
 
-### Изменения в h2k-endpoint (план; не реализовано)
+### изменения в h2k-endpoint (план; не реализовано)
 
 1. Новый ключ (дефолт делаем **avro**):
    ```properties
@@ -1297,7 +1138,7 @@ FROM raw_tbl_jti_trace_cis_history_kafka;
 
 ---
 
-### Порядок включения (минимум)
+### порядок включения (минимум)
 
 1. Поднять Schema Registry 5.3.x на QA; убедиться, что `/subjects` отвечает.
 2. Согласовать и зарегистрировать Avro-схемы для нужных топиков.
@@ -1306,7 +1147,7 @@ FROM raw_tbl_jti_trace_cis_history_kafka;
 5. Завести RAW-таблицу и MV в ClickHouse; проверить лаг и типы.
 6. Провести нагрузочные тесты, затем расширять перечень таблиц.
 
-#### Коротко: проверьте перед стартом Avro
+#### коротко: проверьте перед стартом avro
 
 - Java 8, Kafka 2.3.1, SR 5.3.8 REST:8081 доступны.
 - В ClickHouse настроен `AvroConfluent` + `kafka_schema_registry_url`.

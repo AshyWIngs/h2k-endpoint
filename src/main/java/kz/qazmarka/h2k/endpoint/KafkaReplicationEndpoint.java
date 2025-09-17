@@ -82,17 +82,37 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
      * @implNote Вызов выполняется один раз за процесс при помощи {@link java.util.concurrent.atomic.AtomicBoolean}.
      */
     private static void logFileAppenderConfigOnce() {
-        if (LOG_FILE_CFG_ONCE.compareAndSet(false, true)) {
-            final String dir = java.lang.System.getProperty("h2k.log.dir",
-                    java.lang.System.getProperty("hbase.log.dir", "."));
-            final String file = java.lang.System.getProperty("h2k.log.file", dir + "/h2k-endpoint.log");
-            final String maxFileSize = java.lang.System.getProperty("h2k.log.maxFileSize", "10MB");
-            final String maxBackupIndex = java.lang.System.getProperty("h2k.log.maxBackupIndex", "10");
-            final String immediate = java.lang.System.getProperty("h2k.log.immediateFlush", "false");
-            final String buffered = java.lang.System.getProperty("h2k.log.bufferedIO", "true");
-            final String bufSize = java.lang.System.getProperty("h2k.log.buffer.size", "8192");
-            LOG.info("Лог-файл h2k: {} (MaxFileSize={}, MaxBackupIndex={}, ImmediateFlush={}, BufferedIO={}, BufferSize={})",
-                    file, maxFileSize, maxBackupIndex, immediate, buffered, bufSize);
+        if (!LOG_FILE_CFG_ONCE.compareAndSet(false, true)) {
+            return;
+        }
+
+        // Какой SLF4J backend активен (без привязки к конкретной impl)?
+        final String backend = org.slf4j.LoggerFactory.getILoggerFactory().getClass().getName();
+
+        // Решаем, есть ли файловый лог по явным системным свойствам
+        final String dirProp  = System.getProperty("h2k.log.dir",
+                        System.getProperty("hbase.log.dir", null));
+        final String fileProp = System.getProperty("h2k.log.file", null);
+        final boolean fileLoggingConfigured = (fileProp != null) || (dirProp != null);
+
+        if (fileLoggingConfigured) {
+            final String dir  = (dirProp  != null) ? dirProp  : ".";
+            final String file = (fileProp != null) ? fileProp : (dir + "/h2k-endpoint.log");
+            final String maxFileSize    = System.getProperty("h2k.log.maxFileSize", "10MB");
+            final String maxBackupIndex = System.getProperty("h2k.log.maxBackupIndex", "10");
+            final String immediate      = System.getProperty("h2k.log.immediateFlush", "false");
+            final String buffered       = System.getProperty("h2k.log.bufferedIO", "true");
+            final String bufSize        = System.getProperty("h2k.log.buffer.size", "8192");
+
+            LOG.info("Логирование (SLF4J={}): файл={}, MaxFileSize={}, MaxBackupIndex={}, "
+                    + "ImmediateFlush={}, BufferedIO={}, BufferSize={}",
+                    backend, file, maxFileSize, maxBackupIndex, immediate, buffered, bufSize);
+        } else {
+            // Journald-friendly сообщение
+            LOG.info("Логирование (SLF4J={}): файловый аппендер не настроен — вывод идёт на консоль/stdout "
+                    + "(перехватывается systemd/journald). Чтобы включить файл, задайте -Dh2k.log.dir "
+                    + "или -Dh2k.log.file (опционально: -Dh2k.log.maxFileSize, -Dh2k.log.maxBackupIndex).",
+                    backend);
         }
     }
 
