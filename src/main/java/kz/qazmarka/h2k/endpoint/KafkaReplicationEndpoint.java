@@ -3,8 +3,6 @@ package kz.qazmarka.h2k.endpoint;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.OutputStreamWriter;
-import java.net.InetAddress;
-import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -702,8 +700,8 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
          * Формирует {@link Properties} для {@link KafkaProducer}:
          *  - базовые обязательные параметры (bootstrap, сериализаторы);
          *  - безопасные дефолты (acks=all, enable.idempotence=true, retries и т.д.);
-         *  - pass-through: любые {@code h2k.producer.*} прокидываются как «родные» ключи продьюсера, если не заданы выше;
-         *  - {@code client.id}: по умолчанию префикс + hostname, фолбэк — UUID.
+         *  - pass-through: только валидные {@code h2k.producer.*} прокидываются как «родные» ключи продьюсера, если не заданы выше;
+         *  - {@code client.id}: по умолчанию префикс + hostname + короткий случайный суффикс, фолбэк — UUID.
          *
          * @param cfg       HBase-конфигурация
          * @param bootstrap список брокеров Kafka (host:port[,host2:port2])
@@ -725,31 +723,53 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
             props.put(ProducerConfig.COMPRESSION_TYPE_CONFIG, cfg.get("h2k.producer.compression.type", "lz4"));
             props.put(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION, cfg.get("h2k.producer.max.in.flight", "1"));
 
-            // client.id: уникальный per‑host (hostname), fallback — UUID
-            try {
-                String host = InetAddress.getLocalHost().getHostName();
-                String fallback = (host == null || host.isEmpty())
-                        ? (DEFAULT_CLIENT_ID + '-' + UUID.randomUUID())
-                        : (DEFAULT_CLIENT_ID + '-' + host);
-                props.put(ProducerConfig.CLIENT_ID_CONFIG, cfg.get("h2k.producer.client.id", fallback));
-            } catch (UnknownHostException ignore) {
-                String fallback = DEFAULT_CLIENT_ID + '-' + UUID.randomUUID();
-                props.put(ProducerConfig.CLIENT_ID_CONFIG, cfg.get("h2k.producer.client.id", fallback));
-            }
+            // Набор валидных ключей Kafka‑продьюсера (используем для фильтрации pass‑through)
+            final java.util.Set<String> kafkaValidKeys = org.apache.kafka.clients.producer.ProducerConfig.configNames();
+            // Наши «служебные» ключи, которые не должны попадать в конфиг Kafka‑продьюсера
+            final java.util.Set<String> h2kInternalKeys = new java.util.HashSet<>(
+                    java.util.Arrays.asList(
+                            "await.every",
+                            "await.timeout.ms",
+                            "batch.counters.enabled",
+                            "batch.debug.on.failure"
+                    )
+            );
 
-            // pass‑through: любые h2k.producer.* → «настоящие» ключи продьюсера, если не заданы выше
+            // client.id: базово per‑host; для дефолтного значения добавляем короткий случайный суффикс,
+            // чтобы избежать коллизии MBean "kafka.producer:type=app-info,id=<client.id>" при нескольких пирах в одном JVM.
+            String computedDefaultClientId;
+            try {
+                String host = java.net.InetAddress.getLocalHost().getHostName();
+                computedDefaultClientId = (host == null || host.isEmpty())
+                        ? (DEFAULT_CLIENT_ID + '-' + java.util.UUID.randomUUID())
+                        : (DEFAULT_CLIENT_ID + '-' + host);
+            } catch (java.net.UnknownHostException ignore) {
+                computedDefaultClientId = DEFAULT_CLIENT_ID + '-' + java.util.UUID.randomUUID();
+            }
+            // Пользователь может явно задать h2k.producer.client.id — тогда уважаем его как есть.
+            String requestedClientId = cfg.get("h2k.producer.client.id", computedDefaultClientId);
+            String clientIdToUse = requestedClientId;
+            if (requestedClientId.equals(computedDefaultClientId)) {
+                // Добавляем короткий суффикс только для дефолтного значения
+                String rnd8 = java.util.UUID.randomUUID().toString().substring(0, 8);
+                clientIdToUse = requestedClientId + '-' + rnd8;
+            }
+            props.put(org.apache.kafka.clients.producer.ProducerConfig.CLIENT_ID_CONFIG, clientIdToUse);
+
+            // pass‑through: только «родные» ключи Kafka‑продьюсера; все прочие игнорируем
             final String prefix = Keys.PRODUCER_PREFIX;
             final int prefixLen = prefix.length();
-            for (Map.Entry<String, String> e : cfg) {
+            for (java.util.Map.Entry<String, String> e : cfg) {
                 final String k = e.getKey();
-                if (k.startsWith(prefix)) {
-                    // Пропускаем алиас: h2k.producer.max.in.flight уже замаплен на
-                    // max.in.flight.requests.per.connection, не нужно добавлять «неродной» ключ max.in.flight
-                    if ("h2k.producer.max.in.flight".equals(k)) {
-                        continue;
-                    }
+                final boolean hasPrefix = k.startsWith(prefix);
+                final boolean isAlias   = "h2k.producer.max.in.flight".equals(k);
+                if (hasPrefix && !isAlias) {
                     final String real = k.substring(prefixLen);
-                    props.putIfAbsent(real, e.getValue());
+                    final boolean isInternal = h2kInternalKeys.contains(real);
+                    final boolean isKafkaKey = kafkaValidKeys.contains(real);
+                    if (!isInternal && isKafkaKey) {
+                        props.putIfAbsent(real, e.getValue());
+                    }
                 }
             }
             return props;

@@ -172,7 +172,7 @@ public final class PayloadBuilder {
         addCellsCfIfMeta(obj, includeMeta, stats.cfCells);
         // event_version пишем только если были обработанные ячейки целевого CF
         if (stats.cfCells > 0) {
-            obj.put(PayloadFields.EVENT_TS, stats.maxTs);
+            obj.put(PayloadFields.EVENT_VERSION, stats.maxTs);
         }
         addDeleteFlagIfNeeded(obj, stats.hasDelete);
 

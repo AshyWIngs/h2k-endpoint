@@ -1,32 +1,26 @@
-
-
 # Операции эксплуатации
 
 ## Подготовка таблиц
 
-Перед настройкой репликации убедитесь, что нужные Column Family (CF) активированы для репликации.
+Перед настройкой репликации убедитесь, что нужные Column Family (CF) включены в репликацию (параметр `REPLICATION_SCOPE=1`).
 
 - Для каждой таблицы, которую требуется реплицировать (например, `HISTORY`, `RECEIPT`, `DOCUMENTS`), выполните:
-    1. **Отключите таблицу** (disable):
-        ```
-        disable 'HISTORY'
-        ```
-    2. **Измените (alter) список реплицируемых CF**:
-        ```
-        alter 'HISTORY', {NAME => 'replication_scope', VERSIONS => 1}
-        ```
-        или:
-        ```
-        alter 'HISTORY', {NAME => 'cf_name', REPLICATION_SCOPE => 1}
-        ```
-        (укажите нужный CF и выставьте `REPLICATION_SCOPE` в 1)
-    3. **Включите таблицу** (enable):
-        ```
-        enable 'HISTORY'
-        ```
-    4. Повторите для других таблиц (`RECEIPT`, `DOCUMENTS` и т.д.).
+  1. **Отключите таблицу**:
+     ```ruby
+     disable 'HISTORY'
+     ```
+  2. **Включите репликацию для нужного CF** (замените `cf_name` на реальное имя семейства колонок):
+     ```ruby
+     alter 'HISTORY', { NAME => 'cf_name', REPLICATION_SCOPE => 1 }
+     ```
+     Если CF несколько — повторите пункт для каждого.
+  3. **Включите таблицу**:
+     ```ruby
+     enable 'HISTORY'
+     ```
+  4. Повторите для других таблиц (`RECEIPT`, `DOCUMENTS` и т.д.).
 
-**Примечание:** для некоторых таблиц может потребоваться изменить только определённые CF.
+**Примечание:** проверить текущее значение можно командой `describe 'HISTORY'` (ищите `REPLICATION_SCOPE => 1` у нужных CF).
 
 ## Добавление peer
 
@@ -75,6 +69,62 @@ add_peer 'peer1',
     remove_peer '<peer_id>'
     ```
 
+### Редактирование существующего peer
+
+```ruby
+# Обновляем только вложенную карту CONFIG (наши h2k.*)
+update_peer_config 'h2k_balanced',
+  { 'CONFIG' => {
+      'h2k.payload.format'  => 'avro',   # дефолт: json-eachrow
+      'h2k.avro.schema.dir' => '/opt/hbase-default-current/conf/avro'
+    }
+  }
+```
+
+**Примеры быстрых правок:**
+- Вернуть JSONEachRow:
+  ```ruby
+  update_peer_config 'h2k_balanced', { 'CONFIG' => { 'h2k.payload.format' => 'json-eachrow' } }
+  ```
+- Включить Avro (generic, локальные *.avsc):
+  ```ruby
+  update_peer_config 'h2k_balanced',
+    { 'CONFIG' => {
+        'h2k.payload.format'  => 'avro',
+        'h2k.avro.schema.dir' => '/opt/hbase-default-current/conf/avro'
+      }
+    }
+  ```
+- (На будущее) Confluent‑режим с open‑source Schema Registry 5.3.8:
+  ```ruby
+  update_peer_config 'h2k_balanced',
+    { 'CONFIG' => {
+        'h2k.payload.format'        => 'avro',
+        'h2k.avro.mode'             => 'confluent',
+        'h2k.avro.schema.registry'  => 'http://sr1:8081,http://sr2:8081'
+      }
+    }
+  ```
+  Эти ключи начнут работать после включения соответствующего кода в endpoint.
+
+Изменения конфигурации применяются онлайн, однако сам ReplicationEndpoint может кэшировать значения. Надёжный способ «принудить» перечитать конфиг:
+```ruby
+disable_peer 'h2k_balanced'
+enable_peer  'h2k_balanced'
+```
+
+### Получение списка параметров peer
+
+Для HBase 1.4.13 используйте команду:
+```
+get_peer_config 'h2k_balanced'
+```
+Команда вернёт всю карту параметров peer, включая вложенный раздел `CONFIG`. Чтобы в HBase Shell отфильтровать только наши ключи `h2k.*`, можно использовать небольшую JRuby‑выражение:
+```ruby
+cfg = get_peer_config 'h2k_balanced'
+cfg['CONFIG'].select { |k,_| k.start_with?('h2k.') }
+```
+
 ## Проверка статуса
 
 - **Проверить статус репликации:**
@@ -88,8 +138,46 @@ add_peer 'peer1',
     - `SizeOfLogQueue` — размер очереди; если растёт, значит есть задержки.
     - Ошибки и stacktrace — ищите строки с ERROR.
 
+## Проверка Avro/схем
+
+- **Локальные *.avsc (generic Avro):**
+  1) Убедитесь, что файл существует и читаем для пользователя HBase:
+     ```bash
+     ls -l /opt/hbase-default-current/conf/avro/tbl_jti_trace_cis_history.avsc
+     ```
+  2) Включите ключи:
+     ```ruby
+     update_peer_config 'h2k_balanced',
+       { 'CONFIG' => {
+           'h2k.payload.format'  => 'avro',
+           'h2k.avro.schema.dir' => '/opt/hbase-default-current/conf/avro'
+         }
+       }
+     ```
+  3) Перезапустите peer (disable/enable) и смотрите логи RegionServer:
+     ```bash
+     journalctl -u h2k-endpoint.service -n 200 | grep -i avro
+     ```
+
+- **Confluent Schema Registry (open‑source 5.3.8):**
+  1) Проверьте доступность SR:
+     ```bash
+     curl -s http://sr1:8081/subjects
+     ```
+  2) Включите ключи (после реализации поддержки в коде):
+     ```ruby
+     update_peer_config 'h2k_balanced',
+       { 'CONFIG' => {
+           'h2k.payload.format'        => 'avro',
+           'h2k.avro.mode'             => 'confluent',
+           'h2k.avro.schema.registry'  => 'http://sr1:8081,http://sr2:8081'
+         }
+       }
+     ```
+
 ## Быстрая диагностика
 
+- Ошибка чтения *.avsc (`NoSuchFileException` / "Файл не найден"): проверьте `h2k.avro.schema.dir`, права на каталог/файл и регистр имени таблицы (ожидается `<table>.avsc` в нижнем регистре).
 - Все логи пишутся в `journald` (systemd).
     - Для просмотра последних сообщений:
         ```
@@ -117,6 +205,24 @@ add_peer 'peer1',
     - Проверьте значения параметров в профиле и при необходимости скорректируйте под свою нагрузку.
 
 **Важно:** Для детальной настройки параметров используйте примеры профилей в `conf/add_peer_shell_*.txt`.
+
+## Шпаргалка команд HBase 1.4.13 (replication)
+
+```ruby
+list_peers
+add_peer '<id>', { 'ENDPOINT_CLASSNAME' => '...', 'CONFIG' => { ... } }
+get_peer_config '<id>'
+update_peer_config '<id>', { 'CONFIG' => { ... } }
+show_peer_tableCFs '<id>'
+enable_peer  '<id>'
+disable_peer '<id>'
+remove_peer  '<id>'
+
+# REPLICATION_SCOPE для CF:
+disable 'TABLE'
+alter   'TABLE', { NAME => 'cf_name', REPLICATION_SCOPE => 1 }
+enable  'TABLE'
+```
 
 ---
 

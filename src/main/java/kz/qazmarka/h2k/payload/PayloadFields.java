@@ -25,6 +25,6 @@ public final class PayloadFields {
     public static final String WAL_SEQ        = "_wal_seq";
     public static final String WAL_WRITE_TIME = "_wal_write_time";
 
-    // Событийное время (максимальная метка времени среди ячеек CF)
-    public static final String EVENT_TS       = "_event_ts";
+    // Событийное время (максимальная метка времени среди ячеек CF).
+    public static final String EVENT_VERSION = "event_version";
 }
