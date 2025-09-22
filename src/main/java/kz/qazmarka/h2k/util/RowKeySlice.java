@@ -1,5 +1,7 @@
 package kz.qazmarka.h2k.util;
 
+import java.nio.ByteBuffer;
+
 import org.apache.hadoop.hbase.util.Bytes;
 
 /**
@@ -32,8 +34,12 @@ import org.apache.hadoop.hbase.util.Bytes;
  * Память/GC:
  *  - не создает копий байтов, пока не вызван {@link #toByteArray()};
  *  - есть общий пустой срез {@link #empty()} и общий пустой массив байт для минимизации аллокаций.
+ *
+ * Интеграция:
+ *  - {@link #toByteBuffer()} возвращает представление без копий — удобно для AVRO (байтовые поля).
+ *  - {@link #compareTo(RowKeySlice)} позволяет использовать срез как ключ в отсортированных структурах.
  */
-public final class RowKeySlice {
+public final class RowKeySlice implements Comparable<RowKeySlice> {
     /**
      * Максимальное число байт для предпросмотра в {@link #toString()} (шестнадцатерично).
      * Небольшое значение защищает от избыточного вывода и лишних аллокаций при длинных ключах.
@@ -168,6 +174,21 @@ public final class RowKeySlice {
     }
 
     /**
+     * Представление этого среза как {@link ByteBuffer} без копирования.
+     * Важно: возвращаемый буфер — это "view" на исходный массив {@link #getArray()} с учётом
+     * {@link #getOffset()} и {@link #getLength()}. Любые внешние изменения исходного массива
+     * (которые делать нельзя) будут видны в буфере. Буфер read-only намеренно не создаётся
+     * ради производительности — вызывающая сторона обязана не модифицировать данные.
+     *
+     * Полезно для интеграции с Avro и прочими API, ожидающими {@link ByteBuffer}.
+     *
+     * @return {@code ByteBuffer}, оборачивающий подмассив [offset, offset+length) без копии
+     */
+    public ByteBuffer toByteBuffer() {
+        return ByteBuffer.wrap(array, offset, length);
+    }
+
+    /**
      * Краткое диагностическое представление: длина, смещение, хеш (hex) и предпросмотр
      * первых байт rowkey в шестнадцатеричном виде, ограниченный {@link #PREVIEW_MAX} байт.
      * Формат предпросмотра: `[xx xx ..]`, где `..` означает усечение.
@@ -193,5 +214,18 @@ public final class RowKeySlice {
         sb.append(']');
         sb.append('}');
         return sb.toString();
+    }
+
+    /**
+     * Лексикографическое сравнение содержимого срезов по байтам (unsigned).
+     * Делегирует в {@link Bytes#compareTo(byte[], int, int, byte[], int, int)}.
+     * Удобно для использования в отсортированных структурах данных.
+     */
+    @Override
+    public int compareTo(RowKeySlice other) {
+        if (other == null) return 1; // по контракту Comparable: любой non-null > null
+        if (this == other) return 0;
+        return Bytes.compareTo(this.array, this.offset, this.length,
+                               other.array, other.offset, other.length);
     }
 }

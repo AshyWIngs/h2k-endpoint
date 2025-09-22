@@ -49,6 +49,18 @@ public final class H2kConfig {
     /** Имя namespace HBase по умолчанию. */
     private static final String HBASE_DEFAULT_NS = "default";
 
+    /** Формат сериализации payload. */
+    public enum PayloadFormat { JSON_EACH_ROW, AVRO_BINARY, AVRO_JSON }
+
+    // ==== Дополнительные ключи конфигурации (для формата и AVRO) ====
+    /** Формат сериализации payload: json_each_row | avro_binary | avro_json */
+    private static final String K_PAYLOAD_FORMAT = "h2k.payload.format";
+    /** FQCN фабрики сериализаторов (SPI), например kz.qazmarka.h2k.payload.SerializerFactory */
+    private static final String K_PAYLOAD_SERIALIZER_FACTORY = "h2k.payload.serializer.factory";
+    // Индивидуальные AVRO-ключи публикуются через внутренний класс Keys; здесь оставляем только общий префикс.
+    /** Префикс для всех AVRO-настроек */
+    private static final String K_AVRO_PREFIX              = "h2k.avro.";
+
     // ==== Ключи конфигурации (собраны в одном месте для устранения "хардкода") ====
     /**
      * Шаблон имени Kafka‑топика (поддерживаются плейсхолдеры ${table}, ${namespace}, ${qualifier}).
@@ -156,6 +168,16 @@ public final class H2kConfig {
          * Значение "keys" — ожидаемое число не-null полей (см. README).
          */
         public static final String CAPACITY_HINTS = "h2k.capacity.hints";
+
+        /** Формат сериализации payload: json_each_row | avro_binary | avro_json */
+        public static final String PAYLOAD_FORMAT = "h2k.payload.format";
+        /** FQCN фабрики сериализаторов (SPI) */
+        public static final String PAYLOAD_SERIALIZER_FACTORY = "h2k.payload.serializer.factory";
+        /** AVRO-настройки (минимальный набор ключей) */
+        public static final String AVRO_SCHEMA_REGISTRY_URL = "h2k.avro.schema.registry.url";
+        public static final String AVRO_SUBJECT_STRATEGY    = "h2k.avro.subject.strategy";
+        public static final String AVRO_COMPATIBILITY       = "h2k.avro.compatibility";
+        public static final String AVRO_BINARY              = "h2k.avro.binary";
     }
 
     // ==== Значения по умолчанию (в одном месте) ====
@@ -217,6 +239,11 @@ public final class H2kConfig {
     private final boolean includeMetaWal;
     private final boolean jsonSerializeNulls;
 
+    // ==== Формат/сериализация ====
+    private final PayloadFormat payloadFormat;
+    private final String serializerFactoryClass;
+    private final Map<String, String> avroProps;
+
     // ==== Автосоздание топиков ====
     private final boolean ensureTopics;
     /** Разрешено ли увеличение партиций при ensureTopics. */
@@ -273,6 +300,9 @@ public final class H2kConfig {
         this.includeMeta = b.includeMeta;
         this.includeMetaWal = b.includeMetaWal;
         this.jsonSerializeNulls = b.jsonSerializeNulls;
+        this.payloadFormat = b.payloadFormat;
+        this.serializerFactoryClass = b.serializerFactoryClass;
+        this.avroProps = Collections.unmodifiableMap(new HashMap<>(b.avroProps));
         this.ensureTopics = b.ensureTopics;
         this.ensureIncreasePartitions = b.ensureIncreasePartitions;
         this.ensureDiffConfigs = b.ensureDiffConfigs;
@@ -319,6 +349,12 @@ public final class H2kConfig {
         private boolean includeMetaWal = DEFAULT_INCLUDE_META_WAL;
         /** Сериализовать ли null‑значения в JSON. */
         private boolean jsonSerializeNulls = DEFAULT_JSON_SERIALIZE_NULLS;
+        /** Формат сериализации payload. */
+        private PayloadFormat payloadFormat = PayloadFormat.JSON_EACH_ROW;
+        /** FQCN фабрики сериализаторов (SPI), если требуется явная подмена. */
+        private String serializerFactoryClass = null;
+        /** Доп. AVRO-настройки (минимальный набор ключей, см. from()). */
+        private Map<String, String> avroProps = Collections.emptyMap();
         /** Автоматически создавать недостающие топики. */
         private boolean ensureTopics = true;
         /** Разрешено ли автоматическое увеличение числа партиций. */
@@ -446,6 +482,27 @@ public final class H2kConfig {
          * @return this
          */
         public Builder ensureTopics(boolean v) { this.ensureTopics = v; return this; }
+
+        /**
+         * Формат сериализации payload.
+         * @param v JSON_EACH_ROW | AVRO_BINARY | AVRO_JSON
+         * @return this
+         */
+        public Builder payloadFormat(PayloadFormat v) { this.payloadFormat = v; return this; }
+
+        /**
+         * FQCN фабрики сериализаторов (SPI).
+         * @param v полное имя класса фабрики
+         * @return this
+         */
+        public Builder serializerFactoryClass(String v) { this.serializerFactoryClass = v; return this; }
+
+        /**
+         * AVRO-настройки (минимальный набор известных ключей).
+         * @param v карта свойств
+         * @return this
+         */
+        public Builder avroProps(Map<String, String> v) { this.avroProps = v; return this; }
         /**
          * Разрешить автоматическое увеличение числа партиций при ensureTopics.
          * @param v true — увеличивать партиции при необходимости
@@ -560,6 +617,12 @@ public final class H2kConfig {
         boolean includeMetaWal = cfg.getBoolean(K_PAYLOAD_INCLUDE_META_WAL, DEFAULT_INCLUDE_META_WAL);
         boolean jsonSerializeNulls = cfg.getBoolean(Keys.JSON_SERIALIZE_NULLS, DEFAULT_JSON_SERIALIZE_NULLS);
 
+        // Формат сериализации и фабрика (через Parsers)
+        PayloadFormat payloadFormat = Parsers.readPayloadFormat(cfg, K_PAYLOAD_FORMAT, PayloadFormat.JSON_EACH_ROW);
+        String serializerFactoryClass = cfg.get(K_PAYLOAD_SERIALIZER_FACTORY, null);
+        // Читаем все h2k.avro.* свойства разом
+        Map<String, String> avroProps = Parsers.readWithPrefix(cfg, K_AVRO_PREFIX);
+
         // По умолчанию автосоздание топиков включено (централизованный дефолт)
         boolean ensureTopics = cfg.getBoolean(K_ENSURE_TOPICS, DEFAULT_ENSURE_TOPICS);
         boolean ensureIncreasePartitions = cfg.getBoolean(K_ENSURE_INCREASE_PARTITIONS, DEFAULT_ENSURE_INCREASE_PARTITIONS);
@@ -600,6 +663,9 @@ public final class H2kConfig {
                 .includeMeta(includeMeta)
                 .includeMetaWal(includeMetaWal)
                 .jsonSerializeNulls(jsonSerializeNulls)
+                .payloadFormat(payloadFormat)
+                .serializerFactoryClass(serializerFactoryClass)
+                .avroProps(avroProps)
                 .ensureTopics(ensureTopics)
                 .ensureIncreasePartitions(ensureIncreasePartitions)
                 .ensureDiffConfigs(ensureDiffConfigs)
@@ -707,6 +773,13 @@ public final class H2kConfig {
     public boolean isIncludeMetaWal() { return includeMetaWal; }
     /** @return сериализуются ли null‑значения в JSON */
     public boolean isJsonSerializeNulls() { return jsonSerializeNulls; }
+
+    /** @return формат сериализации payload */
+    public PayloadFormat getPayloadFormat() { return payloadFormat; }
+    /** @return FQCN фабрики сериализаторов, если задана */
+    public String getSerializerFactoryClass() { return serializerFactoryClass; }
+    /** @return неизменяемая карта AVRO-свойств */
+    public Map<String, String> getAvroProps() { return avroProps; }
 
     /** @return создавать ли недостающие топики автоматически */
     public boolean isEnsureTopics() { return ensureTopics; }
@@ -827,6 +900,8 @@ public final class H2kConfig {
                 .append(", includeMeta=").append(includeMeta)
                 .append(", includeMetaWal=").append(includeMetaWal)
                 .append(", jsonSerializeNulls=").append(jsonSerializeNulls)
+                .append(", payloadFormat=").append(payloadFormat)
+                .append(", serializerFactoryClass=").append(serializerFactoryClass)
                 .append(", ensureTopics=").append(ensureTopics)
                 .append(", ensureIncreasePartitions=").append(ensureIncreasePartitions)
                 .append(", ensureDiffConfigs=").append(ensureDiffConfigs)
@@ -840,6 +915,7 @@ public final class H2kConfig {
                 .append(", topicConfigs.size=").append(topicConfigs.size())
                 .append(", saltBytesByTable.size=").append(saltBytesByTable.size())
                 .append(", capacityHintByTable.size=").append(capacityHintByTable.size())
+                .append(", avroProps.size=").append(avroProps.size())
                 .append('}')
                 .toString();
     }
@@ -854,4 +930,5 @@ public final class H2kConfig {
         String suffix = (parts.length > 1 ? ",..." : "");
         return host + suffix;
     }
+
 }

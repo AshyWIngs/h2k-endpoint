@@ -1,12 +1,12 @@
 package kz.qazmarka.h2k.payload;
 
 import java.nio.charset.StandardCharsets;
-import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellUtil;
@@ -14,6 +14,8 @@ import org.apache.hadoop.hbase.TableName;
 
 import kz.qazmarka.h2k.config.H2kConfig;
 import kz.qazmarka.h2k.schema.Decoder;
+import kz.qazmarka.h2k.util.Bytes;
+import kz.qazmarka.h2k.util.Maps;
 import kz.qazmarka.h2k.util.RowKeySlice;
 
 /**
@@ -43,41 +45,11 @@ import kz.qazmarka.h2k.util.RowKeySlice;
  *  - Декодер вызывается для всех ячеек строки (фильтрация CF — на уровне источника/сканера).
  */
 public final class PayloadBuilder {
-    /**
-     * Таблица символов для быстрого перевода байтов в hex без создания промежуточных объектов.
-     * Используется только локальным методом {@link #toHex(byte[], int, int)}.
-     */
-    private static final char[] HEX = "0123456789abcdef".toCharArray();
-    /**
-     * Общий Base64-энкодер для rowkey.
-     * JDK 8 предоставляет только array‑based API (без (offset,len)), поэтому кодируем из временного среза.
-     */
-    private static final Base64.Encoder BASE64 = Base64.getEncoder();
-    /**
-     * Ключи payload (исключаем "магические строки" по коду):
-     *  - _table, _namespace, _qualifier, _cf — метаданные таблицы и CSV‑список целевых CF;
-     *  - _cells_total, _cells_cf — общее количество ячеек в строке и число ячеек целевого CF;
-     *  - event_version — максимальная метка времени среди ячеек CF;
-     *  - delete — признак, что в партии встречалась операция удаления по строке;
-     *  - _rowkey — представление rowkey (HEX или Base64 в зависимости от h2k.rowkey.encoding; включается по флагу includeRowKey);
-     *  - _wal_seq, _wal_write_time — метаданные WAL (включаются по includeMetaWal).
-     */
-    private static final String K_TABLE          = "_table";
-    private static final String K_NAMESPACE      = "_namespace";
-    private static final String K_QUALIFIER      = "_qualifier";
-    private static final String K_CF             = "_cf";
-    private static final String K_CELLS_TOTAL    = "_cells_total";
-    private static final String K_CELLS_CF       = "_cells_cf";
-    private static final String K_EVENT_VERSION  = "event_version";
-    private static final String K_DELETE         = "delete";
-    /** Единое имя поля rowkey согласно требованиям проекта (HEX/BASE64 выбирается по конфигу). */
-    private static final String K_ROWKEY         = "_rowkey";
-    private static final String K_WAL_SEQ        = "_wal_seq";
-    private static final String K_WAL_WRITE_TIME = "_wal_write_time";
 
 
     private final Decoder decoder;
     private final H2kConfig cfg;
+    private final AtomicReference<PayloadSerializer> cachedSerializer = new java.util.concurrent.atomic.AtomicReference<>();
 
     /**
      * @param decoder декодер значений клеток целевого CF (byte[] → Java‑типы)
@@ -90,12 +62,51 @@ public final class PayloadBuilder {
     }
 
     /**
+     * Упаковка результата с использованием сериализатора, выбранного по конфигурации
+     * (cfg.getPayloadFormat()/cfg.getSerializerFactoryClass()). Кэширует созданный инстанс.
+     */
+    public byte[] buildRowPayloadBytes(TableName table,
+                                       List<Cell> cells,
+                                       RowKeySlice rowKey,
+                                       long walSeq,
+                                       long walWriteTime) {
+        PayloadSerializer ser = resolveSerializerFromConfig();
+        return buildRowPayloadBytes(table, cells, rowKey, walSeq, walWriteTime, ser);
+    }
+
+    /**
+     * Упаковка результата {@link #buildRowPayload(TableName, List, RowKeySlice, long, long)}
+     * в байты с помощью заданного сериализатора. Метод не меняет логику построения payload:
+     * он лишь делегирует сериализацию (JSONEachRow/Avro и т.п.) внешней стратегии.
+     *
+     * @param table таблица HBase
+     * @param cells клетки строки
+     * @param rowKey срез rowkey
+     * @param walSeq sequenceId записи WAL
+     * @param walWriteTime время записи в WAL, мс
+     * @param serializer реализация {@link PayloadSerializer} (например, {@code JsonEachRowSerializer})
+     * @return сериализованный payload
+     * @throws NullPointerException если {@code table} или {@code serializer} равны null
+     */
+    public byte[] buildRowPayloadBytes(TableName table,
+                                       List<Cell> cells,
+                                       RowKeySlice rowKey,
+                                       long walSeq,
+                                       long walWriteTime,
+                                       PayloadSerializer serializer) {
+        Objects.requireNonNull(table, "таблица");
+        Objects.requireNonNull(serializer, "serializer");
+        Map<String, Object> obj = buildRowPayload(table, cells, rowKey, walSeq, walWriteTime);
+        return serializer.serialize(obj);
+    }
+
+    /**
      * Создаёт корневую LinkedHashMap с ёмкостью, подобранной по «подсказке» из H2kConfig (если задана)
-     * и/или оценке фактического числа ключей (данные + метаданные). Расчёт ёмкости производится целочисленной формулой,
-     * эквивалентной 1 + ceil(target / 0.75), без использования double/Math.ceil.
+     * и/или оценке фактического числа ключей (данные + метаданные). Расчёт ёмкости делегируется в
+     * {@link Maps#initialCapacity(int)} для предсказуемого минимального числа расширений.
      *
      * Подсказка берётся из {@code cfg.getCapacityHintFor(table)} (0 — подсказка отсутствует).
-     * Итоговая ёмкость ограничивается внутренним максимумом HashMap/LinkedHashMap (~2^30).
+     * Итоговая ёмкость ограничивается внутренним максимумом HashMap/LinkedHashMap.
      *
      * @param table              таблица HBase, для которой строится payload
      * @param estimatedKeysCount оценка общего числа ключей в payload (данные колонок + служебные поля)
@@ -103,32 +114,9 @@ public final class PayloadBuilder {
      */
     private Map<String, Object> newRootMap(TableName table, int estimatedKeysCount) {
         final int hint = cfg.getCapacityHintFor(table); // 0, если подсказка не задана
-        final int initialCapacity = computeInitialCapacity(estimatedKeysCount, hint);
-        return new LinkedHashMap<>(initialCapacity, 0.75f);
-    }
-
-    /**
-     * Вычисляет начальную ёмкость LinkedHashMap без использования FP‑арифметики:
-     * формула 1 + ceil(target / 0.75) эквивалентна 1 + (4*target + 2) / 3 (целочисленно).
-     * Это избавляет от Math.ceil/double‑деления на горячем пути и даёт те же результаты.
-     *
-     * @param estimatedKeysCount оценка общего числа ключей (данные + метаданные)
-     * @param hint               «подсказка» из конфигурации (0 — нет подсказки)
-     * @return рекомендуемая ёмкость для конструктора LinkedHashMap (с учётом верхнего ограничения ~2^30)
-     */
-    static int computeInitialCapacity(int estimatedKeysCount, int hint) {
-        // Берём максимум из оценки и подсказки (если она задана)
         final int target = Math.max(estimatedKeysCount, hint > 0 ? hint : 0);
-        if (target <= 0) {
-            return 1;
-        }
-        // 1 + ceil(4*target / 3)  ==  1 + (4*target + 2) / 3  (целочисленное деление)
-        final long n = ((long) target << 2) + 2; // 4*target + 2
-        long cap = 1 + n / 3L;
-        // HashMap/LinkedHashMap внутренняя таблица ограничена ~2^30
-        final long MAX = 1L << 30;
-        if (cap > MAX) cap = MAX;
-        return (int) cap;
+        final int initialCapacity = Maps.initialCapacity(target);
+        return new LinkedHashMap<>(initialCapacity, 0.75f);
     }
 
     /**
@@ -184,7 +172,7 @@ public final class PayloadBuilder {
         addCellsCfIfMeta(obj, includeMeta, stats.cfCells);
         // event_version пишем только если были обработанные ячейки целевого CF
         if (stats.cfCells > 0) {
-            obj.put(K_EVENT_VERSION, stats.maxTs);
+            obj.put(PayloadFields.EVENT_TS, stats.maxTs);
         }
         addDeleteFlagIfNeeded(obj, stats.hasDelete);
 
@@ -308,12 +296,12 @@ public final class PayloadBuilder {
     private void addMetaFields(Map<String, Object> obj, TableName table, int totalCells) {
           String ns = table.getNamespaceAsString();
           String qn = table.getQualifierAsString();
-          obj.put(K_TABLE, table.getNameAsString());
-          obj.put(K_NAMESPACE, ns);
-          obj.put(K_QUALIFIER, qn);
+          obj.put(PayloadFields.TABLE, table.getNameAsString());
+          obj.put(PayloadFields.NAMESPACE, ns);
+          obj.put(PayloadFields.QUALIFIER, qn);
           // CSV со списком целевых CF, см. H2kConfig
-          obj.put(K_CF, cfg.getCfNamesCsv());
-          obj.put(K_CELLS_TOTAL, totalCells);
+          obj.put(PayloadFields.CF, cfg.getCfNamesCsv());
+          obj.put(PayloadFields.CELLS_TOTAL, totalCells);
     }
 
     /** Добавляет метаданные таблицы, если соответствующий флаг включён. */
@@ -326,14 +314,14 @@ public final class PayloadBuilder {
     /** Добавляет счётчик ячеек по целевому CF, только если включены метаданные. */
     private static void addCellsCfIfMeta(Map<String, Object> obj, boolean includeMeta, int cfCells) {
         if (includeMeta) {
-            obj.put(K_CELLS_CF, cfCells);
+            obj.put(PayloadFields.CELLS_CF, cfCells);
         }
     }
 
     /** Устанавливает флаг удаления, если в партии встречалась операция удаления по строке. */
     private static void addDeleteFlagIfNeeded(Map<String, Object> obj, boolean hasDelete) {
         if (hasDelete) {
-            obj.put(K_DELETE, true);
+            obj.put(PayloadFields.DELETE, true);
         }
     }
 
@@ -366,9 +354,9 @@ public final class PayloadBuilder {
             return;
         }
         if (base64) {
-            obj.put(K_ROWKEY, encodeRowKeyBase64(rk.getArray(), off, effLen));
+            obj.put(PayloadFields.ROWKEY, Bytes.base64(rk.getArray(), off, effLen));
         } else {
-            obj.put(K_ROWKEY, toHex(rk.getArray(), off, effLen));
+            obj.put(PayloadFields.ROWKEY, Bytes.toHex(rk.getArray(), off, effLen));
         }
     }
 
@@ -381,62 +369,11 @@ public final class PayloadBuilder {
             return;
         }
         if (walSeq >= 0L) {
-            obj.put(K_WAL_SEQ, walSeq);
+            obj.put(PayloadFields.WAL_SEQ, walSeq);
         }
         if (walWriteTime >= 0L) {
-            obj.put(K_WAL_WRITE_TIME, walWriteTime);
+            obj.put(PayloadFields.WAL_WRITE_TIME, walWriteTime);
         }
-    }
-
-    /**
-     * Быстрая конвертация массива байт в hex‑строку без промежуточных объектов.
-     *
-     * @param a   исходный массив (может быть {@code null})
-     * @param off смещение
-     * @param len длина
-     * @return строка из {@code 2*len} символов; пустая строка, если массив {@code null} или {@code len == 0}
-     * @throws IndexOutOfBoundsException если запрошен срез вне границ исходного массива (сообщение на русском)
-     */
-    private static String toHex(byte[] a, int off, int len) {
-        if (a == null || len == 0) {
-            return "";
-        }
-        if (off < 0 || len < 0 || off > a.length - len) {
-            throw new IndexOutOfBoundsException("срез hex вне границ: off=" + off + " len=" + len + " cap=" + a.length);
-        }
-        char[] out = new char[len * 2];
-        int p = 0;
-        for (int i = 0; i < len; i++) {
-            int v = a[off + i] & 0xFF;
-            out[p++] = HEX[v >>> 4];
-            out[p++] = HEX[v & 0x0F];
-        }
-        return new String(out);
-    }
-
-
-    /**
-     * Кодирует фрагмент массива байт в Base64 без промежуточных строк.
-     * В JDK 8 нет API с (offset,len), поэтому выполняются два шага:
-     * 1) копируется ровно нужный срез во временный буфер;
-     * 2) кодирование производится напрямую в предвычисленный выходной массив.
-     *
-     * @param a   исходный массив
-     * @param off смещение начала фрагмента
-     * @param len длина фрагмента
-     * @return ASCII‑строка Base64; пустая строка, если {@code len == 0}; {@code null}, если {@code a == null}
-     */
-    private static String encodeRowKeyBase64(byte[] a, int off, int len) {
-        if (a == null) return null;
-        if (len <= 0) return "";
-        // Скопировать ровно нужный срез (JDK8 Base64 не принимает (offset,len))
-        final byte[] slice = new byte[len];
-        System.arraycopy(a, off, slice, 0, len);
-        // Предвычислить длину Base64: 4 * ceil(len/3) и закодировать напрямую в готовый буфер
-        int outLen = ((len + 2) / 3) * 4;
-        byte[] out = new byte[outLen];
-        int n = BASE64.encode(slice, out); // n == outLen
-        return new String(out, 0, n, StandardCharsets.US_ASCII);
     }
 
     /** Агрегаты по CF. */
@@ -447,5 +384,59 @@ public final class PayloadBuilder {
         boolean hasDelete;
         /** Сколько ячеек целевого CF было обработано. */
         int cfCells;
+    }
+
+    /** Минимальная фабрика сериализаторов для DIP/SPI. */
+    public interface PayloadSerializerFactory {
+        PayloadSerializer create(H2kConfig cfg);
+    }
+
+    /** Builds a serializer instance according to config (no caching, no synchronization). */
+    private PayloadSerializer createSerializerFromConfig() {
+        // 1) Try to create via provided FQCN (factory or direct serializer)
+        String fqcn = cfg.getSerializerFactoryClass();
+        if (fqcn != null && !fqcn.trim().isEmpty()) {
+            try {
+                Class<?> cls = Class.forName(fqcn);
+                // If it's a factory — use it
+                if (PayloadSerializerFactory.class.isAssignableFrom(cls)) {
+                    PayloadSerializerFactory f = (PayloadSerializerFactory) cls.getDeclaredConstructor().newInstance();
+                    return Objects.requireNonNull(f.create(cfg), "factory returned null");
+                }
+                // If it's the serializer itself — use no-arg ctor
+                if (PayloadSerializer.class.isAssignableFrom(cls)) {
+                    @SuppressWarnings("unchecked")
+                    Class<? extends PayloadSerializer> sc = (Class<? extends PayloadSerializer>) cls;
+                    return sc.getDeclaredConstructor().newInstance();
+                }
+            } catch (ReflectiveOperationException | ClassCastException ignore) {
+                // Fall through to default path
+            }
+        }
+
+        // 2) Default by payload format
+        H2kConfig.PayloadFormat fmt = cfg.getPayloadFormat();
+        if (fmt == H2kConfig.PayloadFormat.JSON_EACH_ROW || fmt == null) {
+            // Our lightweight JSON serializer
+            return new JsonEachRowSerializer();
+        }
+        // AVRO placeholder: a concrete factory should be provided via config/DI.
+        throw new IllegalStateException("No serializer factory provided for format: " + fmt);
+    }
+
+    /**
+     * Returns a cached PayloadSerializer instance; thread-safe and lock-free.
+     * Uses AtomicReference with CAS to initialize once.
+     */
+    private PayloadSerializer resolveSerializerFromConfig() {
+        PayloadSerializer existing = cachedSerializer.get();
+        if (existing != null) return existing;
+
+        PayloadSerializer created = createSerializerFromConfig();
+        // If another thread won the race, use the winner
+        if (cachedSerializer.compareAndSet(null, created)) {
+            return created;
+        }
+        return cachedSerializer.get();
     }
 }
