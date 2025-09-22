@@ -52,7 +52,7 @@ class PayloadBuilderTest {
     private static final int MAX_HASH_CAP = 1 << 30;
 
     private static int compute(int estimated, int hint) {
-        return PayloadBuilder.computeInitialCapacity(estimated, hint);
+        return kz.qazmarka.h2k.util.Maps.computeInitialCapacity(estimated, hint);
     }
 
     /**

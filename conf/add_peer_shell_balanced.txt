@@ -36,6 +36,10 @@ add_peer 'h2k_balanced',
       'h2k.decode.mode'                     => 'json-phoenix',          # 'simple' | 'json-phoenix'
       # TIMESTAMP/DATE/TIME -> epoch millis; любой ARRAY -> JSON‑массив
       'h2k.schema.path'                     => '/opt/hbase-default-current/conf/schema.json', # schema.json содержит колонки и PK
+      # формат полезной нагрузки
+      'h2k.payload.format'                  => 'avro',              # дефолт сейчас json-eachrow
+      # где лежат *.avsc
+      'h2k.avro.schema.dir'                 => '/opt/hbase-default-current/conf/avro'
       'h2k.json.serialize.nulls'            => 'false',
 
       # Метаполя в полезной нагрузке
