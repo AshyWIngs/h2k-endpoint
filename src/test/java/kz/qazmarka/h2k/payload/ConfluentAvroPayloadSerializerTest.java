@@ -39,6 +39,7 @@ import kz.qazmarka.h2k.util.RowKeySlice;
 class ConfluentAvroPayloadSerializerTest {
 
     private static final TableName TABLE = TableName.valueOf("T_AVRO");
+    private static final TableName TABLE_ESCAPE = TableName.valueOf("T_AVRO_ESCAPE");
     private static final Decoder STRING_DECODER = (table, qualifier, value) ->
             value == null ? null : new String(value, StandardCharsets.UTF_8);
 
@@ -81,6 +82,41 @@ class ConfluentAvroPayloadSerializerTest {
 
             builder.buildRowPayloadBytes(TABLE, cells, RowKeySlice.whole(rowKey), ts, ts);
             assertNull(takeRequest(server, 200, TimeUnit.MILLISECONDS), "Схема должна регистрироваться один раз");
+        }
+    }
+
+    @Test
+    @DisplayName("Confluent: JSON payload к SR экранирует управляющие символы")
+    void confluentSchemaPayloadEscaping() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(new MockResponse()
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"id\":9}"));
+            server.start();
+            String baseUrl = baseUrl(server);
+
+            H2kConfig cfg = buildConfig("avro-binary", baseUrl);
+            PayloadBuilder builder = new PayloadBuilder(STRING_DECODER, cfg);
+            byte[] rowKey = Bytes.toBytes("rk_escape");
+            Cell cell = new KeyValue(rowKey, Bytes.toBytes("d"), Bytes.toBytes("value"), 1L, Bytes.toBytes("ESC"));
+            List<Cell> cells = Collections.singletonList(cell);
+
+            builder.buildRowPayloadBytes(TABLE_ESCAPE, cells, RowKeySlice.whole(rowKey), 1L, 1L);
+
+            RecordedRequest request = takeRequest(server, 5, TimeUnit.SECONDS);
+            assertNotNull(request, "Schema Registry должен получить запрос");
+            String body = request.getBody().readUtf8();
+            int start = body.indexOf("\"schema\":\"");
+            assertTrue(start >= 0, "В запросе должно присутствовать поле schema");
+            int end = body.indexOf("\"}", start);
+            assertTrue(end > start, "Некорректный JSON при регистрации схемы: " + body);
+            String schemaEscaped = body.substring(start + "\"schema\":\"".length(), end);
+            assertTrue(schemaEscaped.contains("\\n"), "Перевод строки должен быть экранирован");
+            assertTrue(schemaEscaped.contains("\\u0001"), "Управляющие символы должны кодироваться через \\uXXXX");
+            String schemaRaw = jsonUnescape(schemaEscaped);
+            String expectedDoc = "line \"q\"\nnext" + (char) 0x0001;
+            Schema parsed = new Schema.Parser().parse(schemaRaw);
+            assertEquals(expectedDoc, parsed.getDoc(), "Doc должен восстанавливаться после обратного экранирования");
         }
     }
 
@@ -157,5 +193,42 @@ class ConfluentAvroPayloadSerializerTest {
             fail("Ожидание запроса прервано", ie);
             return null; // unreachable
         }
+    }
+
+    private static String jsonUnescape(String input) {
+        StringBuilder sb = new StringBuilder(input.length());
+        for (int i = 0; i < input.length(); i++) {
+            char c = input.charAt(i);
+            if (c != '\\') {
+                sb.append(c);
+                continue;
+            }
+            if (i + 1 >= input.length()) {
+                sb.append('\\');
+                break;
+            }
+            char next = input.charAt(++i);
+            switch (next) {
+                case '"': sb.append('"'); break;
+                case '\\': sb.append('\\'); break;
+                case '/': sb.append('/'); break;
+                case 'b': sb.append('\b'); break;
+                case 'f': sb.append('\f'); break;
+                case 'n': sb.append('\n'); break;
+                case 'r': sb.append('\r'); break;
+                case 't': sb.append('\t'); break;
+                case 'u':
+                    if (i + 4 >= input.length()) {
+                        throw new IllegalArgumentException("Неверная escape-последовательность \\u в: " + input);
+                    }
+                    int code = Integer.parseInt(input.substring(i + 1, i + 5), 16);
+                    sb.append((char) code);
+                    i += 4;
+                    break;
+                default:
+                    sb.append(next);
+            }
+        }
+        return sb.toString();
     }
 }

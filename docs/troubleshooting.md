@@ -11,7 +11,7 @@
 - Убедиться, что задан h2k.kafka.bootstrap.servers.
 - Проверить корректность h2k.topic.pattern и h2k.cf.list (несуществующие CF игнорируются).
 - Для decode.mode=json-phoenix обязательно указать h2k.schema.path.
-- При несоответствии типов в schema.json ValueCodecPhoenix бросает IllegalStateException с подробной диагностикой.
+- При несоответствии типов в schema.json `PhoenixColumnTypeRegistry` логирует WARN и использует VARCHAR, а `ValueCodecPhoenix` бросает `IllegalStateException` при декодировании фиксированных типов.
 
 ## Частые проблемы
 
@@ -24,6 +24,7 @@
 ### Ошибки декодирования Phoenix
 - ValueCodecPhoenix проверяет фиксированные типы (например, UNSIGNED_INT = 4 байта).
 - Если длина не совпадает — выбрасывается IllegalStateException с сообщением «ожидалось N байт».
+- При неизвестном типе смотрите WARN от PhoenixColumnTypeRegistry (тип будет принят как VARCHAR).
 - Проверить schema.json, обновить при изменениях таблицы.
 
 ### Ошибки при формировании JSON

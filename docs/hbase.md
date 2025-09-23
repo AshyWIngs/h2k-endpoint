@@ -123,7 +123,7 @@ remove_peer 'h2k_balanced'
 
 - Репликация обрабатывает **только новые события**, появляющиеся **после создания peer** и его включения (`enable_peer`). Исторические данные из таблиц автоматически не подхватываются.
 - Топики создаются/проверяются автоматом (если включён `h2k.ensure.topics=true`), имя строится по `h2k.topic.pattern` (для default‑namespace префикс не добавляется).
-- Поля PK из `rowkey` **всегда** инъектируются в JSON (см. `ValueCodecPhoenix#decodeRowKey(...)`). Добавлять их в `cf.list` не требуется.
+- Поля PK из `rowkey` **всегда** инъектируются в JSON (`ValueCodecPhoenix` → `PhoenixPkParser`). Добавлять их в `cf.list` не требуется.
 - Формат сообщения — **JSONEachRow**; метаполя и `_rowkey` включаются флагами `h2k.payload.include.*` (см. `docs/config.md`).
 
 ---

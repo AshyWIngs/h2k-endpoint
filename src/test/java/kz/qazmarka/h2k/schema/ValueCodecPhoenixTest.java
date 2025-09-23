@@ -1,7 +1,5 @@
 package kz.qazmarka.h2k.schema;
 
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.sql.Date;
 import java.sql.Time;
@@ -142,68 +140,62 @@ class ValueCodecPhoenixTest {
     // --- Вспомогательные алгоритмы (частные методы через рефлексию)
 
     @Nested
-    @DisplayName("Нормализация имён типов (normalizeTypeName)")
-    class NormalizeTypeName {
+    @DisplayName("Реестр типов Phoenix")
+    class TypeRegistry {
 
         @Test
-        @DisplayName("VARCHAR(100) / DECIMAL(10,2) / ARRAY<T> / T[] / подчёркивания / пробелы")
-        void normalize_various_forms() throws Exception {
-            Method m = ValueCodecPhoenix.class.getDeclaredMethod("normalizeTypeName", String.class);
-            m.setAccessible(true);
+        @DisplayName("Поддерживается нормализация скобок, массивов и синонимов")
+        void resolve_handles_various_forms() {
+            FakeRegistry reg = new FakeRegistry();
+            PhoenixColumnTypeRegistry types = new PhoenixColumnTypeRegistry(reg);
 
-            assertEquals("VARCHAR", invokeNorm(m, "VARCHAR(100)"));
-            assertEquals("DECIMAL", invokeNorm(m, "DECIMAL(10,2)"));
-            assertEquals("VARCHAR ARRAY", invokeNorm(m, "ARRAY<VARCHAR>"));
-            assertEquals("INTEGER ARRAY", invokeNorm(m, "INTEGER[]"));
-            assertEquals("UNSIGNED INT", invokeNorm(m, "UNSIGNED_INT"));
-            assertEquals("UNSIGNED INT", invokeNorm(m, "  unsigned   int  "));
-            assertEquals("VARCHAR", invokeNorm(m, null));
-            assertEquals("VARCHAR", invokeNorm(m, ""));
-        }
+            reg.with("C1", "VARCHAR(100)");
+            assertEquals(org.apache.phoenix.schema.types.PVarchar.INSTANCE, types.resolve(TBL, "C1"));
 
-        private String invokeNorm(Method m, String in) throws InvocationTargetException, IllegalAccessException {
-            return (String) m.invoke(null, in);
+            reg.with("C2", "DECIMAL(10,2)");
+            assertEquals(org.apache.phoenix.schema.types.PDecimal.INSTANCE, types.resolve(TBL, "C2"));
+
+            reg.with("C3", "ARRAY<VARCHAR>");
+            assertEquals(org.apache.phoenix.schema.types.PVarcharArray.INSTANCE, types.resolve(TBL, "C3"));
+
+            reg.with("C4", "UNSIGNED_INT");
+            assertEquals(org.apache.phoenix.schema.types.PUnsignedInt.INSTANCE, types.resolve(TBL, "C4"));
+
+            reg.with("C5", "  unsigned   int  ");
+            assertEquals(org.apache.phoenix.schema.types.PUnsignedInt.INSTANCE, types.resolve(TBL, "C5"));
+
+            reg.with("C6", "STRING");
+            assertEquals(org.apache.phoenix.schema.types.PVarchar.INSTANCE, types.resolve(TBL, "C6"));
+
+            reg.with("C7", "UNKNOWN_TYPE");
+            assertEquals(org.apache.phoenix.schema.types.PVarchar.INSTANCE, types.resolve(TBL, "C7"));
         }
     }
 
     @Nested
-    @DisplayName("Конвертация массивов в List (toListFromRawArray)")
+    @DisplayName("Конвертация массивов в List")
     class ArrayConversion {
 
         @Test
         @DisplayName("Object[] → List без копий")
-        void object_array_to_list() throws Exception {
-            Method m = ValueCodecPhoenix.class.getDeclaredMethod("toListFromRawArray", Object.class);
-            m.setAccessible(true);
-
+        void object_array_to_list() {
             Object[] src = new Object[] {"a", "b", "c"};
-            @SuppressWarnings("unchecked")
-            List<Object> out = (List<Object>) m.invoke(null, (Object) src);
-
+            List<Object> out = PhoenixValueNormalizer.toListFromRawArray(src);
             assertEquals(Arrays.asList("a","b","c"), out);
-            assertEquals(3, out.size());
         }
 
         @Test
         @DisplayName("Примитивные массивы → List с боксингом")
-        void primitive_arrays_boxed() throws Exception {
-            Method m = ValueCodecPhoenix.class.getDeclaredMethod("toListFromRawArray", Object.class);
-            m.setAccessible(true);
-
-            List<Object> ints = invokeList(m, new int[] {1,2,3});
-            List<Object> longs = invokeList(m, new long[] {4L,5L});
-            List<Object> bools = invokeList(m, new boolean[] {true,false});
-            List<Object> empty = invokeList(m, new byte[0]);
+        void primitive_arrays_boxed() {
+            List<Object> ints = PhoenixValueNormalizer.toListFromRawArray(new int[] {1,2,3});
+            List<Object> longs = PhoenixValueNormalizer.toListFromRawArray(new long[] {4L,5L});
+            List<Object> bools = PhoenixValueNormalizer.toListFromRawArray(new boolean[] {true,false});
+            List<Object> empty = PhoenixValueNormalizer.toListFromRawArray(new byte[0]);
 
             assertEquals(Arrays.asList(1,2,3), ints);
             assertEquals(Arrays.asList(4L,5L), longs);
             assertEquals(Arrays.asList(true,false), bools);
             assertTrue(empty.isEmpty());
-        }
-
-        @SuppressWarnings("unchecked")
-        private List<Object> invokeList(Method m, Object array) throws InvocationTargetException, IllegalAccessException {
-            return (List<Object>) m.invoke(null, array);
         }
     }
 
@@ -400,31 +392,15 @@ class ValueCodecPhoenixTest {
         @Test
         @DisplayName("ARRAY → List<Object> для разных входов")
         void arrays_become_list() {
-            try {
-                Method m = ValueCodecPhoenix.class.getDeclaredMethod("toListFromRawArray", Object.class);
-                m.setAccessible(true);
-
-                assertAll(
-                        () -> assertEquals(Arrays.asList("a", "b"), invokeList(m, new Object[]{"a", "b"})),
-                        () -> assertEquals(Arrays.asList(1, 2), invokeList(m, new int[]{1, 2})),
-                        () -> assertEquals(Arrays.asList((short) 1, (short) 2), invokeList(m, new short[]{1, 2})),
-                        () -> assertEquals(Arrays.asList('x', 'y'), invokeList(m, new char[]{'x', 'y'})),
-                        () -> assertEquals(Arrays.asList(1L, 2L, 3L), invokeList(m, new long[]{1, 2, 3})),
-                        () -> assertEquals(Arrays.asList(1.0, 2.5), invokeList(m, new double[]{1.0, 2.5})),
-                        () -> assertEquals(Arrays.asList(true, false), invokeList(m, new boolean[]{true, false}))
-                );
-            } catch (NoSuchMethodException e) {
-                throw new AssertionError("Ошибка при тестировании arrays_become_list", e);
-            }
-        }
-
-        @SuppressWarnings("unchecked")
-        private List<Object> invokeList(Method m, Object array) {
-            try {
-                return (List<Object>) m.invoke(null, array);
-            } catch (IllegalAccessException | InvocationTargetException e) {
-                throw new AssertionError("Ошибка вызова toListFromRawArray через рефлексию", e);
-            }
+            assertAll(
+                    () -> assertEquals(Arrays.asList("a", "b"), PhoenixValueNormalizer.toListFromRawArray(new Object[]{"a", "b"})),
+                    () -> assertEquals(Arrays.asList(1, 2), PhoenixValueNormalizer.toListFromRawArray(new int[]{1, 2})),
+                    () -> assertEquals(Arrays.asList((short) 1, (short) 2), PhoenixValueNormalizer.toListFromRawArray(new short[]{1, 2})),
+                    () -> assertEquals(Arrays.asList('x', 'y'), PhoenixValueNormalizer.toListFromRawArray(new char[]{'x', 'y'})),
+                    () -> assertEquals(Arrays.asList(1L, 2L, 3L), PhoenixValueNormalizer.toListFromRawArray(new long[]{1, 2, 3})),
+                    () -> assertEquals(Arrays.asList(1.0, 2.5), PhoenixValueNormalizer.toListFromRawArray(new double[]{1.0, 2.5})),
+                    () -> assertEquals(Arrays.asList(true, false), PhoenixValueNormalizer.toListFromRawArray(new boolean[]{true, false}))
+            );
         }
 
         @Test
@@ -453,7 +429,7 @@ class ValueCodecPhoenixTest {
     @DisplayName("Anchors to mark nested test classes as used")
     void anchors() {
         Class<?>[] refs = {
-                Positive.class, Negative.class, NormalizeTypeName.class, ArrayConversion.class,
+                Positive.class, Negative.class, TypeRegistry.class, ArrayConversion.class,
                 TemporalPositive.class, BinaryPositive.class, DecimalNegative.class, WarnOnce.class, Concurrency.class,
                 Invariants.class
         };

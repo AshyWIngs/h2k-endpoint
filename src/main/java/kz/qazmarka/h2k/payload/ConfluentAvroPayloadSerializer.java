@@ -37,6 +37,7 @@ final class ConfluentAvroPayloadSerializer implements TableAwarePayloadSerialize
     private static final byte MAGIC_BYTE = 0x0;
     private static final int MAGIC_HEADER_LENGTH = 5;
     private static final int HTTP_TIMEOUT_MS = 10_000;
+    private static final char[] HEX = "0123456789ABCDEF".toCharArray();
 
     private final AvroSchemaRegistry localRegistry;
     private final List<String> registryUrls;
@@ -242,13 +243,19 @@ final class ConfluentAvroPayloadSerializer implements TableAwarePayloadSerialize
     }
 
     private static String escapeForJson(String s) {
-        StringBuilder sb = new StringBuilder(s.length() + 16);
+        StringBuilder sb = new StringBuilder(s.length() + 32);
         for (int i = 0; i < s.length(); i++) {
             char c = s.charAt(i);
             switch (c) {
-                case '\\':
                 case '"':
+                case '\\':
                     sb.append('\\').append(c);
+                    break;
+                case '\b':
+                    sb.append("\\b");
+                    break;
+                case '\f':
+                    sb.append("\\f");
                     break;
                 case '\n':
                     sb.append("\\n");
@@ -260,10 +267,22 @@ final class ConfluentAvroPayloadSerializer implements TableAwarePayloadSerialize
                     sb.append("\\t");
                     break;
                 default:
-                    sb.append(c);
+                    if (c < 0x20 || c == 0x2028 || c == 0x2029) {
+                        sb.append('\\').append('u');
+                        appendHex(sb, c);
+                    } else {
+                        sb.append(c);
+                    }
             }
         }
         return sb.toString();
+    }
+
+    private static void appendHex(StringBuilder sb, int ch) {
+        sb.append(HEX[(ch >>> 12) & 0x0F])
+          .append(HEX[(ch >>> 8) & 0x0F])
+          .append(HEX[(ch >>> 4) & 0x0F])
+          .append(HEX[ch & 0x0F]);
     }
 
     private static int parseId(String body, String subject) {

@@ -43,9 +43,9 @@
    h2k.avro.sr.auth.basic.username=svc-hbase
    h2k.avro.sr.auth.basic.password=...           # опционально
    h2k.avro.subject.strategy=table               # qualifier | table | table-lower | table-upper
-   h2k.avro.subject.prefix=hbase-
-   h2k.avro.subject.suffix=-value
-   ```
+ h2k.avro.subject.prefix=hbase-
+  h2k.avro.subject.suffix=-value
+  ```
 
    > В режиме `confluent` поддерживается только `h2k.payload.format=avro-binary`.
 
@@ -55,7 +55,12 @@
 4. **Расширенная авторизация** — пока поддерживается только Basic. Для TLS/OAuth добавьте ключи
    в секцию `h2k.avro.sr.auth.*` и реализуйте обработку при необходимости.
 
-5. **Диагностика** — при ошибках регистрации в логах появляются WARN с адресом SR и телом ответа.
+5. **Экранирование JSON** — перед отправкой в Schema Registry локальная схема проходит безопасное
+   экранирование: кавычки, управляющие символы (`\n`, `\r`, `\t`, `\u0000`…`\u001F`, `\u2028/\u2029`)
+   кодируются по правилам JSON. Это устраняет проблемы с doc/description, где встречаются переносы и
+   управляющие символы, и гарантирует валидный payload для SR 5.3.x.
+
+6. **Диагностика** — при ошибках регистрации в логах появляются WARN с адресом SR и телом ответа.
    Помните о бэкоффах и кешировании schemaId: повторные сообщения не бьют SR повторно.
 
 ## Негативные сценарии и рекомендованные тесты

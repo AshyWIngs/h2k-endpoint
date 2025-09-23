@@ -1,23 +1,28 @@
 package kz.qazmarka.h2k.kafka;
 
 import java.lang.reflect.Constructor;
-import java.lang.reflect.InvocationHandler;
-import java.lang.reflect.Method;
-import java.lang.reflect.Proxy;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeoutException;
 
+import org.apache.kafka.clients.admin.AlterConfigOp;
+import org.apache.kafka.clients.admin.Config;
+import org.apache.kafka.clients.admin.ConfigEntry;
 import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.admin.TopicDescription;
 import org.apache.kafka.common.KafkaFuture;
 import org.apache.kafka.common.Node;
 import org.apache.kafka.common.TopicPartitionInfo;
+import org.apache.kafka.common.config.ConfigResource;
 import org.apache.kafka.common.errors.TopicExistsException;
 import org.apache.kafka.common.errors.UnknownTopicOrPartitionException;
 import org.apache.kafka.common.internals.KafkaFutureImpl;
@@ -41,12 +46,12 @@ import org.junit.jupiter.api.Test;
  *  • Провалидировать простые внутренние метрики (счётчики событий) и отсутствие лишних исключений в «штатных» сценариях.
  *
  * Подход:
- *  • Без Mockito и внешних зависимостей — используется JDK Proxy поверх приватного интерфейса
- *    {@code TopicEnsurer$TopicAdmin}. Это делает тест изолированным и предсказуемым.
+ *  • Без Mockito и внешних зависимостей — используем лёгкий фейковый {@code KafkaTopicAdmin}, что делает тест
+ *    изолированным и предсказуемым.
  *  • Для Future'ов — {@link KafkaFutureImpl}: управляем завершением (успех/исключение) или намеренно
  *    оставляем незавершённым (для эмуляции таймаута).
- *  • Экземпляр {@link TopicEnsurer} создаётся через reflection (приватный конструктор), куда
- *    инжектится прокси‑админ.
+ *  • Экземпляр {@link TopicEnsurer} создаётся через reflection (приватный конструктор) с подставленным фейковым
+ *    админом.
  *
  * Производительность тестов:
  *  • Таймауты в тестах малы (10–25 мс), внешних сетевых вызовов нет — запуск быстрый и «дешёвый» для CI.
@@ -118,123 +123,99 @@ class TopicEnsurerTest {
     }
 
     /**
-     * Тестовая реализация «админа» поверх JDK Proxy.
-     *
-     * Поддерживает приватный интерфейс {@code TopicEnsurer$TopicAdmin} с методами:
-     *  • {@code describeTopics(Set<String>)} → {@code Map<String, KafkaFuture<TopicDescription>>}
-     *  • {@code createTopics(List<NewTopic>)} → {@code Map<String, KafkaFuture<Void>>}
-     *  • {@code createTopic(NewTopic, long timeoutMs)} → синхронный путь (OK/исключение)
-     *  • {@code close(Duration)} → no‑op
-     *
-     * В поведение методов можно «вписать» сценарии через fluent‑настройки {@code will*}.
+     * Тестовая реализация {@link KafkaTopicAdmin}, позволяющая задавать сценарии вызовов через fluent-методы.
+     * По умолчанию все операции завершаются успешно.
      */
-    private static final class FakeAdmin implements InvocationHandler {
+    private static final class FakeAdmin implements KafkaTopicAdmin {
         final Map<String, KafkaFuture<TopicDescription>> describeMap = new HashMap<>();
         final Map<String, KafkaFuture<Void>> createMap = new HashMap<>();
         final Map<String, Action> createSingle = new HashMap<>();
-        // Захватываем последние вызовы create для проверок в тестах
         final List<NewTopic> createdBatch = new ArrayList<>();
-        NewTopic createdSingle = null;
+        final Map<ConfigResource, KafkaFuture<Config>> describeConfigMap = new HashMap<>();
+        NewTopic createdSingle;
 
-        /**
-         * Сценарии для одиночного {@code createTopic}.
-         * OK — успех; EXISTS — гонка (оборачивается в {@link TopicExistsException});
-         * TIMEOUT — бросается {@link java.util.concurrent.TimeoutException};
-         * INTERRUPT — имитация {@link InterruptedException};
-         * FAIL — общая ошибка выполнения.
-         */
         enum Action { OK, EXISTS, TIMEOUT, INTERRUPT, FAIL }
 
-        /**
-         * Задать результат describe для указанного топика как «успешно».
-         * @param topic имя топика
-         * @return this (для чейнинга)
-         */
         FakeAdmin willDescribeOk(String topic) { describeMap.put(topic, okDesc(topic)); return this; }
 
-        /**
-         * Задать результат describe для указанного топика как «не найден» (UnknownTopicOrPartitionException).
-         * @param topic имя топика
-         * @return this (для чейнинга)
-         */
         FakeAdmin willDescribeNotFound(String topic) { describeMap.put(topic, notFound()); return this; }
 
-        /**
-         * Задать результат describe для указанного топика как «таймаут» (never completes).
-         * @param topic имя топика
-         * @return this (для чейнинга)
-         */
         FakeAdmin willDescribeTimeout(String topic) { describeMap.put(topic, neverCompletes()); return this; }
 
-        /**
-         * Задать результат createTopics для указанного топика как успешный.
-         * @param topic имя топика
-         * @return this (для чейнинга)
-         */
         FakeAdmin willCreateOk(String topic) { createMap.put(topic, okCreate()); return this; }
 
-        /**
-         * Задать сценарий одиночного createTopic для указанного топика.
-         * @param topic имя топика
-         * @param a сценарий (OK, EXISTS, TIMEOUT, INTERRUPT, FAIL)
-         * @return this (для чейнинга)
-         */
         FakeAdmin willCreateTopicSingle(String topic, Action a) { createSingle.put(topic, a); return this; }
 
-        /**
-         * Центральная точка прокси: маршрутизирует вызовы приватного интерфейса TopicAdmin
-         * к подготовленным сценариям. Используется только в пределах теста.
-         */
-        @Override public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
-            String name = method.getName();
-            switch (name) {
-                case "describeTopics": {
-                    @SuppressWarnings("unchecked")
-                    Set<String> names = (Set<String>) args[0];
-                    Map<String, KafkaFuture<TopicDescription>> out = new LinkedHashMap<>();
-                    for (String t : names) {
-                        out.put(t, describeMap.getOrDefault(t, okDesc(t)));
-                    }
-                    return out;
-                }
-                case "createTopics": {
-                    @SuppressWarnings("unchecked")
-                    List<NewTopic> nts = (List<NewTopic>) args[0];
-                    // зафиксируем параметры созданных топиков для последующих проверок
-                    createdBatch.clear();
-                    createdBatch.addAll(nts);
-                    Map<String, KafkaFuture<Void>> out = new LinkedHashMap<>();
-                    for (NewTopic nt : nts) {
-                        String t = nt.name();
-                        out.put(t, createMap.getOrDefault(t, okCreate()));
-                    }
-                    return out;
-                }
-                case "createTopic": {
-                    NewTopic nt = (NewTopic) args[0];
-                    // зафиксируем параметры созданного топика для последующих проверок
-                    createdSingle = nt;
-                    String t = nt.name();
-                    Action a = createSingle.getOrDefault(t, Action.OK);
-                    switch (a) {
-                        case OK: return null;
-                        case EXISTS: throw new java.util.concurrent.ExecutionException(new TopicExistsException("exists"));
-                        case TIMEOUT: throw new java.util.concurrent.TimeoutException("timeout");
-                        case INTERRUPT: throw new InterruptedException("interrupt");
-                        case FAIL: throw new java.util.concurrent.ExecutionException(new RuntimeException("create-fail"));
-                        default: return null;
-                    }
-                }
-                case "close": return null;
-                default: throw new UnsupportedOperationException("Unexpected method: " + name);
+
+        @Override
+        public Map<String, KafkaFuture<TopicDescription>> describeTopics(Set<String> names) {
+            Map<String, KafkaFuture<TopicDescription>> out = new LinkedHashMap<>();
+            for (String t : names) {
+                out.put(t, describeMap.getOrDefault(t, okDesc(t)));
             }
+            return out;
+        }
+
+        @Override
+        public Map<String, KafkaFuture<Void>> createTopics(List<NewTopic> newTopics) {
+            createdBatch.clear();
+            createdBatch.addAll(newTopics);
+            Map<String, KafkaFuture<Void>> out = new LinkedHashMap<>();
+            for (NewTopic nt : newTopics) {
+                out.put(nt.name(), createMap.getOrDefault(nt.name(), okCreate()));
+            }
+            return out;
+        }
+
+        @Override
+        public void createTopic(NewTopic topic, long timeoutMs)
+                throws InterruptedException, ExecutionException, TimeoutException {
+            createdSingle = topic;
+            Action a = createSingle.getOrDefault(topic.name(), Action.OK);
+            switch (a) {
+                case OK: return;
+                case EXISTS: throw new ExecutionException(new TopicExistsException("exists"));
+                case TIMEOUT: throw new TimeoutException("timeout");
+                case INTERRUPT: throw new InterruptedException("interrupt");
+                case FAIL: throw new ExecutionException(new RuntimeException("create-fail"));
+            }
+        }
+
+        @Override
+        public void close(Duration timeout) {
+            // no-op
+        }
+
+        @Override
+        public void increasePartitions(String topic, int newCount, long timeoutMs) {
+            // no-op for tests: поведение TopicEnsurer по увеличению партиций здесь не проверяется
+        }
+
+        @Override
+        public Map<ConfigResource, KafkaFuture<Config>> describeConfigs(Collection<ConfigResource> resources) {
+            Map<ConfigResource, KafkaFuture<Config>> out = new LinkedHashMap<>();
+            for (ConfigResource r : resources) {
+                out.put(r, describeConfigMap.getOrDefault(r, KafkaFuture.completedFuture(emptyConfig())));
+            }
+            return out;
+        }
+
+        @Override
+        public void incrementalAlterConfigs(
+                Map<ConfigResource, Collection<AlterConfigOp>> ops,
+                long timeoutMs) {
+            // no-op for tests: в этих тестах не проверяем фактическую передачу alter-опов
+        }
+
+        private static Config emptyConfig() {
+            return new Config(Collections.<ConfigEntry>emptyList());
         }
     }
 
     /**
-     * Создаёт {@link TopicEnsurer} через приватный конструктор и инжектит тестовый админ (JDK Proxy).
+     * Создаёт {@link TopicEnsurer} через приватный конструктор, подставляя фейковый {@link KafkaTopicAdmin}.
      *
-     * @param fa               подготовленный обработчик прокси
+     * @param fa               подготовленный фейк-админ
      * @param adminTimeoutMs   таймаут админ‑вызовов (мс)
      * @param partitions       число разделов по умолчанию при создании
      * @param replication      фактор репликации по умолчанию при создании
@@ -249,29 +230,36 @@ class TopicEnsurerTest {
                                            short replication,
                                            Map<String, String> topicConfigs,
                                            long unknownBackoffMs) throws Exception {
-        Class<?> ta = Class.forName("kz.qazmarka.h2k.kafka.TopicEnsurer$TopicAdmin");
-        Object proxyAdmin = Proxy.newProxyInstance(
-                ta.getClassLoader(), new Class<?>[]{ta}, fa);
+        Map<String, String> configsCopy = topicConfigs == null
+                ? Collections.<String, String>emptyMap()
+                : Collections.unmodifiableMap(new HashMap<>(topicConfigs));
 
-        Class<?> paramsBuilderClass = Class.forName("kz.qazmarka.h2k.kafka.TopicEnsurer$TopicParams$Builder");
-        Object builder = paramsBuilderClass.getDeclaredConstructor().newInstance();
-        paramsBuilderClass.getDeclaredMethod("partitions", int.class).invoke(builder, partitions);
-        paramsBuilderClass.getDeclaredMethod("replication", short.class).invoke(builder, replication);
-        paramsBuilderClass.getDeclaredMethod("configs", Map.class).invoke(builder, topicConfigs);
-        paramsBuilderClass.getDeclaredMethod("unknownBackoffMs", long.class).invoke(builder, unknownBackoffMs);
-        paramsBuilderClass.getDeclaredMethod("topicNameMaxLen", int.class).invoke(builder, 249);
-        paramsBuilderClass.getDeclaredMethod("sanitizer", java.util.function.UnaryOperator.class)
-                .invoke(builder, java.util.function.UnaryOperator.identity());
-        paramsBuilderClass.getDeclaredMethod("ensureIncreasePartitions", boolean.class).invoke(builder, false);
-        paramsBuilderClass.getDeclaredMethod("ensureDiffConfigs", boolean.class).invoke(builder, false);
+        // TopicEnsureConfig переведён на Builder. Собираем конфиг явно,
+        // чтобы не зависеть от порядка позиционных аргументов.
+        TopicEnsureConfig config = TopicEnsureConfig.builder()
+                // длина имени топика (как было 249)
+                .topicNameMaxLen(249)
+                // санитайзер имён топиков — прежний identity()
+                .topicSanitizer(java.util.function.UnaryOperator.identity())
+                // значения по умолчанию для создаваемых топиков
+                .topicPartitions(partitions)
+                .topicReplication(replication)
+                // create-конфиги топика (может быть пустая Map)
+                .topicConfigs(configsCopy)
+                // флаги "ensure" из прежнего конструктора
+                .ensureIncreasePartitions(false)
+                .ensureDiffConfigs(false)
+                // таймауты
+                .adminTimeoutMs(adminTimeoutMs)
+                .unknownBackoffMs(unknownBackoffMs)
+                .build();
 
-        Object params = paramsBuilderClass.getDeclaredMethod("build").invoke(builder);
+        TopicEnsureState state = new TopicEnsureState();
+        TopicEnsureService service = new TopicEnsureService(fa, config, state);
 
-        Class<?> paramsClass = Class.forName("kz.qazmarka.h2k.kafka.TopicEnsurer$TopicParams");
-        Constructor<?> ctor = TopicEnsurer.class.getDeclaredConstructor(
-                ta, long.class, paramsClass);
+        Constructor<TopicEnsurer> ctor = TopicEnsurer.class.getDeclaredConstructor(TopicEnsureService.class);
         ctor.setAccessible(true);
-        return (TopicEnsurer) ctor.newInstance(proxyAdmin, adminTimeoutMs, params);
+        return ctor.newInstance(service);
     }
 
     /**

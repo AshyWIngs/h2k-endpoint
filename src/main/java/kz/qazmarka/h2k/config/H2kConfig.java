@@ -8,8 +8,6 @@ import java.util.Properties;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.TableName;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import kz.qazmarka.h2k.util.Parsers;
 
@@ -30,24 +28,23 @@ import kz.qazmarka.h2k.util.Parsers;
  * пути предусмотрен предвычисленный флаг {@link #isRowkeyBase64()}.
  */
 public final class H2kConfig {
-    private static final Logger LOG = LoggerFactory.getLogger(H2kConfig.class);
     /**
      * Дефолтный лимит длины имени Kafka‑топика (символов).
      * Значение 249 совместимо со старыми версиями брокеров Kafka.
      */
-    private static final int DEFAULT_TOPIC_MAX_LENGTH = 249;
+    static final int DEFAULT_TOPIC_MAX_LENGTH = 249;
     /** Плейсхолдер в шаблоне топика: будет заменён на "<namespace>_<qualifier>". */
-    private static final String PLACEHOLDER_TABLE = "${table}";
+    static final String PLACEHOLDER_TABLE = "${table}";
     /** Плейсхолдер в шаблоне топика: будет заменён на имя namespace таблицы. */
-    private static final String PLACEHOLDER_NAMESPACE = "${namespace}";
+    static final String PLACEHOLDER_NAMESPACE = "${namespace}";
     /** Плейсхолдер в шаблоне топика: будет заменён на qualifier (имя таблицы без namespace). */
-    private static final String PLACEHOLDER_QUALIFIER = "${qualifier}";
+    static final String PLACEHOLDER_QUALIFIER = "${qualifier}";
     /** Строковое значение способа кодирования rowkey по умолчанию — HEX. */
-    private static final String ROWKEY_ENCODING_HEX = "hex";
+    static final String ROWKEY_ENCODING_HEX = "hex";
     /** Строковое значение способа кодирования rowkey — Base64. */
-    private static final String ROWKEY_ENCODING_BASE64 = "base64";
+    static final String ROWKEY_ENCODING_BASE64 = "base64";
     /** Имя namespace HBase по умолчанию. */
-    private static final String HBASE_DEFAULT_NS = "default";
+    static final String HBASE_DEFAULT_NS = "default";
 
     /** Формат сериализации payload. */
     public enum PayloadFormat { JSON_EACH_ROW, AVRO_BINARY, AVRO_JSON }
@@ -57,65 +54,65 @@ public final class H2kConfig {
 
     // ==== Дополнительные ключи конфигурации (для формата и AVRO) ====
     /** Формат сериализации payload: json_each_row | avro_binary | avro_json */
-    private static final String K_PAYLOAD_FORMAT = "h2k.payload.format";
+    static final String K_PAYLOAD_FORMAT = "h2k.payload.format";
     /** FQCN фабрики сериализаторов (SPI), например kz.qazmarka.h2k.payload.SerializerFactory */
-    private static final String K_PAYLOAD_SERIALIZER_FACTORY = "h2k.payload.serializer.factory";
+    static final String K_PAYLOAD_SERIALIZER_FACTORY = "h2k.payload.serializer.factory";
     // Индивидуальные AVRO-ключи публикуются через внутренний класс Keys; здесь оставляем только общий префикс.
     /** Префикс для всех AVRO-настроек */
-    private static final String K_AVRO_PREFIX              = "h2k.avro.";
+    static final String K_AVRO_PREFIX              = "h2k.avro.";
     /** Ключ режима Avro: generic | confluent. */
-    private static final String K_AVRO_MODE                = "h2k.avro.mode";
+    static final String K_AVRO_MODE                = "h2k.avro.mode";
     /** Ключ каталога локальных Avro-схем. */
-    private static final String K_AVRO_SCHEMA_DIR          = "h2k.avro.schema.dir";
+    static final String K_AVRO_SCHEMA_DIR          = "h2k.avro.schema.dir";
     /** Основной ключ списка URL Schema Registry (через запятую). */
-    private static final String K_AVRO_SR_URLS             = "h2k.avro.sr.urls";
+    static final String K_AVRO_SR_URLS             = "h2k.avro.sr.urls";
     /** Алиас для совместимости: конфигурация могла использовать schema.registry без .urls. */
-    private static final String K_AVRO_SR_URLS_LEGACY      = "h2k.avro.schema.registry";
+    static final String K_AVRO_SR_URLS_LEGACY      = "h2k.avro.schema.registry";
     /** Алиас c единственным URL. */
-    private static final String K_AVRO_SR_URL_LEGACY       = "h2k.avro.schema.registry.url";
+    static final String K_AVRO_SR_URL_LEGACY       = "h2k.avro.schema.registry.url";
     /** Префикс авторизационных параметров Schema Registry. */
-    private static final String K_AVRO_SR_AUTH_PREFIX      = "h2k.avro.sr.auth.";
+    static final String K_AVRO_SR_AUTH_PREFIX      = "h2k.avro.sr.auth.";
 
     // ==== Ключи конфигурации (собраны в одном месте для устранения "хардкода") ====
     /**
      * Шаблон имени Kafka‑топика (поддерживаются плейсхолдеры ${table}, ${namespace}, ${qualifier}).
      * Используется в {@link #topicFor(TableName)}.
      */
-    private static final String K_TOPIC_PATTERN = "h2k.topic.pattern";
+    static final String K_TOPIC_PATTERN = "h2k.topic.pattern";
     /** Максимально допустимая длина имени Kafka‑топика. */
-    private static final String K_TOPIC_MAX_LENGTH = "h2k.topic.max.length";
+    static final String K_TOPIC_MAX_LENGTH = "h2k.topic.max.length";
     /** CSV‑список имён CF, подлежащих экспорту. */
-    private static final String K_CF_LIST = "h2k.cf.list";
+    static final String K_CF_LIST = "h2k.cf.list";
     /** Флаг включения rowkey в JSON‑payload. */
-    private static final String K_PAYLOAD_INCLUDE_ROWKEY = "h2k.payload.include.rowkey";
+    static final String K_PAYLOAD_INCLUDE_ROWKEY = "h2k.payload.include.rowkey";
     /** Способ кодирования rowkey: "hex" (по умолчанию) или "base64". */
-    private static final String K_ROWKEY_ENCODING = "h2k.rowkey.encoding";
+    static final String K_ROWKEY_ENCODING = "h2k.rowkey.encoding";
     /** Флаг добавления метаданных ячеек (cf/qualifier/ts) в payload. */
-    private static final String K_PAYLOAD_INCLUDE_META = "h2k.payload.include.meta";
+    static final String K_PAYLOAD_INCLUDE_META = "h2k.payload.include.meta";
     /** Флаг добавления признака происхождения записи из WAL. */
-    private static final String K_PAYLOAD_INCLUDE_META_WAL = "h2k.payload.include.meta.wal";
+    static final String K_PAYLOAD_INCLUDE_META_WAL = "h2k.payload.include.meta.wal";
     /** Флаг автосоздания недостающих топиков. */
-    private static final String K_ENSURE_TOPICS = "h2k.ensure.topics";
+    static final String K_ENSURE_TOPICS = "h2k.ensure.topics";
     /** Разрешать ли автоматическое увеличение числа партиций при ensureTopics. По умолчанию выключено. */
-    private static final String K_ENSURE_INCREASE_PARTITIONS = "h2k.ensure.increase.partitions";
+    static final String K_ENSURE_INCREASE_PARTITIONS = "h2k.ensure.increase.partitions";
     /** Разрешать ли дифф‑применение topic‑конфигов (incrementalAlterConfigs) при ensureTopics. По умолчанию выключено. */
-    private static final String K_ENSURE_DIFF_CONFIGS = "h2k.ensure.diff.configs";
+    static final String K_ENSURE_DIFF_CONFIGS = "h2k.ensure.diff.configs";
     /** Целевое число партиций создаваемого топика. */
-    private static final String K_TOPIC_PARTITIONS = "h2k.topic.partitions";
+    static final String K_TOPIC_PARTITIONS = "h2k.topic.partitions";
     /** Целевой фактор репликации создаваемого топика. */
-    private static final String K_TOPIC_REPLICATION_FACTOR = "h2k.topic.replication";
+    static final String K_TOPIC_REPLICATION_FACTOR = "h2k.topic.replication";
     /** Таймаут операций Kafka AdminClient (мс) при ensureTopics. */
-    private static final String K_ADMIN_TIMEOUT_MS = "h2k.admin.timeout.ms";
+    static final String K_ADMIN_TIMEOUT_MS = "h2k.admin.timeout.ms";
     /** Явное значение client.id для Kafka AdminClient (для читаемых логов брокера). */
-    private static final String K_ADMIN_CLIENT_ID = "h2k.admin.client.id";
+    static final String K_ADMIN_CLIENT_ID = "h2k.admin.client.id";
     /** Базовый backoff (мс) между повторами AdminClient при «неуверенных» ошибках. */
-    private static final String K_ENSURE_UNKNOWN_BACKOFF_MS = "h2k.ensure.unknown.backoff.ms";
+    static final String K_ENSURE_UNKNOWN_BACKOFF_MS = "h2k.ensure.unknown.backoff.ms";
     /** Каждые N отправок ожидать подтверждение (ограничение памяти/pressure). */
-    private static final String K_PRODUCER_AWAIT_EVERY = "h2k.producer.await.every";
+    static final String K_PRODUCER_AWAIT_EVERY = "h2k.producer.await.every";
     /** Таймаут ожидания подтверждения батча (мс). */
-    private static final String K_PRODUCER_AWAIT_TIMEOUT_MS = "h2k.producer.await.timeout.ms";
+    static final String K_PRODUCER_AWAIT_TIMEOUT_MS = "h2k.producer.await.timeout.ms";
     /** CSV‑карта переопределений длины соли rowkey в байтах по таблицам. */
-    private static final String K_SALT_MAP = "h2k.salt.map";
+    static final String K_SALT_MAP = "h2k.salt.map";
 
     /**
      * Публичные ключи конфигурации h2k.* для использования в других пакетах проекта
@@ -197,47 +194,47 @@ public final class H2kConfig {
 
     // ==== Значения по умолчанию (в одном месте) ====
     /** Имя CF по умолчанию, если в конфигурации не задано явно. */
-    private static final String DEFAULT_CF_NAME = "0";
+    static final String DEFAULT_CF_NAME = "0";
     /** Базовое значение client.id для AdminClient (к нему добавляется hostname, если доступен). */
-    private static final String DEFAULT_ADMIN_CLIENT_ID = "h2k-admin";
+    static final String DEFAULT_ADMIN_CLIENT_ID = "h2k-admin";
     /** По умолчанию rowkey в payload отключён. */
-    private static final boolean DEFAULT_INCLUDE_ROWKEY = false;
+    static final boolean DEFAULT_INCLUDE_ROWKEY = false;
     /** По умолчанию метаданные колонок в payload отключены. */
-    private static final boolean DEFAULT_INCLUDE_META = false;
+    static final boolean DEFAULT_INCLUDE_META = false;
     /** По умолчанию признак происхождения из WAL отключён. */
-    private static final boolean DEFAULT_INCLUDE_META_WAL = false;
+    static final boolean DEFAULT_INCLUDE_META_WAL = false;
     /** По умолчанию null-поля в JSON не сериализуются. */
-    private static final boolean DEFAULT_JSON_SERIALIZE_NULLS = false;
+    static final boolean DEFAULT_JSON_SERIALIZE_NULLS = false;
     /** По умолчанию автосоздание топиков включено. */
-    private static final boolean DEFAULT_ENSURE_TOPICS = true;
+    static final boolean DEFAULT_ENSURE_TOPICS = true;
     /** По умолчанию увеличение партиций при ensureTopics отключено. */
-    private static final boolean DEFAULT_ENSURE_INCREASE_PARTITIONS = false;
+    static final boolean DEFAULT_ENSURE_INCREASE_PARTITIONS = false;
     /** По умолчанию дифф‑применение конфигов при ensureTopics отключено. */
-    private static final boolean DEFAULT_ENSURE_DIFF_CONFIGS = false;
+    static final boolean DEFAULT_ENSURE_DIFF_CONFIGS = false;
     /** Число партиций по умолчанию при создании топика. */
-    private static final int DEFAULT_TOPIC_PARTITIONS = 3;
+    static final int DEFAULT_TOPIC_PARTITIONS = 3;
     /** Фактор репликации по умолчанию при создании топика. */
-    private static final short DEFAULT_TOPIC_REPLICATION = 1;
+    static final short DEFAULT_TOPIC_REPLICATION = 1;
     /** Таймаут операций AdminClient по умолчанию, мс. */
-    private static final long DEFAULT_ADMIN_TIMEOUT_MS = 60000L;
+    static final long DEFAULT_ADMIN_TIMEOUT_MS = 60000L;
     /** Пауза между повторами при неопределённых ошибках AdminClient по умолчанию, мс. */
-    private static final long DEFAULT_UNKNOWN_BACKOFF_MS = 15000L;
+    static final long DEFAULT_UNKNOWN_BACKOFF_MS = 15000L;
     /**
      * Размер батча отправок по умолчанию (каждые N отправок ожидаем подтверждения),
      * баланс скорости и потребления памяти.
      */
-    private static final int DEFAULT_AWAIT_EVERY = 500;
+    static final int DEFAULT_AWAIT_EVERY = 500;
     /** Таймаут ожидания подтверждений батча по умолчанию, мс. */
-    private static final int DEFAULT_AWAIT_TIMEOUT_MS = 180000;
+    static final int DEFAULT_AWAIT_TIMEOUT_MS = 180000;
 
     /** По умолчанию диагностические счётчики BatchSender отключены. */
-    private static final boolean DEFAULT_PRODUCER_BATCH_COUNTERS_ENABLED = false;
+    static final boolean DEFAULT_PRODUCER_BATCH_COUNTERS_ENABLED = false;
     /** По умолчанию подробный DEBUG при неуспехе авто‑сброса отключён. */
-    private static final boolean DEFAULT_PRODUCER_BATCH_DEBUG_ON_FAILURE = false;
+    static final boolean DEFAULT_PRODUCER_BATCH_DEBUG_ON_FAILURE = false;
     /** Режим Avro по умолчанию. */
-    private static final AvroMode DEFAULT_AVRO_MODE = AvroMode.GENERIC;
+    static final AvroMode DEFAULT_AVRO_MODE = AvroMode.GENERIC;
     /** Каталог локальных Avro-схем по умолчанию. */
-    private static final String DEFAULT_AVRO_SCHEMA_DIR = "conf/avro";
+    static final String DEFAULT_AVRO_SCHEMA_DIR = "conf/avro";
 
     // ==== Базовые ====
     private final String bootstrap;
@@ -665,112 +662,9 @@ public final class H2kConfig {
      * @return полностью инициализированная иммутабельная конфигурация
      * @throws IllegalArgumentException если bootstrap пустой или не указан
      */
-    public static H2kConfig from(Configuration cfg, String bootstrap) {
-        if (bootstrap == null || bootstrap.trim().isEmpty()) {
-            throw new IllegalArgumentException("Отсутствует обязательный параметр bootstrap.servers: h2k.kafka.bootstrap.servers пустой или не задан");
-        }
-        bootstrap = bootstrap.trim();
+    public static H2kConfig from(Configuration cfg, String bootstrap) { return new H2kConfigLoader().load(cfg, bootstrap); }
 
-        Map<String, Integer> saltMap = Parsers.readSaltMap(cfg, K_SALT_MAP);
-        Map<String, Integer> capacityHints = Parsers.readCapacityHints(cfg, Keys.CAPACITY_HINTS, Keys.CAPACITY_HINT_PREFIX);
-
-        String topicPattern = Parsers.readTopicPattern(cfg, K_TOPIC_PATTERN, PLACEHOLDER_TABLE);
-        int topicMaxLength = Parsers.readIntMin(cfg, K_TOPIC_MAX_LENGTH, DEFAULT_TOPIC_MAX_LENGTH, 1);
-        String[] cfNames = Parsers.readCfNames(cfg, K_CF_LIST, DEFAULT_CF_NAME);
-        byte[][] cfBytes = Parsers.toUtf8Bytes(cfNames);
-
-        boolean includeRowKey = cfg.getBoolean(K_PAYLOAD_INCLUDE_ROWKEY, DEFAULT_INCLUDE_ROWKEY);
-        String rowkeyEncoding = Parsers.normalizeRowkeyEncoding(cfg.get(K_ROWKEY_ENCODING, ROWKEY_ENCODING_HEX));
-        final boolean rowkeyBase64 = ROWKEY_ENCODING_BASE64.equals(rowkeyEncoding);
-        boolean includeMeta = cfg.getBoolean(K_PAYLOAD_INCLUDE_META, DEFAULT_INCLUDE_META);
-        boolean includeMetaWal = cfg.getBoolean(K_PAYLOAD_INCLUDE_META_WAL, DEFAULT_INCLUDE_META_WAL);
-        boolean jsonSerializeNulls = cfg.getBoolean(Keys.JSON_SERIALIZE_NULLS, DEFAULT_JSON_SERIALIZE_NULLS);
-
-        // Формат сериализации и фабрика (через Parsers)
-        PayloadFormat payloadFormat = Parsers.readPayloadFormat(cfg, K_PAYLOAD_FORMAT, PayloadFormat.JSON_EACH_ROW);
-        String serializerFactoryClass = cfg.get(K_PAYLOAD_SERIALIZER_FACTORY, null);
-        AvroMode avroMode = Parsers.readAvroMode(cfg, K_AVRO_MODE, DEFAULT_AVRO_MODE);
-        String avroSchemaDir = Parsers.readStringOrDefault(cfg, K_AVRO_SCHEMA_DIR, DEFAULT_AVRO_SCHEMA_DIR);
-        java.util.List<String> avroSrUrls = Parsers.readCsvListFirstNonEmpty(cfg,
-                K_AVRO_SR_URLS,
-                K_AVRO_SR_URLS_LEGACY,
-                K_AVRO_SR_URL_LEGACY);
-        Map<String, String> avroSrAuth = Parsers.readWithPrefix(cfg, K_AVRO_SR_AUTH_PREFIX);
-        // Читаем все h2k.avro.* свойства разом (для pass-through) и удаляем известные ключи
-        Map<String, String> avroProps = Parsers.readWithPrefix(cfg, K_AVRO_PREFIX);
-        avroProps.remove("mode");
-        avroProps.remove("schema.dir");
-        avroProps.remove("sr.urls");
-        avroProps.remove("schema.registry");
-        avroProps.remove("schema.registry.url");
-        avroProps.keySet().removeIf(k -> k.startsWith("sr.auth."));
-
-        // По умолчанию автосоздание топиков включено (централизованный дефолт)
-        boolean ensureTopics = cfg.getBoolean(K_ENSURE_TOPICS, DEFAULT_ENSURE_TOPICS);
-        boolean ensureIncreasePartitions = cfg.getBoolean(K_ENSURE_INCREASE_PARTITIONS, DEFAULT_ENSURE_INCREASE_PARTITIONS);
-        boolean ensureDiffConfigs = cfg.getBoolean(K_ENSURE_DIFF_CONFIGS, DEFAULT_ENSURE_DIFF_CONFIGS);
-        int topicPartitions = cfg.getInt(K_TOPIC_PARTITIONS, DEFAULT_TOPIC_PARTITIONS);
-        if (topicPartitions < 1) {
-            LOG.warn("Некорректное значение {}={}, устанавливаю минимум: {}", K_TOPIC_PARTITIONS, topicPartitions, 1);
-            topicPartitions = 1;
-        }
-
-        short topicReplication = (short) cfg.getInt(K_TOPIC_REPLICATION_FACTOR, DEFAULT_TOPIC_REPLICATION);
-        if (topicReplication < 1) {
-            LOG.warn("Некорректное значение {}={}, устанавливаю минимум: {}", K_TOPIC_REPLICATION_FACTOR, topicReplication, 1);
-            topicReplication = 1;
-        }
-        long adminTimeoutMs = Parsers.readLong(cfg, K_ADMIN_TIMEOUT_MS, DEFAULT_ADMIN_TIMEOUT_MS);
-        String adminClientId = Parsers.buildAdminClientId(cfg, K_ADMIN_CLIENT_ID, DEFAULT_ADMIN_CLIENT_ID);
-        long unknownBackoffMs = cfg.getLong(K_ENSURE_UNKNOWN_BACKOFF_MS, DEFAULT_UNKNOWN_BACKOFF_MS);
-        if (unknownBackoffMs < 1L) {
-            LOG.warn("Некорректное значение {}={}, устанавливаю минимум: {} мс", K_ENSURE_UNKNOWN_BACKOFF_MS, unknownBackoffMs, 1);
-            unknownBackoffMs = 1L;
-        }
-        int awaitEvery = Parsers.readIntMin(cfg, K_PRODUCER_AWAIT_EVERY, DEFAULT_AWAIT_EVERY, 1);
-        int awaitTimeoutMs = Parsers.readIntMin(cfg, K_PRODUCER_AWAIT_TIMEOUT_MS, DEFAULT_AWAIT_TIMEOUT_MS, 1);
-        boolean producerBatchCountersEnabled = cfg.getBoolean(Keys.PRODUCER_BATCH_COUNTERS_ENABLED, DEFAULT_PRODUCER_BATCH_COUNTERS_ENABLED);
-        boolean producerBatchDebugOnFailure  = cfg.getBoolean(Keys.PRODUCER_BATCH_DEBUG_ON_FAILURE,  DEFAULT_PRODUCER_BATCH_DEBUG_ON_FAILURE);
-
-        Map<String, String> topicConfigs = Parsers.readTopicConfigs(cfg, Keys.TOPIC_CONFIG_PREFIX);
-
-        H2kConfig conf = new Builder(bootstrap)
-                .topicPattern(topicPattern)
-                .topicMaxLength(topicMaxLength)
-                .cfNames(cfNames)
-                .cfBytes(cfBytes)
-                .includeRowKey(includeRowKey)
-                .rowkeyEncoding(rowkeyEncoding)
-                .rowkeyBase64(rowkeyBase64)
-                .includeMeta(includeMeta)
-                .includeMetaWal(includeMetaWal)
-                .jsonSerializeNulls(jsonSerializeNulls)
-                .payloadFormat(payloadFormat)
-                .serializerFactoryClass(serializerFactoryClass)
-                .avroMode(avroMode)
-                .avroSchemaDir(avroSchemaDir)
-                .avroSchemaRegistryUrls(avroSrUrls)
-                .avroSrAuth(avroSrAuth)
-                .avroProps(avroProps)
-                .ensureTopics(ensureTopics)
-                .ensureIncreasePartitions(ensureIncreasePartitions)
-                .ensureDiffConfigs(ensureDiffConfigs)
-                .topicPartitions(topicPartitions)
-                .topicReplication(topicReplication)
-                .adminTimeoutMs(adminTimeoutMs)
-                .adminClientId(adminClientId)
-                .unknownBackoffMs(unknownBackoffMs)
-                .awaitEvery(awaitEvery)
-                .awaitTimeoutMs(awaitTimeoutMs)
-                .producerBatchCountersEnabled(producerBatchCountersEnabled)
-                .producerBatchDebugOnFailure(producerBatchDebugOnFailure)
-                .saltBytesByTable(saltMap)
-                .capacityHintByTable(capacityHints)
-                .topicConfigs(topicConfigs)
-                .build();
-        LOG.info("Сконструирована конфигурация H2k: {}", conf);
-        return conf;
-    }
+    
 
     /**
      * Для namespace "default" префикс не добавляется (см. правила по h2k.topic.pattern).
