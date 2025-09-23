@@ -1,0 +1,9 @@
+{
+  "type": "record",
+  "name": "T_AVRO",
+  "namespace": "kz.qazmarka.test",
+  "fields": [
+    {"name": "value", "type": ["null", "string"], "default": null},
+    {"name": "event_version", "type": ["null", "long"], "default": null}
+  ]
+}

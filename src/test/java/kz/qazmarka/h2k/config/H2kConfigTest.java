@@ -5,6 +5,7 @@ import org.apache.hadoop.hbase.TableName;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertIterableEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -144,6 +145,42 @@ class H2kConfigTest {
         assertArrayEquals(new String[]{"d","b","0"}, hc.getCfNames());
         assertEquals("d,b,0", hc.getCfNamesCsv());
         assertEquals(3, hc.getCfFamiliesBytes().length);
+    }
+
+    @Test
+    @DisplayName("Avro: типизированное чтение режима, каталога, SR URL и auth")
+    void avroConfig_typedParsing() {
+        Configuration c = new Configuration(false);
+        c.set("h2k.avro.mode", "confluent");
+        c.set("h2k.avro.schema.dir", "/opt/avro");
+        c.set("h2k.avro.sr.urls", "http://sr1:8081, http://sr2:8081 ");
+        c.set("h2k.avro.sr.auth.basic.username", "user");
+        c.set("h2k.avro.sr.auth.basic.password", "pass");
+        c.set("h2k.avro.extra", "value");
+
+        H2kConfig hc = fromCfg(c);
+
+        assertEquals(H2kConfig.AvroMode.CONFLUENT, hc.getAvroMode());
+        assertEquals("/opt/avro", hc.getAvroSchemaDir());
+        assertIterableEquals(java.util.Arrays.asList("http://sr1:8081", "http://sr2:8081"), hc.getAvroSchemaRegistryUrls());
+        assertEquals("user", hc.getAvroSrAuth().get("basic.username"));
+        assertEquals("pass", hc.getAvroSrAuth().get("basic.password"));
+        assertFalse(hc.getAvroProps().containsKey("mode"), "Известные ключи не должны попадать в extra map");
+        assertEquals("value", hc.getAvroProps().get("extra"));
+    }
+
+    @Test
+    @DisplayName("Avro: алиасы URL Schema Registry (schema.registry[.url])")
+    void avroConfig_schemaRegistryAliases() {
+        Configuration c = new Configuration(false);
+        c.set("h2k.avro.schema.registry", "http://legacy:8081");
+        H2kConfig hc = fromCfg(c);
+        assertIterableEquals(java.util.Collections.singletonList("http://legacy:8081"), hc.getAvroSchemaRegistryUrls());
+
+        c = new Configuration(false);
+        c.set("h2k.avro.schema.registry.url", "http://single:8081");
+        hc = fromCfg(c);
+        assertIterableEquals(java.util.Collections.singletonList("http://single:8081"), hc.getAvroSchemaRegistryUrls());
     }
 
     /**

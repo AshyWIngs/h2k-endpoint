@@ -6,6 +6,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Pattern;
@@ -280,6 +281,67 @@ public final class Parsers {
             default:
                 return def;
         }
+    }
+
+    /**
+     * Читает режим Avro (generic|confluent) без учёта регистра; незнакомые значения → {@code def}.
+     */
+    public static kz.qazmarka.h2k.config.H2kConfig.AvroMode readAvroMode(
+            org.apache.hadoop.conf.Configuration cfg,
+            String key,
+            kz.qazmarka.h2k.config.H2kConfig.AvroMode def
+    ) {
+        String raw = cfg.getTrimmed(key);
+        if (raw == null || raw.isEmpty()) return def;
+        switch (raw.trim().toLowerCase(Locale.ROOT)) {
+            case "confluent":
+                return kz.qazmarka.h2k.config.H2kConfig.AvroMode.CONFLUENT;
+            case "generic":
+                return kz.qazmarka.h2k.config.H2kConfig.AvroMode.GENERIC;
+            default:
+                return def;
+        }
+    }
+
+    /**
+     * Возвращает строку из {@link Configuration} или значение по умолчанию, если она пустая.
+     */
+    public static String readStringOrDefault(Configuration cfg, String key, String defVal) {
+        String v = cfg.getTrimmed(key);
+        return (v == null || v.isEmpty()) ? defVal : v;
+    }
+
+    /**
+     * Возвращает первый непустой CSV-список среди заданных ключей.
+     * Значение разбивается по запятым, элементы триммируются; пустые элементы исключаются.
+     */
+    public static List<String> readCsvListFirstNonEmpty(Configuration cfg, String... keys) {
+        if (keys == null || keys.length == 0) return Collections.emptyList();
+        for (String key : keys) {
+            List<String> values = readCsvValues(cfg, key);
+            if (!values.isEmpty()) {
+                return Collections.unmodifiableList(values);
+            }
+        }
+        return Collections.emptyList();
+    }
+
+    private static List<String> readCsvValues(Configuration cfg, String key) {
+        if (key == null) return Collections.emptyList();
+        return splitCsv(cfg.getTrimmed(key));
+    }
+
+    private static List<String> splitCsv(String raw) {
+        if (raw == null || raw.isEmpty()) return Collections.emptyList();
+        String[] parts = raw.split(",");
+        List<String> out = new ArrayList<>(parts.length);
+        for (String part : parts) {
+            String trimmed = part == null ? "" : part.trim();
+            if (!trimmed.isEmpty()) {
+                out.add(trimmed);
+            }
+        }
+        return out;
     }
 
     /**

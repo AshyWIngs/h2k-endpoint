@@ -97,6 +97,10 @@ public final class PayloadBuilder {
         Objects.requireNonNull(table, "таблица");
         Objects.requireNonNull(serializer, "serializer");
         Map<String, Object> obj = buildRowPayload(table, cells, rowKey, walSeq, walWriteTime);
+        if (serializer instanceof TableAwarePayloadSerializer) {
+            TableAwarePayloadSerializer ta = (TableAwarePayloadSerializer) serializer;
+            return ta.serialize(table, obj);
+        }
         return serializer.serialize(obj);
     }
 
@@ -393,35 +397,60 @@ public final class PayloadBuilder {
 
     /** Builds a serializer instance according to config (no caching, no synchronization). */
     private PayloadSerializer createSerializerFromConfig() {
-        // 1) Try to create via provided FQCN (factory or direct serializer)
-        String fqcn = cfg.getSerializerFactoryClass();
-        if (fqcn != null && !fqcn.trim().isEmpty()) {
-            try {
-                Class<?> cls = Class.forName(fqcn);
-                // If it's a factory — use it
-                if (PayloadSerializerFactory.class.isAssignableFrom(cls)) {
-                    PayloadSerializerFactory f = (PayloadSerializerFactory) cls.getDeclaredConstructor().newInstance();
-                    return Objects.requireNonNull(f.create(cfg), "factory returned null");
-                }
-                // If it's the serializer itself — use no-arg ctor
-                if (PayloadSerializer.class.isAssignableFrom(cls)) {
-                    @SuppressWarnings("unchecked")
-                    Class<? extends PayloadSerializer> sc = (Class<? extends PayloadSerializer>) cls;
-                    return sc.getDeclaredConstructor().newInstance();
-                }
-            } catch (ReflectiveOperationException | ClassCastException ignore) {
-                // Fall through to default path
-            }
+        PayloadSerializer custom = instantiateFromFqcn();
+        if (custom != null) {
+            return custom;
         }
 
-        // 2) Default by payload format
         H2kConfig.PayloadFormat fmt = cfg.getPayloadFormat();
-        if (fmt == H2kConfig.PayloadFormat.JSON_EACH_ROW || fmt == null) {
-            // Our lightweight JSON serializer
+        if (fmt == null || fmt == H2kConfig.PayloadFormat.JSON_EACH_ROW) {
             return new JsonEachRowSerializer();
         }
-        // AVRO placeholder: a concrete factory should be provided via config/DI.
-        throw new IllegalStateException("No serializer factory provided for format: " + fmt);
+
+        switch (fmt) {
+            case AVRO_BINARY:
+                return createAvroBinarySerializer();
+            case AVRO_JSON:
+                return createAvroJsonSerializer();
+            default:
+                throw new IllegalStateException("Неизвестный формат payload: " + fmt);
+        }
+    }
+
+    private PayloadSerializer instantiateFromFqcn() {
+        String fqcn = cfg.getSerializerFactoryClass();
+        if (fqcn == null || fqcn.trim().isEmpty()) {
+            return null;
+        }
+        try {
+            Class<?> cls = Class.forName(fqcn);
+            if (PayloadSerializerFactory.class.isAssignableFrom(cls)) {
+                PayloadSerializerFactory factory = (PayloadSerializerFactory) cls.getDeclaredConstructor().newInstance();
+                return Objects.requireNonNull(factory.create(cfg), "factory returned null");
+            }
+            if (PayloadSerializer.class.isAssignableFrom(cls)) {
+                @SuppressWarnings("unchecked")
+                Class<? extends PayloadSerializer> serializerClass = (Class<? extends PayloadSerializer>) cls;
+                return serializerClass.getDeclaredConstructor().newInstance();
+            }
+        } catch (ReflectiveOperationException | ClassCastException ignore) {
+            // Fall through to default path
+        }
+        return null;
+    }
+
+    private PayloadSerializer createAvroBinarySerializer() {
+        if (cfg.getAvroMode() == H2kConfig.AvroMode.CONFLUENT) {
+            return new ConfluentAvroPayloadSerializer(cfg);
+        }
+        return new GenericAvroPayloadSerializer(cfg, GenericAvroPayloadSerializer.Encoding.BINARY);
+    }
+
+    private PayloadSerializer createAvroJsonSerializer() {
+        if (cfg.getAvroMode() == H2kConfig.AvroMode.CONFLUENT) {
+            throw new IllegalStateException("Avro: режим confluent поддерживает только avro-binary");
+        }
+        return new GenericAvroPayloadSerializer(cfg, GenericAvroPayloadSerializer.Encoding.JSON);
     }
 
     /**

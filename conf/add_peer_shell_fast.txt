@@ -34,6 +34,13 @@ add_peer 'h2k_fast',
 # PK-колонки из rowkey автоматически инъектируются в payload (c,t,opd и пр.);
 # включать их в h2k.cf.list не требуется, но в подсказке ёмкости учитываются как обычные поля.
 
+      # Формат payload (json-each-row | avro-binary | avro-json)
+      'h2k.payload.format'                  => 'json-each-row',
+      # Для Avro раскомментируйте и укажите каталог схем / параметры SR (см. docs/avro.md):
+      # 'h2k.payload.format'                => 'avro-binary',
+      # 'h2k.avro.mode'                     => 'generic',
+      # 'h2k.avro.schema.dir'               => '/opt/hbase-default-current/conf/avro',
+
       # Декодирование
       'h2k.decode.mode'                     => 'json-phoenix',          # 'simple' | 'json-phoenix'
 # TIMESTAMP/DATE/TIME сериализуются как epoch millis (long); любой ARRAY -> JSON-массив

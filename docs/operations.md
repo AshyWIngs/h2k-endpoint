@@ -90,22 +90,26 @@ update_peer_config 'h2k_balanced',
   ```ruby
   update_peer_config 'h2k_balanced',
     { 'CONFIG' => {
-        'h2k.payload.format'  => 'avro',
+        'h2k.payload.format'  => 'avro-binary',
+        'h2k.avro.mode'       => 'generic',
         'h2k.avro.schema.dir' => '/opt/hbase-default-current/conf/avro'
       }
     }
   ```
-- (На будущее) Confluent‑режим с open‑source Schema Registry 5.3.8:
+- Confluent Schema Registry 5.3.x:
   ```ruby
   update_peer_config 'h2k_balanced',
     { 'CONFIG' => {
-        'h2k.payload.format'        => 'avro',
-        'h2k.avro.mode'             => 'confluent',
-        'h2k.avro.schema.registry'  => 'http://sr1:8081,http://sr2:8081'
+        'h2k.payload.format'         => 'avro-binary',
+        'h2k.avro.mode'              => 'confluent',
+        'h2k.avro.schema.dir'        => '/opt/hbase-default-current/conf/avro',
+        'h2k.avro.sr.urls'           => 'http://sr1:8081,http://sr2:8081',
+        'h2k.avro.sr.auth.basic.username' => 'svc-hbase',
+        'h2k.avro.sr.auth.basic.password' => '***'
       }
     }
   ```
-  Эти ключи начнут работать после включения соответствующего кода в endpoint.
+  Дополнительные варианты subject/авторизации см. в `docs/avro.md`.
 
 Изменения конфигурации применяются онлайн, однако сам ReplicationEndpoint может кэшировать значения. Надёжный способ «принудить» перечитать конфиг:
 ```ruby
@@ -158,6 +162,8 @@ cfg['CONFIG'].select { |k,_| k.start_with?('h2k.') }
      ```bash
      journalctl -u h2k-endpoint.service -n 200 | grep -i avro
      ```
+
+Дополнительно см. `docs/avro.md` для расширенного чек-листа по Avro.
 
 - **Confluent Schema Registry (open‑source 5.3.8):**
   1) Проверьте доступность SR:

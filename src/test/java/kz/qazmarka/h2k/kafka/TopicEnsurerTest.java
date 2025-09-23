@@ -252,10 +252,26 @@ class TopicEnsurerTest {
         Class<?> ta = Class.forName("kz.qazmarka.h2k.kafka.TopicEnsurer$TopicAdmin");
         Object proxyAdmin = Proxy.newProxyInstance(
                 ta.getClassLoader(), new Class<?>[]{ta}, fa);
+
+        Class<?> paramsBuilderClass = Class.forName("kz.qazmarka.h2k.kafka.TopicEnsurer$TopicParams$Builder");
+        Object builder = paramsBuilderClass.getDeclaredConstructor().newInstance();
+        paramsBuilderClass.getDeclaredMethod("partitions", int.class).invoke(builder, partitions);
+        paramsBuilderClass.getDeclaredMethod("replication", short.class).invoke(builder, replication);
+        paramsBuilderClass.getDeclaredMethod("configs", Map.class).invoke(builder, topicConfigs);
+        paramsBuilderClass.getDeclaredMethod("unknownBackoffMs", long.class).invoke(builder, unknownBackoffMs);
+        paramsBuilderClass.getDeclaredMethod("topicNameMaxLen", int.class).invoke(builder, 249);
+        paramsBuilderClass.getDeclaredMethod("sanitizer", java.util.function.UnaryOperator.class)
+                .invoke(builder, java.util.function.UnaryOperator.identity());
+        paramsBuilderClass.getDeclaredMethod("ensureIncreasePartitions", boolean.class).invoke(builder, false);
+        paramsBuilderClass.getDeclaredMethod("ensureDiffConfigs", boolean.class).invoke(builder, false);
+
+        Object params = paramsBuilderClass.getDeclaredMethod("build").invoke(builder);
+
+        Class<?> paramsClass = Class.forName("kz.qazmarka.h2k.kafka.TopicEnsurer$TopicParams");
         Constructor<?> ctor = TopicEnsurer.class.getDeclaredConstructor(
-                ta, long.class, int.class, short.class, Map.class, long.class);
+                ta, long.class, paramsClass);
         ctor.setAccessible(true);
-        return (TopicEnsurer) ctor.newInstance(proxyAdmin, adminTimeoutMs, partitions, replication, topicConfigs, unknownBackoffMs);
+        return (TopicEnsurer) ctor.newInstance(proxyAdmin, adminTimeoutMs, params);
     }
 
     /**

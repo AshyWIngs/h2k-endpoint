@@ -108,7 +108,7 @@ public final class RowKeySlice implements Comparable<RowKeySlice> {
             throw new NullPointerException("Аргумент 'array' (исходный байтовый массив) не может быть null");
         }
         if (offset < 0 || length < 0 || offset > array.length || length > array.length - offset) {
-            throw new IndexOutOfBoundsException("Выход за границы массива: offset=" + offset + ", length=" + length + ", array.length=" + array.length);
+            throw new IllegalArgumentException("Выход за границы массива: offset=" + offset + ", length=" + length + ", array.length=" + array.length);
         }
         this.array = array;
         this.offset = offset;

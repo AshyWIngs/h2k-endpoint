@@ -178,7 +178,7 @@ class RowKeySliceTest {
 
     /**
      * Валидация границ конструктора:
-     *  • отрицательный offset, выход за пределы массива и переполнение offset+length приводят к {@link IllegalArgumentException}.
+     *  • отрицательный offset, выход за пределы массива и переполнение offset+length приводят к {@link IndexOutOfBoundsException}.
      */
     @Test
     void boundsCheck() {

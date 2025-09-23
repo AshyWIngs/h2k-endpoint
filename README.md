@@ -143,6 +143,17 @@ h2k.topic.pattern=${table}
 - [Подсказки ёмкости и метаданные](docs/capacity.md)
 - [HBase shell / ZooKeeper / операции](docs/hbase.md), а также [операции эксплуатации](docs/operations.md)
 - [ClickHouse ingest (JSONEachRow)](docs/clickhouse.md)
-- [Диагностика и типовые ошибки](docs/troubleshooting.md)
-- [Профили peer (полная матрица)](docs/peer-profiles.md)
-- [Roadmap (Avro/Schema Registry)](docs/roadmap-avro.md)
+- [Avro (локальные схемы / Confluent)](docs/avro.md)
+
+---
+
+### Поддержка форматов сообщений
+
+Endpoint умеет формировать payload в нескольких форматах (управляется ключом `h2k.payload.format`):
+
+- `json-each-row` — режим по умолчанию, без дополнительных настроек.
+- `avro-binary` / `h2k.avro.mode=generic` — локальные `.avsc` из каталога `h2k.avro.schema.dir`.
+- `avro-json` / `h2k.avro.mode=generic` — Avro в JSON-представлении (удобно для отладки).
+- `avro-binary` / `h2k.avro.mode=confluent` — работа через Confluent Schema Registry 5.3.x.
+
+> Подробный чек-лист и примеры конфигурации см. в `docs/avro.md`.

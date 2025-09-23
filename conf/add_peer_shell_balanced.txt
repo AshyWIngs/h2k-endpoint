@@ -37,9 +37,16 @@ add_peer 'h2k_balanced',
       # TIMESTAMP/DATE/TIME -> epoch millis; любой ARRAY -> JSON‑массив
       'h2k.schema.path'                     => '/opt/hbase-default-current/conf/schema.json', # schema.json содержит колонки и PK
       # формат полезной нагрузки
-      'h2k.payload.format'                  => 'avro',              # дефолт сейчас json-eachrow
+      'h2k.payload.format'                  => 'avro-binary',           # дефолт json-eachrow
+      'h2k.avro.mode'                       => 'generic',
       # где лежат *.avsc
-      'h2k.avro.schema.dir'                 => '/opt/hbase-default-current/conf/avro'
+      'h2k.avro.schema.dir'                 => '/opt/hbase-default-current/conf/avro',
+      # Для Confluent Schema Registry раскомментируйте и заполните:
+      # 'h2k.avro.mode'                     => 'confluent',
+      # 'h2k.avro.sr.urls'                  => 'http://sr1:8081,http://sr2:8081',
+      # 'h2k.avro.sr.auth.basic.username'  => 'svc-hbase',
+      # 'h2k.avro.sr.auth.basic.password'  => '***',
+      # 'h2k.avro.subject.strategy'        => 'table',
       'h2k.json.serialize.nulls'            => 'false',
 
       # Метаполя в полезной нагрузке

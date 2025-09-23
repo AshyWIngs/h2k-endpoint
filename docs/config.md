@@ -12,6 +12,7 @@
 - [CF (Column Families)](#cf-column-families)
 - [Декодирование и схема Phoenix](#декодирование-и-схема-phoenix)
 - [Метаполя и формат rowkey](#метаполя-и-формат-rowkey)
+- [Avro](#avro)
 - [Подсказки ёмкости](#подсказки-ёмкости)
 - [Соль rowkey (Phoenix)](#соль-rowkey-phoenix)
 - [Автосоздание/администрирование тем](#автосозданиеадминистрирование-тем)
@@ -68,6 +69,25 @@
 | **`h2k.payload.include.meta.wal`** | Добавлять WAL‑метаполя | `true`/`false` (дефолт: `false`) | `false` |
 | **`h2k.payload.include.rowkey`** | Включать `_rowkey` в payload | `true`/`false` (дефолт: `false`) | `false` |
 | **`h2k.rowkey.encoding`** | Кодировка `_rowkey` | `BASE64` \| `HEX` | `BASE64` |
+
+---
+
+## Avro
+
+| Ключ | Назначение | Значения / Дефолт | Примечание |
+|---|---|---|---|
+| **`h2k.payload.format`** | Формат payload | `json-each-row` \| `avro-binary` \| `avro-json` (дефолт: `json-each-row`) | Для Avro обязательно задать дополнительные ключи ниже |
+| **`h2k.avro.mode`** | Режим Avro | `generic` (дефолт) \| `confluent` | `generic` — локальные `.avsc`; `confluent` — Schema Registry |
+| **`h2k.avro.schema.dir`** | Каталог `.avsc` | Строка (дефолт: `conf/avro`) | Используется в режиме `generic` |
+| **`h2k.avro.sr.urls`** | URL Schema Registry (CSV) | `http://host1:8081[,http://hostN:8081]` | Для совместимости поддерживаются алиасы `h2k.avro.schema.registry` и `h2k.avro.schema.registry.url` |
+| **`h2k.avro.sr.auth.basic.username/password`** | Basic‑авторизация Schema Registry | Строки | Используются при регистрации схем |
+| **`h2k.avro.subject.*`** | Настройка subject | `h2k.avro.subject.strategy` (`qualifier`/`table`/`table-lower`/`table-upper`), `h2k.avro.subject.prefix`, `h2k.avro.subject.suffix` | По умолчанию используется qualifier |
+| **`h2k.avro.*`** | Доп. свойства Avro | Любые ключи, не перечисленные выше | Сохраняются в `H2kConfig#getAvroProps()` для пользовательских фабрик |
+
+> Aliases `h2k.avro.schema.registry` и `h2k.avro.schema.registry.url` обрабатываются как `h2k.avro.sr.urls`.
+> В режиме `h2k.avro.mode=confluent` поддерживается только `h2k.payload.format=avro-binary`.
+
+**Подробнее:** см. `docs/avro.md` (примеры конфигов и интеграция с Schema Registry).
 
 ---
 

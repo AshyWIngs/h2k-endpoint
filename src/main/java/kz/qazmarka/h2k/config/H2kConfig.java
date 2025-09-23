@@ -52,6 +52,9 @@ public final class H2kConfig {
     /** Формат сериализации payload. */
     public enum PayloadFormat { JSON_EACH_ROW, AVRO_BINARY, AVRO_JSON }
 
+    /** Режим Avro (локальные схемы или Confluent Schema Registry). */
+    public enum AvroMode { GENERIC, CONFLUENT }
+
     // ==== Дополнительные ключи конфигурации (для формата и AVRO) ====
     /** Формат сериализации payload: json_each_row | avro_binary | avro_json */
     private static final String K_PAYLOAD_FORMAT = "h2k.payload.format";
@@ -60,6 +63,18 @@ public final class H2kConfig {
     // Индивидуальные AVRO-ключи публикуются через внутренний класс Keys; здесь оставляем только общий префикс.
     /** Префикс для всех AVRO-настроек */
     private static final String K_AVRO_PREFIX              = "h2k.avro.";
+    /** Ключ режима Avro: generic | confluent. */
+    private static final String K_AVRO_MODE                = "h2k.avro.mode";
+    /** Ключ каталога локальных Avro-схем. */
+    private static final String K_AVRO_SCHEMA_DIR          = "h2k.avro.schema.dir";
+    /** Основной ключ списка URL Schema Registry (через запятую). */
+    private static final String K_AVRO_SR_URLS             = "h2k.avro.sr.urls";
+    /** Алиас для совместимости: конфигурация могла использовать schema.registry без .urls. */
+    private static final String K_AVRO_SR_URLS_LEGACY      = "h2k.avro.schema.registry";
+    /** Алиас c единственным URL. */
+    private static final String K_AVRO_SR_URL_LEGACY       = "h2k.avro.schema.registry.url";
+    /** Префикс авторизационных параметров Schema Registry. */
+    private static final String K_AVRO_SR_AUTH_PREFIX      = "h2k.avro.sr.auth.";
 
     // ==== Ключи конфигурации (собраны в одном месте для устранения "хардкода") ====
     /**
@@ -219,6 +234,10 @@ public final class H2kConfig {
     private static final boolean DEFAULT_PRODUCER_BATCH_COUNTERS_ENABLED = false;
     /** По умолчанию подробный DEBUG при неуспехе авто‑сброса отключён. */
     private static final boolean DEFAULT_PRODUCER_BATCH_DEBUG_ON_FAILURE = false;
+    /** Режим Avro по умолчанию. */
+    private static final AvroMode DEFAULT_AVRO_MODE = AvroMode.GENERIC;
+    /** Каталог локальных Avro-схем по умолчанию. */
+    private static final String DEFAULT_AVRO_SCHEMA_DIR = "conf/avro";
 
     // ==== Базовые ====
     private final String bootstrap;
@@ -242,6 +261,10 @@ public final class H2kConfig {
     // ==== Формат/сериализация ====
     private final PayloadFormat payloadFormat;
     private final String serializerFactoryClass;
+    private final AvroMode avroMode;
+    private final String avroSchemaDir;
+    private final java.util.List<String> avroSchemaRegistryUrls;
+    private final Map<String, String> avroSrAuth;
     private final Map<String, String> avroProps;
 
     // ==== Автосоздание топиков ====
@@ -302,6 +325,10 @@ public final class H2kConfig {
         this.jsonSerializeNulls = b.jsonSerializeNulls;
         this.payloadFormat = b.payloadFormat;
         this.serializerFactoryClass = b.serializerFactoryClass;
+        this.avroMode = b.avroMode;
+        this.avroSchemaDir = b.avroSchemaDir;
+        this.avroSchemaRegistryUrls = Collections.unmodifiableList(new java.util.ArrayList<>(b.avroSchemaRegistryUrls));
+        this.avroSrAuth = Collections.unmodifiableMap(new HashMap<>(b.avroSrAuth));
         this.avroProps = Collections.unmodifiableMap(new HashMap<>(b.avroProps));
         this.ensureTopics = b.ensureTopics;
         this.ensureIncreasePartitions = b.ensureIncreasePartitions;
@@ -353,6 +380,14 @@ public final class H2kConfig {
         private PayloadFormat payloadFormat = PayloadFormat.JSON_EACH_ROW;
         /** FQCN фабрики сериализаторов (SPI), если требуется явная подмена. */
         private String serializerFactoryClass = null;
+        /** Режим Avro (локальные схемы / Schema Registry). */
+        private AvroMode avroMode = DEFAULT_AVRO_MODE;
+        /** Каталог локальных Avro-схем. */
+        private String avroSchemaDir = DEFAULT_AVRO_SCHEMA_DIR;
+        /** Список URL Schema Registry. */
+        private java.util.List<String> avroSchemaRegistryUrls = Collections.emptyList();
+        /** Авторизационные параметры для Schema Registry. */
+        private Map<String, String> avroSrAuth = Collections.emptyMap();
         /** Доп. AVRO-настройки (минимальный набор ключей, см. from()). */
         private Map<String, String> avroProps = Collections.emptyMap();
         /** Автоматически создавать недостающие топики. */
@@ -498,11 +533,45 @@ public final class H2kConfig {
         public Builder serializerFactoryClass(String v) { this.serializerFactoryClass = v; return this; }
 
         /**
+         * Режим Avro.
+         * @param v generic | confluent
+         * @return this
+         */
+        public Builder avroMode(AvroMode v) { this.avroMode = (v == null ? DEFAULT_AVRO_MODE : v); return this; }
+
+        /**
+         * Каталог локальных Avro-схем.
+         * @param v путь до каталога
+         * @return this
+         */
+        public Builder avroSchemaDir(String v) {
+            this.avroSchemaDir = (v == null || v.trim().isEmpty()) ? DEFAULT_AVRO_SCHEMA_DIR : v.trim();
+            return this;
+        }
+
+        /**
+         * Список URL Schema Registry.
+         * @param v список URL
+         * @return this
+         */
+        public Builder avroSchemaRegistryUrls(java.util.List<String> v) {
+            this.avroSchemaRegistryUrls = (v == null) ? Collections.emptyList() : v;
+            return this;
+        }
+
+        /**
+         * Авторизационные параметры Schema Registry.
+         * @param v карта ключей после префикса h2k.avro.sr.auth.
+         * @return this
+         */
+        public Builder avroSrAuth(Map<String, String> v) { this.avroSrAuth = (v == null) ? Collections.emptyMap() : v; return this; }
+
+        /**
          * AVRO-настройки (минимальный набор известных ключей).
          * @param v карта свойств
          * @return this
          */
-        public Builder avroProps(Map<String, String> v) { this.avroProps = v; return this; }
+        public Builder avroProps(Map<String, String> v) { this.avroProps = (v == null) ? Collections.emptyMap() : v; return this; }
         /**
          * Разрешить автоматическое увеличение числа партиций при ensureTopics.
          * @param v true — увеличивать партиции при необходимости
@@ -620,8 +689,21 @@ public final class H2kConfig {
         // Формат сериализации и фабрика (через Parsers)
         PayloadFormat payloadFormat = Parsers.readPayloadFormat(cfg, K_PAYLOAD_FORMAT, PayloadFormat.JSON_EACH_ROW);
         String serializerFactoryClass = cfg.get(K_PAYLOAD_SERIALIZER_FACTORY, null);
-        // Читаем все h2k.avro.* свойства разом
+        AvroMode avroMode = Parsers.readAvroMode(cfg, K_AVRO_MODE, DEFAULT_AVRO_MODE);
+        String avroSchemaDir = Parsers.readStringOrDefault(cfg, K_AVRO_SCHEMA_DIR, DEFAULT_AVRO_SCHEMA_DIR);
+        java.util.List<String> avroSrUrls = Parsers.readCsvListFirstNonEmpty(cfg,
+                K_AVRO_SR_URLS,
+                K_AVRO_SR_URLS_LEGACY,
+                K_AVRO_SR_URL_LEGACY);
+        Map<String, String> avroSrAuth = Parsers.readWithPrefix(cfg, K_AVRO_SR_AUTH_PREFIX);
+        // Читаем все h2k.avro.* свойства разом (для pass-through) и удаляем известные ключи
         Map<String, String> avroProps = Parsers.readWithPrefix(cfg, K_AVRO_PREFIX);
+        avroProps.remove("mode");
+        avroProps.remove("schema.dir");
+        avroProps.remove("sr.urls");
+        avroProps.remove("schema.registry");
+        avroProps.remove("schema.registry.url");
+        avroProps.keySet().removeIf(k -> k.startsWith("sr.auth."));
 
         // По умолчанию автосоздание топиков включено (централизованный дефолт)
         boolean ensureTopics = cfg.getBoolean(K_ENSURE_TOPICS, DEFAULT_ENSURE_TOPICS);
@@ -665,6 +747,10 @@ public final class H2kConfig {
                 .jsonSerializeNulls(jsonSerializeNulls)
                 .payloadFormat(payloadFormat)
                 .serializerFactoryClass(serializerFactoryClass)
+                .avroMode(avroMode)
+                .avroSchemaDir(avroSchemaDir)
+                .avroSchemaRegistryUrls(avroSrUrls)
+                .avroSrAuth(avroSrAuth)
                 .avroProps(avroProps)
                 .ensureTopics(ensureTopics)
                 .ensureIncreasePartitions(ensureIncreasePartitions)
@@ -778,6 +864,14 @@ public final class H2kConfig {
     public PayloadFormat getPayloadFormat() { return payloadFormat; }
     /** @return FQCN фабрики сериализаторов, если задана */
     public String getSerializerFactoryClass() { return serializerFactoryClass; }
+    /** @return выбранный режим Avro */
+    public AvroMode getAvroMode() { return avroMode; }
+    /** @return каталог локальных Avro-схем */
+    public String getAvroSchemaDir() { return avroSchemaDir; }
+    /** @return неизменяемый список URL Schema Registry */
+    public java.util.List<String> getAvroSchemaRegistryUrls() { return avroSchemaRegistryUrls; }
+    /** @return карта авторизационных свойств для Schema Registry */
+    public Map<String, String> getAvroSrAuth() { return avroSrAuth; }
     /** @return неизменяемая карта AVRO-свойств */
     public Map<String, String> getAvroProps() { return avroProps; }
 
@@ -902,6 +996,9 @@ public final class H2kConfig {
                 .append(", jsonSerializeNulls=").append(jsonSerializeNulls)
                 .append(", payloadFormat=").append(payloadFormat)
                 .append(", serializerFactoryClass=").append(serializerFactoryClass)
+                .append(", avroMode=").append(avroMode)
+                .append(", avroSchemaDir='").append(avroSchemaDir).append('\'')
+                .append(", avroSrUrls.size=").append(avroSchemaRegistryUrls.size())
                 .append(", ensureTopics=").append(ensureTopics)
                 .append(", ensureIncreasePartitions=").append(ensureIncreasePartitions)
                 .append(", ensureDiffConfigs=").append(ensureDiffConfigs)
@@ -915,6 +1012,7 @@ public final class H2kConfig {
                 .append(", topicConfigs.size=").append(topicConfigs.size())
                 .append(", saltBytesByTable.size=").append(saltBytesByTable.size())
                 .append(", capacityHintByTable.size=").append(capacityHintByTable.size())
+                .append(", avroSrAuth.size=").append(avroSrAuth.size())
                 .append(", avroProps.size=").append(avroProps.size())
                 .append('}')
                 .toString();
