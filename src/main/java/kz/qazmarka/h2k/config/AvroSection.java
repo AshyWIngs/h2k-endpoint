@@ -7,6 +7,10 @@ import kz.qazmarka.h2k.util.Parsers;
 
 import org.apache.hadoop.conf.Configuration;
 
+/**
+ * Снимок Avro-конфигурации: режим (generic/confluent), директория локальных схем и параметры Schema Registry.
+ * Заполняется один раз из {@link org.apache.hadoop.conf.Configuration} и далее используется при сборке {@link H2kConfig}.
+ */
 public final class AvroSection {
     final H2kConfig.AvroMode mode;
     final String schemaDir;
@@ -26,6 +30,12 @@ public final class AvroSection {
         this.props = props;
     }
 
+    /**
+     * Читает блок ключей {@code h2k.avro.*} и возвращает иммутабельный объект с результатами парсинга.
+     *
+     * @param cfg исходная конфигурация HBase/endpoint
+     * @return готовый объект с приведёнными значениями Avro-настроек
+     */
     static AvroSection from(Configuration cfg) {
         H2kConfig.AvroMode mode = Parsers.readAvroMode(cfg, H2kConfig.K_AVRO_MODE, H2kConfig.DEFAULT_AVRO_MODE);
         String schemaDir = Parsers.readStringOrDefault(cfg, H2kConfig.K_AVRO_SCHEMA_DIR, H2kConfig.DEFAULT_AVRO_SCHEMA_DIR);

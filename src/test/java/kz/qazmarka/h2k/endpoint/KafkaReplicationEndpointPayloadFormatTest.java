@@ -24,10 +24,10 @@ import kz.qazmarka.h2k.config.H2kConfig;
 import kz.qazmarka.h2k.endpoint.internal.TopicManager;
 import kz.qazmarka.h2k.endpoint.internal.WalEntryProcessor;
 import kz.qazmarka.h2k.endpoint.internal.WalMeta;
-import kz.qazmarka.h2k.kafka.BatchSender;
-import kz.qazmarka.h2k.payload.PayloadBuilder;
-import kz.qazmarka.h2k.schema.Decoder;
-import kz.qazmarka.h2k.schema.SimpleDecoder;
+import kz.qazmarka.h2k.kafka.producer.BatchSender;
+import kz.qazmarka.h2k.payload.builder.PayloadBuilder;
+import kz.qazmarka.h2k.schema.decoder.Decoder;
+import kz.qazmarka.h2k.schema.decoder.SimpleDecoder;
 import kz.qazmarka.h2k.util.RowKeySlice;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;

@@ -1,19 +1,21 @@
 package kz.qazmarka.h2k.endpoint.internal;
 
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Map;
-import java.util.Set;
+import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 
 import org.apache.hadoop.hbase.TableName;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import kz.qazmarka.h2k.config.H2kConfig;
-import kz.qazmarka.h2k.kafka.TopicEnsurer;
+import kz.qazmarka.h2k.kafka.ensure.TopicEnsurer;
 
 /**
- * Управляет разрешением имён топиков и их ensure-циклом.
+ * Отвечает за разрешение имён Kafka-топиков и ленивые ensure-вызовы.
+ * <p>
+ * Использует {@link H2kConfig#topicFor(org.apache.hadoop.hbase.TableName)} для кеширования имён,
+ * а также {@link TopicEnsurer} в режиме NOOP/active — вызывающий код не проверяет конфигурацию.
  */
 public final class TopicManager {
 
@@ -21,23 +23,29 @@ public final class TopicManager {
 
     private final H2kConfig cfg;
     private final TopicEnsurer topicEnsurer;
-    private final Map<TableName, String> topicCache = new HashMap<>(8);
-    private final Set<String> ensuredTopics = new HashSet<>(8);
-
+    /**
+     * Кеш разрешённых имён топиков. Потокобезопасный {@link ConcurrentMap}, чтобы несколько потоков
+     * ReplicationEndpoint не гонялись за одним и тем же TableName.
+     */
+    private final ConcurrentMap<TableName, String> topicCache = new ConcurrentHashMap<>(8);
     public TopicManager(H2kConfig cfg, TopicEnsurer topicEnsurer) {
-        this.cfg = cfg;
-        this.topicEnsurer = topicEnsurer;
+        this.cfg = Objects.requireNonNull(cfg, "конфигурация h2k");
+        this.topicEnsurer = topicEnsurer == null ? TopicEnsurer.disabled() : topicEnsurer;
     }
 
+    /**
+     * Возвращает имя Kafka-топика для таблицы, используя кеш и шаблон из {@link H2kConfig}.
+     */
     public String resolveTopic(TableName table) {
         return topicCache.computeIfAbsent(table, cfg::topicFor);
     }
 
+    /**
+     * Ленивая ensure-проверка: при необходимости вызывает {@link TopicEnsurer#ensureTopic(String)}
+     * после валидации имени. В режиме NOOP вызов безопасно игнорируется.
+     */
     public void ensureTopicIfNeeded(String topic) {
-        if (topicEnsurer == null || topic == null || topic.isEmpty()) {
-            return;
-        }
-        if (!ensuredTopics.add(topic)) {
+        if (topic == null || topic.isEmpty()) {
             return;
         }
         try {
@@ -47,18 +55,20 @@ public final class TopicManager {
             if (LOG.isDebugEnabled()) {
                 LOG.debug("Трассировка ошибки ensureTopic()", e);
             }
-            ensuredTopics.remove(topic);
         }
     }
 
+    /**
+     * @return {@code true}, если ensure действительно активен (не NOOP).
+     */
     public boolean ensureEnabled() {
-        return topicEnsurer != null;
+        return topicEnsurer.isEnabled();
     }
 
+    /**
+     * Закрывает обёрнутый {@link TopicEnsurer}, проглатывая исключения на случай остановки.
+     */
     public void closeQuietly() {
-        if (topicEnsurer == null) {
-            return;
-        }
         try {
             topicEnsurer.close();
         } catch (Exception e) {

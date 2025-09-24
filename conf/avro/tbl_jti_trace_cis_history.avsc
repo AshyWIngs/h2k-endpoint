@@ -2,7 +2,7 @@
   "type": "record",
   "name": "TBL_JTI_TRACE_CIS_HISTORY_Row",
   "namespace": "kz.qazmarka.h2k",
-  "doc": "Событие из Phoenix TBL_JTI_TRACE_CIS_HISTORY. Все TIMESTAMP представлены как long epoch-millis. Доп. метаполя: event_version (ms) и delete (логическое удаление). PK: (c, t, opd).",
+  "doc": "Событие из Phoenix TBL_JTI_TRACE_CIS_HISTORY. Все TIMESTAMP представлены как long epoch-millis. Доп. метаполя: _event_ts (ms) и delete (логическое удаление). PK: (c, t, opd).",
   "fields": [
     { "name": "c",   "type": "string", "doc": "PK часть 1: VARCHAR" },
     { "name": "t",   "type": "int",    "doc": "PK часть 2: UNSIGNED_TINYINT (0..255) хранится как int" },
@@ -42,7 +42,7 @@
     { "name": "pvad","type": ["null","string"], "default": null },
     { "name": "ag",  "type": ["null","string"], "default": null },
 
-    { "name": "event_version", "type": ["null","long"], "default": null, "doc": "Доп. метаполе: версия события, ms epoch" },
+    { "name": "_event_ts", "type": ["null","long"], "default": null, "doc": "Доп. метаполе: версия события, ms epoch" },
     { "name": "delete",        "type": "boolean",       "default": false, "doc": "Доп. метаполе: логическое удаление" }
   ]
 }

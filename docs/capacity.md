@@ -33,7 +33,7 @@ CAPACITY_HINT =
 - `_cf` — CF, откуда были изменения;
 - `_cells_total` — всего ячеек в WALEdit;
 - `_cells_cf` — ячеек по выбранному CF;
-- `event_version` — максимальная метка времени среди ячеек CF;
+- `_event_ts` — максимальная метка времени среди ячеек CF;
 - `delete` — `true`, если в партии был delete‑маркер по CF.
 
 ### Если `h2k.payload.include.meta.wal = true` (WAL, **2** ключа)

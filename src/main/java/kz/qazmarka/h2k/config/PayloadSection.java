@@ -4,6 +4,10 @@ import org.apache.hadoop.conf.Configuration;
 
 import kz.qazmarka.h2k.util.Parsers;
 
+/**
+ * Группа настроек формирования payload: включение rowkey/метаданных, формат JSON/Avro и SPI-сериализатор.
+ * Выделена в отдельный объект при построении {@link H2kConfig}.
+ */
 public final class PayloadSection {
     final boolean includeRowKey;
     final String rowkeyEncoding;
@@ -47,6 +51,9 @@ public final class PayloadSection {
         PayloadSection build() { return new PayloadSection(this); }
     }
 
+    /**
+     * Читает ключи {@code h2k.payload.*} и возвращает иммутабельный блочный конфиг.
+     */
     static PayloadSection from(Configuration cfg) {
         boolean includeRowKey = cfg.getBoolean(H2kConfig.K_PAYLOAD_INCLUDE_ROWKEY, H2kConfig.DEFAULT_INCLUDE_ROWKEY);
         String rowkeyEncoding = Parsers.normalizeRowkeyEncoding(cfg.get(H2kConfig.K_ROWKEY_ENCODING, H2kConfig.ROWKEY_ENCODING_HEX));

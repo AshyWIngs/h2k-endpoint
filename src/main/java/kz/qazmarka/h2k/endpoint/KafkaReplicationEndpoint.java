@@ -20,15 +20,14 @@ import kz.qazmarka.h2k.config.H2kConfig;
 import kz.qazmarka.h2k.config.H2kConfig.Keys;
 import kz.qazmarka.h2k.endpoint.internal.TopicManager;
 import kz.qazmarka.h2k.endpoint.internal.WalEntryProcessor;
-import kz.qazmarka.h2k.endpoint.internal.WalProcessingResult;
-import kz.qazmarka.h2k.kafka.BatchSender;
-import kz.qazmarka.h2k.kafka.TopicEnsurer;
-import kz.qazmarka.h2k.payload.PayloadBuilder;
-import kz.qazmarka.h2k.schema.Decoder;
-import kz.qazmarka.h2k.schema.JsonSchemaRegistry;
-import kz.qazmarka.h2k.schema.SchemaRegistry;
-import kz.qazmarka.h2k.schema.SimpleDecoder;
-import kz.qazmarka.h2k.schema.ValueCodecPhoenix;
+import kz.qazmarka.h2k.kafka.producer.BatchSender;
+import kz.qazmarka.h2k.kafka.ensure.TopicEnsurer;
+import kz.qazmarka.h2k.payload.builder.PayloadBuilder;
+import kz.qazmarka.h2k.schema.decoder.Decoder;
+import kz.qazmarka.h2k.schema.decoder.SimpleDecoder;
+import kz.qazmarka.h2k.schema.decoder.ValueCodecPhoenix;
+import kz.qazmarka.h2k.schema.registry.JsonSchemaRegistry;
+import kz.qazmarka.h2k.schema.registry.SchemaRegistry;
 
 /**
  * Репликация изменений из HBase 1.4.13 в Kafka (производитель 2.x).
@@ -39,7 +38,7 @@ import kz.qazmarka.h2k.schema.ValueCodecPhoenix;
  *
  * Производительность и потокобезопасность
  *  - Горячий путь максимально прямолинейный: группировка по rowkey → сборка карты → сериализация выбранным
- *    {@link kz.qazmarka.h2k.payload.PayloadSerializer} → send в Kafka.
+ *    {@link kz.qazmarka.h2k.payload.serializer.PayloadSerializer} → send в Kafka.
  *  - Все тяжёлые инициализации выполняются один раз в init()/doStart(): декодер, конфиг, KafkaProducer, PayloadBuilder.
  *  - Класс используется из потока репликации HBase, дополнительных потоков не создаёт.
  *
@@ -128,10 +127,6 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
     /**
      * Возвращает строку bootstrap‑серверов Kafka из конфигурации или бросает {@link IOException}, если параметр отсутствует.
      * Пустая строка после {@code trim()} считается отсутствующим параметром.
-     *
-     * @param cfg HBase‑конфигурация
-     * @return непустая строка с bootstrap‑серверами (формат host:port[,host2:port2])
-     * @throws IOException если параметр {@code h2k.kafka.bootstrap.servers} не задан
      */
     private static String readBootstrapOrThrow(Configuration cfg) throws IOException {
         final String bootstrap = cfg.get(Keys.BOOTSTRAP, "").trim();
@@ -176,16 +171,6 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
         return SimpleDecoder.INSTANCE;
     }
 
-    /**
-     * Подбирает начальную ёмкость для {@link LinkedHashMap} под ожидаемое число элементов
-     * с учётом коэффициента загрузки 0.75. Эквивалент выражению {@code 1 + ceil(expected/0.75)}
-     * (= {@code 1 + ceil(4*expected/3)}) без операций с плавающей точкой, чтобы исключить double/ceil на горячем пути.
-     * Для неположительных значений {@code expected} возвращает 16 (дефолтную начальную ёмкость);
-     * верхний кэп — {@code 1<<30}.
-     *
-     * @param expected ожидаемое число пар ключ‑значение
-     * @return рекомендуемая начальная ёмкость
-     */
     /**
      * Конфигурация и создание {@link KafkaProducer}.
      * Заполняет обязательные параметры сериализации ключа/значения, включает идемпотентность и другие
@@ -287,11 +272,8 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
                               boolean doFilter,
                               byte[][] cfFamilies,
                               long minTs) {
-        WalProcessingResult result = walEntryProcessor.process(entry, sender, includeWalMeta, doFilter, cfFamilies, minTs);
-        if (LOG.isDebugEnabled()) {
-            LOG.debug("Репликация: запись WAL обработана: таблица={}, топик={}, строк отправлено={}, ячеек отправлено={}, фильтр={}, ensure-включён={}",
-                    result.table, result.topic, result.rowsSent, result.cellsSent, doFilter, topicManager.ensureEnabled());
-        }
+        // Вынесено в WalEntryProcessor: здесь оставляем только делегирование, чтобы не дублировать логику
+        walEntryProcessor.process(entry, sender, includeWalMeta, doFilter, cfFamilies, minTs);
     }
 
     /** В HBase 1.4 {@code Context} не предоставляет getPeerUUID(); сигнатура метода требуется API базового класса.

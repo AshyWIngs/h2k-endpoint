@@ -108,11 +108,25 @@ h2k.topic.pattern=${table}
 | `h2k.schema.path` | Путь к `schema.json` | Только для `json-phoenix` |
 | `h2k.topic.pattern` | Шаблон имени топика | `${table}` по умолчанию |
 | `h2k.ensure.topics` | Автосоздание тем | true/false |
-| `h2k.payload.include.meta` | Добавлять служебные поля | +`event_version`,`delete` и т.д. |
+| `h2k.payload.include.meta` | Добавлять служебные поля | +`_event_ts`,`delete` и т.д. |
 | `h2k.payload.include.meta.wal` | Добавлять `_wal_seq`,`_wal_write_time` | требует включить meta |
 | `h2k.payload.include.rowkey` | Включать `_rowkey` | `BASE64`/`HEX` управляется `h2k.rowkey.encoding` |
 
 > Полная справка по ключам и значениям — см. **docs/config.md**.
+
+### Матрица продьюсерских профилей (значения синхронизированы с `conf/`)
+
+| Ключ | Единицы | Дефолт (Endpoint) | FAST (`conf/add_peer_shell_fast.txt`) | BALANCED (`conf/add_peer_shell_balanced.txt`) | RELIABLE (`conf/add_peer_shell_reliable.txt`) |
+|---|---|---|---|---|---|
+| `h2k.producer.enable.idempotence` | boolean | `true` | `false` | `true` | `true` |
+| `h2k.producer.acks` | ack mode | `all` | `1` | `all` | `all` |
+| `h2k.producer.max.in.flight` | запросов | `1` | `5` | `5` | `1` |
+| `h2k.producer.linger.ms` | миллисекунды | `50` | `100` | `100` | `50` |
+| `h2k.producer.batch.size` | байты | `65536` | `524288` | `524288` | `65536` |
+| `h2k.producer.compression.type` | алгоритм | `lz4` | `lz4` | `lz4` | `snappy` |
+| `h2k.producer.delivery.timeout.ms` | миллисекунды | `180000` | `90000` | `300000` | `300000` |
+
+> Таблица отражает реальные значения из скриптов `conf/add_peer_shell_*.txt`; изменения в профилях необходимо синхронизировать с документацией.
 
 ---
 

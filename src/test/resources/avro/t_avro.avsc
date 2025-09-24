@@ -4,6 +4,6 @@
   "namespace": "kz.qazmarka.test",
   "fields": [
     {"name": "value", "type": ["null", "string"], "default": null},
-    {"name": "event_version", "type": ["null", "long"], "default": null}
+    {"name": "_event_ts", "type": ["null", "long"], "default": null}
   ]
 }

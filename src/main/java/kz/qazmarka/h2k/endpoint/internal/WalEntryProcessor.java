@@ -17,8 +17,8 @@ import org.apache.kafka.clients.producer.RecordMetadata;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import kz.qazmarka.h2k.kafka.BatchSender;
-import kz.qazmarka.h2k.payload.PayloadBuilder;
+import kz.qazmarka.h2k.kafka.producer.BatchSender;
+import kz.qazmarka.h2k.payload.builder.PayloadBuilder;
 import kz.qazmarka.h2k.util.RowKeySlice;
 
 /**
@@ -40,12 +40,19 @@ public final class WalEntryProcessor {
         this.producer = producer;
     }
 
-    public WalProcessingResult process(WAL.Entry entry,
-                                       BatchSender sender,
-                                       boolean includeWalMeta,
-                                       boolean filterEnabled,
-                                       byte[][] cfFamilies,
-                                       long minTs) {
+    /**
+     * Конвертирует одну запись WAL в набор Kafka-сообщений: группирует по rowkey, опционально фильтрует
+     * по CF/минимальному timestamp, собирает payload и добавляет futures в переданный {@link BatchSender}.
+     */
+    /**
+     * Конвертирует одну запись WAL в набор Kafka-сообщений: группирует по rowkey, фильтрует и отправляет в Kafka.
+     */
+    public void process(WAL.Entry entry,
+                        BatchSender sender,
+                        boolean includeWalMeta,
+                        boolean filterEnabled,
+                        byte[][] cfFamilies,
+                        long minTs) {
         TableName table = entry.getKey().getTablename();
         String topic = topicManager.resolveTopic(table);
         topicManager.ensureTopicIfNeeded(topic);
@@ -64,10 +71,9 @@ public final class WalEntryProcessor {
             LOG.debug("Репликация: запись WAL обработана: таблица={}, топик={}, строк отправлено={}, ячеек отправлено={}, фильтр={}, ensure-включён={}",
                     table, topic, rowsSent, cellsSent, filterEnabled, topicManager.ensureEnabled());
         }
-
-        return new WalProcessingResult(table, topic, rowsSent, cellsSent);
     }
 
+    /** Возвращает пары rowkey→ячейки, optionally фильтруя по CF и минимальному timestamp. */
     private Iterable<Map.Entry<RowKeySlice, List<Cell>>> filteredRows(WAL.Entry entry,
                                                                       boolean doFilter,
                                                                       byte[][] cfFamilies,
@@ -88,6 +94,7 @@ public final class WalEntryProcessor {
         return (out != null) ? out : Collections.<Map.Entry<RowKeySlice, List<Cell>>>emptyList();
     }
 
+    /** Группирует ячейки записи WAL по rowkey, сохраняя порядок. */
     private Map<RowKeySlice, List<Cell>> groupByRow(WAL.Entry entry) {
         final List<Cell> cells = entry.getEdit().getCells();
         if (cells == null || cells.isEmpty()) {
@@ -119,6 +126,7 @@ public final class WalEntryProcessor {
         return byRow;
     }
 
+    /** Проверяет, содержат ли ячейки допустимые CF и timestamp ≥ {@code minTs}. */
     private static boolean passWalTsFilter(List<Cell> cells, byte[][] cfFamilies, long minTs) {
         if (cfFamilies == null || cfFamilies.length == 0) {
             return true;
@@ -132,7 +140,8 @@ public final class WalEntryProcessor {
         return passWalTsFilterN(cells, cfFamilies, minTs);
     }
 
-    private static boolean passWalTsFilter1(List<Cell> cells,
+    /** Быстрый вариант фильтра для одного CF. */
+    static boolean passWalTsFilter1(List<Cell> cells,
                                             byte[] cf0,
                                             long minTs) {
         for (Cell c : cells) {
@@ -143,7 +152,8 @@ public final class WalEntryProcessor {
         return false;
     }
 
-    private static boolean passWalTsFilter2(List<Cell> cells,
+    /** Быстрый вариант фильтра для двух CF. */
+    static boolean passWalTsFilter2(List<Cell> cells,
                                             byte[] cf0,
                                             byte[] cf1,
                                             long minTs) {
@@ -156,7 +166,8 @@ public final class WalEntryProcessor {
         return false;
     }
 
-    private static boolean passWalTsFilterN(List<Cell> cells,
+    /** Общий фильтр для произвольного числа CF. */
+    static boolean passWalTsFilterN(List<Cell> cells,
                                             byte[][] cfFamilies,
                                             long minTs) {
         for (Cell c : cells) {
@@ -172,6 +183,7 @@ public final class WalEntryProcessor {
         return false;
     }
 
+    /** Формирует Kafka-запись для одной строки HBase и добавляет future в {@link BatchSender}. */
     private void sendRow(String topic,
                          TableName table,
                          WalMeta wm,
@@ -183,6 +195,7 @@ public final class WalEntryProcessor {
         sender.add(send(topic, keyBytes, valueBytes));
     }
 
+    /** Считывает sequenceId/writeTime из ключа WAL; ошибки приводят к -1. */
     private static WalMeta readWalMeta(WAL.Entry entry) {
         long walSeq = -1L;
         try {
@@ -198,7 +211,7 @@ public final class WalEntryProcessor {
         return producer.send(new ProducerRecord<>(topic, key, value));
     }
 
-    private static int initialCapacity(int expected) {
+    static int initialCapacity(int expected) {
         if (expected <= 0) {
             return 16;
         }

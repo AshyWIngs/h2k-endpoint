@@ -6,6 +6,10 @@ import org.slf4j.LoggerFactory;
 
 import kz.qazmarka.h2k.util.Parsers;
 
+/**
+ * Конфигурация подсистемы ensureTopics: целевые партиции/репликация, таймауты, client.id и политика backoff.
+ * Значения валидируются и приводятся к минимально допустимым, чтобы избежать некорректных настроек в рантайме.
+ */
 public final class EnsureSection {
     private static final Logger LOG = LoggerFactory.getLogger(EnsureSection.class);
     private static final String ERR_MIN_FMT = "Некорректное значение {}={}, устанавливаю минимум: {}";
@@ -41,6 +45,12 @@ public final class EnsureSection {
         this.unknownBackoffMs = p.unknownBackoffMs;
     }
 
+    /**
+     * Считывает ключи {@code h2k.ensure.*} и возврашает иммутабельный объект с безопасными значениями.
+     *
+     * @param cfg конфигурация, содержащая параметры ensure
+     * @return нормализованный набор ensure-настроек
+     */
     static EnsureSection from(Configuration cfg) {
         boolean ensureTopics = cfg.getBoolean(H2kConfig.K_ENSURE_TOPICS, H2kConfig.DEFAULT_ENSURE_TOPICS);
         boolean ensureIncreasePartitions = cfg.getBoolean(H2kConfig.K_ENSURE_INCREASE_PARTITIONS, H2kConfig.DEFAULT_ENSURE_INCREASE_PARTITIONS);

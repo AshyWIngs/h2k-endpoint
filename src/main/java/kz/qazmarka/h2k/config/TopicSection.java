@@ -4,6 +4,9 @@ import kz.qazmarka.h2k.util.Parsers;
 
 import org.apache.hadoop.conf.Configuration;
 
+/**
+ * Настройки, связанные с именованием Kafka-топиков и набором CF, подлежащих репликации.
+ */
 public final class TopicSection {
     final String topicPattern;
     final int topicMaxLength;
@@ -20,6 +23,9 @@ public final class TopicSection {
         this.cfBytes = cfBytes;
     }
 
+    /**
+     * Парсит шаблон имён, ограничение длины и список CF из конфигурации.
+     */
     static TopicSection from(Configuration cfg) {
         String topicPattern = Parsers.readTopicPattern(cfg, H2kConfig.K_TOPIC_PATTERN, H2kConfig.PLACEHOLDER_TABLE);
         int topicMaxLength = Parsers.readIntMin(cfg, H2kConfig.K_TOPIC_MAX_LENGTH, H2kConfig.DEFAULT_TOPIC_MAX_LENGTH, 1);

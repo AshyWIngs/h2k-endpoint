@@ -163,7 +163,7 @@ CREATE TABLE stg.kafka_tbl_jti_trace_cis_history_src
   p Nullable(String), pt Nullable(Int32), o Nullable(String), pn Nullable(String), b Nullable(String),
   tt Nullable(Int64), tm Nullable(Int64),
   ch Array(String), j Nullable(String), pg Nullable(Int32), et Nullable(Int32), pvad Nullable(String), ag Nullable(String),
-  event_version Nullable(Int64), `delete` UInt8
+  _event_ts Nullable(Int64), `delete` UInt8
 )
 ENGINE = Kafka
 SETTINGS
@@ -179,7 +179,7 @@ SETTINGS
 CREATE TABLE stg.tbl_jti_trace_cis_history_raw
 (
   c String, t UInt8, opd DateTime64(3, 'UTC'),
-  event_version Nullable(DateTime64(3, 'UTC')), `delete` UInt8,
+  _event_ts Nullable(DateTime64(3, 'UTC')), `delete` UInt8,
   id Nullable(String), did Nullable(String), rid Nullable(String), rinn Nullable(String), rn Nullable(String),
   sid Nullable(String), sinn Nullable(String), sn Nullable(String), gt Nullable(String), prid Nullable(String),
   st Nullable(UInt8), ste Nullable(UInt8), elr Nullable(UInt8),
@@ -197,7 +197,7 @@ SELECT
   c,
   CAST(t AS UInt8) AS t,
   toDateTime64(opd/1000.0, 3, 'UTC') AS opd,
-  ifNull(toDateTime64(event_version/1000.0, 3, 'UTC'), NULL) AS event_version,
+  ifNull(toDateTime64(_event_ts/1000.0, 3, 'UTC'), NULL) AS _event_ts,
   `delete`,
   id, did, rid, rinn, rn, sid, sinn, sn, gt, prid,
   CAST(st  AS Nullable(UInt8))  AS st,

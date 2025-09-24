@@ -55,7 +55,7 @@ public final class H2kConfig {
     // ==== Дополнительные ключи конфигурации (для формата и AVRO) ====
     /** Формат сериализации payload: json_each_row | avro_binary | avro_json */
     static final String K_PAYLOAD_FORMAT = "h2k.payload.format";
-    /** FQCN фабрики сериализаторов (SPI), например kz.qazmarka.h2k.payload.SerializerFactory */
+    /** FQCN фабрики сериализаторов (SPI), например kz.qazmarka.h2k.payload.builder.PayloadBuilder$PayloadSerializerFactory */
     static final String K_PAYLOAD_SERIALIZER_FACTORY = "h2k.payload.serializer.factory";
     // Индивидуальные AVRO-ключи публикуются через внутренний класс Keys; здесь оставляем только общий префикс.
     /** Префикс для всех AVRO-настроек */
@@ -735,6 +735,9 @@ public final class H2kConfig {
      * @return байтовые представления имён CF (UTF‑8). ВАЖНО: возвращается ссылка на внутренний массив
      * для исключения лишних аллокаций на горячем пути. Не модифицируйте содержимое снаружи.
      */
+    /**
+     * Возвращает CF-имена в виде массива {@code byte[]} (UTF-8), пригодного для фильтров HBase.
+     */
     public byte[][] getCfFamiliesBytes() { return cfBytes; }
 
     /** @return CSV с именами CF — удобно для логов */
@@ -851,9 +854,11 @@ public final class H2kConfig {
     public boolean isSalted(TableName table) { return getSaltBytesFor(table) > 0; }
 
     /** @return неизменяемая карта табличных переопределений соли (как задана в конфиге) */
+    /** Карта переопределений соли rowkey в байтах. */
     public Map<String, Integer> getSaltBytesByTable() { return saltBytesByTable; }
 
     /** @return неизменяемая карта подсказок ёмкости корневого JSON по таблицам */
+    /** Подсказки начальной ёмкости JSON для конкретных таблиц. */
     public Map<String, Integer> getCapacityHintByTable() { return capacityHintByTable; }
 
     /**
