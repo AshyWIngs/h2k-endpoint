@@ -56,13 +56,9 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
     /** Логгер класса. Все сообщения — на русском языке. */
     private static final Logger LOG = LoggerFactory.getLogger(KafkaReplicationEndpoint.class);
 
-
-
     // ==== Дефолты локального класса ====
     /** Значение по умолчанию для режима декодирования значений. */
     private static final String DEFAULT_DECODE_MODE = "simple";
-    /** Префикс client.id продьюсера; к нему добавляется hostname или UUID. */
-    private static final String DEFAULT_CLIENT_ID   = "hbase1-repl";
 
     // ядро
     /** Kafka Producer для отправки событий; ключ/значение сериализуются как байты. */
@@ -105,6 +101,7 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
         this.topicManager = new TopicManager(h2k, topicEnsurer);
         this.walEntryProcessor = new WalEntryProcessor(payload, topicManager, producer);
         initCfFilter();
+        logPayloadSerializer(payload);
         logInitSummary();
     }
 
@@ -169,6 +166,24 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
                 h2k.getCfNamesCsv(),
                 h2k.isEnsureTopics(), h2k.isIncludeRowKey(), h2k.getRowkeyEncoding(), h2k.isIncludeMeta(), h2k.isIncludeMetaWal(),
                 h2k.isProducerBatchCountersEnabled(), h2k.isProducerBatchDebugOnFailure());
+    }
+
+    /**
+     * Выводит в INFO итоговый режим сериализации payload (JSON/AVRO, локальные схемы или Schema Registry).
+     * Видно даже при стандартном уровне логирования.
+     */
+    private void logPayloadSerializer(PayloadBuilder payload) {
+        if (!LOG.isInfoEnabled()) {
+            return;
+        }
+        try {
+            LOG.info("Payload: {}", payload.describeSerializer());
+        } catch (RuntimeException ex) {
+            LOG.warn("Не удалось определить активный сериализатор payload: {}", ex.toString());
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("Трассировка ошибки сериализатора", ex);
+            }
+        }
     }
     /**
      * Возвращает строку bootstrap‑серверов Kafka из конфигурации или бросает {@link IOException}, если параметр отсутствует.
@@ -412,10 +427,10 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
             try {
                 String host = java.net.InetAddress.getLocalHost().getHostName();
                 computedDefaultClientId = (host == null || host.isEmpty())
-                        ? (DEFAULT_CLIENT_ID + '-' + java.util.UUID.randomUUID())
-                        : (DEFAULT_CLIENT_ID + '-' + host);
+                        ? (H2kConfig.DEFAULT_ADMIN_CLIENT_ID + '-' + java.util.UUID.randomUUID())
+                        : (H2kConfig.DEFAULT_ADMIN_CLIENT_ID + '-' + host);
             } catch (java.net.UnknownHostException ignore) {
-                computedDefaultClientId = DEFAULT_CLIENT_ID + '-' + java.util.UUID.randomUUID();
+                computedDefaultClientId = H2kConfig.DEFAULT_ADMIN_CLIENT_ID + '-' + java.util.UUID.randomUUID();
             }
             // Пользователь может явно задать h2k.producer.client.id — тогда уважаем его как есть.
             String requestedClientId = cfg.get("h2k.producer.client.id", computedDefaultClientId);

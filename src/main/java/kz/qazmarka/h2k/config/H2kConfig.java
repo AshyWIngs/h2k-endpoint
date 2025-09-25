@@ -196,7 +196,7 @@ public final class H2kConfig {
     /** Имя CF по умолчанию, если в конфигурации не задано явно. */
     static final String DEFAULT_CF_NAME = "0";
     /** Базовое значение client.id для AdminClient (к нему добавляется hostname, если доступен). */
-    static final String DEFAULT_ADMIN_CLIENT_ID = "h2k-admin";
+    public static final String DEFAULT_ADMIN_CLIENT_ID = "h2k";
     /** По умолчанию rowkey в payload отключён. */
     static final boolean DEFAULT_INCLUDE_ROWKEY = false;
     /** По умолчанию метаданные колонок в payload отключены. */

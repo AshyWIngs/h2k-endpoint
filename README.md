@@ -1,9 +1,9 @@
-## HBase 1.4.13 → Kafka 2.3.1 ReplicationEndpoint (JSONEachRow)
+## HBase 1.4.13 → Kafka 2.3.1 ReplicationEndpoint (AVRO — целевой формат; JSONEachRow — вспомогательный)
 
 **Пакет:** `kz.qazmarka.h2k.endpoint`  
 **Endpoint‑класс:** `kz.qazmarka.h2k.endpoint.KafkaReplicationEndpoint`
 
-Лёгкий и быстрый `ReplicationEndpoint` для HBase 1.4.x, публикующий **одну JSON‑строку на строку HBase** (формат JSONEachRow). Минимум аллокаций, стабильный порядок ключей, дружелюбные логи на русском.
+Лёгкий и быстрый `ReplicationEndpoint` для HBase 1.4.x. Основной режим — **AVRO** (Generic / Confluent Schema Registry), что соответствует целевой архитектуре. Формат **JSONEachRow** также поддерживается, но используется в основном для отладки и интеграций без Avro. Минимум аллокаций, стабильный порядок ключей, дружелюбные логи на русском.
 
 ---
 
@@ -46,7 +46,7 @@ enable 'TBL_JTI_TRACE_CIS_HISTORY'
 bin/hbase shell conf/add_peer_shell_balanced.txt
 ```
 
-5) **Проверьте доставку**: сообщения появляются в топике `${table}`.
+5) **Проверьте доставку**: сообщения появляются в топике `${table}` (по умолчанию в формате AVRO; при необходимости можно выбрать JSONEachRow).
 
 ---
 
@@ -68,6 +68,7 @@ bin/hbase shell conf/add_peer_shell_balanced.txt
    - `kafka-clients-2.3.1.jar`
    - `lz4-java-1.6.0+.jar` (для FAST/BALANCED)
    - `snappy-java-1.1.x+.jar` (для RELIABLE, если `compression.type=snappy`)
+   - Если используете Confluent Avro: положить только `kafka-avro-serializer-5.3.8.jar` и `kafka-schema-registry-client-5.3.8.jar`
 3. Перезапустите RegionServer.
 
 Быстрая проверка:
@@ -87,6 +88,7 @@ hbase classpath | tr ':' '\n' | egrep -i 'kafka-clients|lz4|snappy'
 ```properties
 h2k.kafka.bootstrap.servers=10.254.3.111:9092,10.254.3.112:9092,10.254.3.113:9092
 h2k.cf.list=d
+h2k.payload.format=avro-binary
 # Декодирование:
 h2k.decode.mode=json-phoenix
 h2k.schema.path=/opt/hbase-default-current/conf/schema.json
@@ -102,13 +104,14 @@ h2k.topic.pattern=${table}
 
 | Ключ | Назначение | Примечание |
 |---|---|---|
+| `h2k.payload.format` | Формат сериализации payload | `avro-binary` (рекомендуется) \| `json-each-row` |
 | `h2k.kafka.bootstrap.servers` | Список брокеров Kafka | `host:port[,host2:port2]` |
 | `h2k.cf.list` | Список CF для экспорта | CSV; пробелы обрезаются, регистр сохраняется |
 | `h2k.decode.mode` | `simple` \| `json-phoenix` | Для Phoenix нужен `schema.json` |
 | `h2k.schema.path` | Путь к `schema.json` | Только для `json-phoenix` |
 | `h2k.topic.pattern` | Шаблон имени топика | `${table}` по умолчанию |
 | `h2k.ensure.topics` | Автосоздание тем | true/false |
-| `h2k.payload.include.meta` | Добавлять служебные поля | +`_event_ts`,`delete` и т.д. |
+| `h2k.payload.include.meta` | Добавлять служебные поля | +`_event_ts`,`_delete` и т.д. |
 | `h2k.payload.include.meta.wal` | Добавлять `_wal_seq`,`_wal_write_time` | требует включить meta |
 | `h2k.payload.include.rowkey` | Включать `_rowkey` | `BASE64`/`HEX` управляется `h2k.rowkey.encoding` |
 
@@ -170,10 +173,10 @@ h2k.topic.pattern=${table}
 
 Endpoint умеет формировать payload в нескольких форматах (управляется ключом `h2k.payload.format`):
 
-- `json-each-row` — режим по умолчанию, без дополнительных настроек.
-- `avro-binary` / `h2k.avro.mode=generic` — локальные `.avsc` из каталога `h2k.avro.schema.dir`.
-- `avro-json` / `h2k.avro.mode=generic` — Avro в JSON-представлении (удобно для отладки).
-- `avro-binary` / `h2k.avro.mode=confluent` — работа через Confluent Schema Registry 5.3.x (payload к SR
-  экранируется: кавычки, `\n`, control-символы кодируются по JSON).
+- `avro-binary` — **рекомендуемый** формат для продакшена.
+  - `h2k.avro.mode=generic` — локальные `.avsc` из каталога `h2k.avro.schema.dir`.
+  - `h2k.avro.mode=confluent` — работа через Confluent Schema Registry 5.3.x (payload к SR экранируется: кавычки, `\n`, control-символы кодируются по JSON). Подробная конфигурация — см. `docs/avro.md`.
+- `json-each-row` — простой текстовый формат, удобный для отладки и ClickHouse ingest.
+- `avro-json` — Avro в JSON-представлении, также в основном для отладки.
 
-> Подробный чек-лист и примеры конфигурации см. в `docs/avro.md`.
+При старте endpoint выводит строку уровня INFO вида `Payload: payload.format=..., serializer.class=..., avro.mode=...` — по ней видно, активен ли AVRO, какой режим и откуда берутся схемы. Сообщение появляется независимо от включённого DEBUG.

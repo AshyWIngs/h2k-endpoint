@@ -477,4 +477,52 @@ public final class PayloadBuilder {
         }
         return cachedSerializer.get();
     }
+
+    /**
+     * Возвращает диагностическое описание активного сериализатора payload.
+     * Используется исключительно для логов/метрик; не влияет на основную работу.
+     *
+     * @return строка вида
+     * {@code payload.format=AVRO_BINARY, serializer.class=kz....GenericAvroPayloadSerializer, avro.mode=GENERIC, avro.schema.dir=/conf/avro}
+     */
+    public String describeSerializer() {
+        PayloadSerializer serializer = resolveSerializerFromConfig();
+
+        StringBuilder sb = new StringBuilder(160);
+
+        H2kConfig.PayloadFormat fmt = cfg.getPayloadFormat();
+        String configuredFormat = (fmt == null) ? "JSON_EACH_ROW" : fmt.name();
+        if (fmt == null) {
+            sb.append("payload.format=JSON_EACH_ROW (default)");
+        } else {
+            sb.append("payload.format=").append(configuredFormat);
+        }
+
+        String factoryClass = cfg.getSerializerFactoryClass();
+        if (factoryClass != null && !factoryClass.trim().isEmpty()) {
+            sb.append(", serializer.factory=").append(factoryClass.trim());
+        }
+
+        sb.append(", serializer.class=").append(serializer.getClass().getName());
+        sb.append(", tableAware=").append(serializer instanceof TableAwarePayloadSerializer);
+
+        boolean avroFormat = fmt == H2kConfig.PayloadFormat.AVRO_BINARY
+                || fmt == H2kConfig.PayloadFormat.AVRO_JSON;
+        if (avroFormat) {
+            H2kConfig.AvroMode mode = cfg.getAvroMode();
+            sb.append(", avro.mode=").append(mode);
+            if (mode == H2kConfig.AvroMode.GENERIC) {
+                sb.append(", avro.schema.dir=").append(cfg.getAvroSchemaDir());
+            } else {
+                sb.append(", avro.schema.registry.urls=").append(cfg.getAvroSchemaRegistryUrls());
+                sb.append(", avro.schema.registry.auth=")
+                        .append(cfg.getAvroSrAuth().isEmpty() ? "disabled" : "configured");
+            }
+            if (!cfg.getAvroProps().isEmpty()) {
+                sb.append(", avro.props.keys=").append(cfg.getAvroProps().keySet());
+            }
+        }
+
+        return sb.toString();
+    }
 }

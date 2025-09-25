@@ -10,6 +10,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 
+import org.apache.avro.AvroRuntimeException;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericData;
 import org.apache.avro.generic.GenericDatumWriter;
@@ -30,6 +31,8 @@ import kz.qazmarka.h2k.payload.serializer.PayloadSerializer;
  * Для снижения аллокаций применяются повторно используемые буферы через {@link ThreadLocal}.
  */
 public final class AvroSerializer implements PayloadSerializer {
+
+    private static final Object NO_DEFAULT = new Object();
 
     /** Резолвер Avro-схемы под конкретный payload. */
     @FunctionalInterface
@@ -225,12 +228,53 @@ public final class AvroSerializer implements PayloadSerializer {
 
     static GenericRecord buildRecord(Schema schema, Map<String, ?> fields) {
         GenericData.Record avroRecord = new GenericData.Record(schema);
+        GenericData genericData = GenericData.get();
         for (Schema.Field f : schema.getFields()) {
-            Object v = fields.get(f.name());
-            Object coerced = coerceValue(f.schema(), v, f.name());
-            avroRecord.put(f.name(), coerced);
+            final String fieldName = f.name();
+            final Schema fieldSchema = f.schema();
+
+            final boolean hasValue = fields.containsKey(fieldName);
+            Object value = hasValue ? fields.get(fieldName) : null;
+
+            if (!hasValue) {
+                Object defaultValue = extractDefaultValue(genericData, f, fieldSchema);
+                if (defaultValue != NO_DEFAULT) {
+                    value = defaultValue;
+                } else if (!allowsNull(fieldSchema)) {
+                    throw new IllegalStateException("Avro: поле '" + fieldName + "' обязательно, но отсутствует в payload");
+                }
+            }
+
+            Object coerced = coerceValue(fieldSchema, value, fieldName);
+            if (coerced == null && !allowsNull(fieldSchema)) {
+                throw new IllegalStateException("Avro: поле '" + fieldName + "' обязательно и не может быть null");
+            }
+            avroRecord.put(fieldName, coerced);
         }
         return avroRecord;
+    }
+
+    private static boolean allowsNull(Schema schema) {
+        if (schema.getType() == Schema.Type.NULL) {
+            return true;
+        }
+        if (schema.getType() == Schema.Type.UNION) {
+            for (Schema option : schema.getTypes()) {
+                if (option.getType() == Schema.Type.NULL) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static Object extractDefaultValue(GenericData genericData, Schema.Field field, Schema fieldSchema) {
+        try {
+            Object defaultValue = genericData.getDefaultValue(field);
+            return genericData.deepCopy(fieldSchema, defaultValue);
+        } catch (AvroRuntimeException ex) {
+            return NO_DEFAULT;
+        }
     }
 
     /** Проверка и копирование произвольной Map в типизированную Map<String,Object> (без unchecked cast). */

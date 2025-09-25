@@ -21,7 +21,7 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>kz.qazmarka</groupId>
   <artifactId>h2k-endpoint</artifactId>
-  <version>0.0.6</version>
+  <version>0.0.10</version>
   <name>HBase 1.4.13 -> Kafka 2.3.1 ReplicationEndpoint</name>
 
   <properties>
@@ -36,14 +36,14 @@
     <kafka.version>2.3.1</kafka.version>
 
     <!-- Логирование через SLF4J API; бэкенд выбирается окружением (log4j2/logback/slf4j-simple в dev) -->
-    <slf4j.version>1.7.36</slf4j.version>
+    <slf4j.version>1.7.25</slf4j.version>
     <!-- Версия Gson: фиксируем отдельно для IDE/compile; на рантайме библиотека берётся из окружения (scope=provided) -->
     <gson.version>2.2.4</gson.version>
 
     <!-- lz4-java нужна только если на брокере включён compression.type=lz4; помечаем provided -->
     <lz4.version>1.6.0</lz4.version>
     <!-- Avro и Confluent Schema Registry (совместимо с Kafka 2.3.1 и Java 8) -->
-    <avro.version>1.9.2</avro.version>
+    <avro.version>1.7.7</avro.version>
     <confluent.sr.version>5.3.8</confluent.sr.version>
 
     <!-- Кодировка компиляции -->
@@ -121,7 +121,17 @@
       <dependency>
         <groupId>com.fasterxml.jackson.core</groupId>
         <artifactId>jackson-databind</artifactId>
-        <version>2.10.2</version>
+        <version>2.9.10.1</version>
+      </dependency>
+      <dependency>
+        <groupId>com.fasterxml.jackson.core</groupId>
+        <artifactId>jackson-core</artifactId>
+        <version>2.9.10</version>
+      </dependency>
+      <dependency>
+        <groupId>com.fasterxml.jackson.core</groupId>
+        <artifactId>jackson-annotations</artifactId>
+        <version>2.9.10</version>
       </dependency>
       <dependency>
         <groupId>org.apache.kafka</groupId>
@@ -154,7 +164,7 @@
       <dependency>
         <groupId>org.xerial.snappy</groupId>
         <artifactId>snappy-java</artifactId>
-        <version>1.1.7.3</version>
+        <version>1.0.5</version>
       </dependency>
       <!-- jsr305: аннотации, разные версии часто конфликтуют в IDE; выравниваем -->
       <dependency>
@@ -462,6 +472,12 @@
           <!-- Блокируем ТОЛЬКО прямые зависимости (а не транзитивные из HBase/Hadoop/Phoenix с scope=provided) -->
           <searchTransitive>false</searchTransitive>
           <excludes>
+            <exclude>org.slf4j:slf4j-api:(1.7.25,)</exclude>
+            <exclude>com.fasterxml.jackson.core:jackson-databind:(2.9.10.1,)</exclude>
+            <exclude>com.fasterxml.jackson.core:jackson-core:(2.9.10,)</exclude>
+            <exclude>com.fasterxml.jackson.core:jackson-annotations:(2.9.10,)</exclude>
+            <exclude>org.xerial.snappy:snappy-java:(1.0.5,)</exclude>
+            <exclude>org.apache.avro:avro:(1.7.7,)</exclude>
             <exclude>log4j:log4j</exclude>
             <exclude>org.slf4j:slf4j-log4j12</exclude>
             <!-- Запрещаем прямую зависимость на gson новее 2.2.4 -->

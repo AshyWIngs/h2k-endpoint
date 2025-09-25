@@ -43,9 +43,9 @@
    h2k.avro.sr.auth.basic.username=svc-hbase
    h2k.avro.sr.auth.basic.password=...           # опционально
    h2k.avro.subject.strategy=table               # qualifier | table | table-lower | table-upper
- h2k.avro.subject.prefix=hbase-
-  h2k.avro.subject.suffix=-value
-  ```
+   h2k.avro.subject.prefix=hbase-
+   h2k.avro.subject.suffix=-value
+   ```
 
    > В режиме `confluent` поддерживается только `h2k.payload.format=avro-binary`.
 
