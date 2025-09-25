@@ -6,6 +6,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -122,17 +123,25 @@ public final class Parsers {
      * @return массив непустых имён CF; гарантирует хотя бы одно значение {@code defaultCf}
      */
     public static String[] readCfNames(Configuration cfg, String key, String defaultCf) {
-        String raw = cfg.get(key, defaultCf);
-        if (raw == null) return new String[]{ defaultCf };
-        String[] parts = raw.split(",");
-        ArrayList<String> out = new ArrayList<>(parts.length);
-        for (String p : parts) {
-            if (p == null) continue;
-            String s = p.trim();
-            if (!s.isEmpty()) out.add(s);
+        String raw = cfg.get(key);
+        if (raw == null) {
+            return new String[]{ defaultCf };
         }
-        if (out.isEmpty()) out.add(defaultCf);
-        return out.toArray(new String[0]);
+        String[] parts = raw.split(",");
+        LinkedHashSet<String> unique = new LinkedHashSet<>(parts.length);
+        for (String part : parts) {
+            if (part == null) {
+                continue;
+            }
+            String trimmed = part.trim();
+            if (!trimmed.isEmpty()) {
+                unique.add(trimmed);
+            }
+        }
+        if (unique.isEmpty()) {
+            unique.add(defaultCf);
+        }
+        return unique.toArray(new String[0]);
     }
 
     /**
@@ -159,39 +168,6 @@ public final class Parsers {
         if (val == null) return "hex";
         String v = val.trim().toLowerCase(Locale.ROOT);
         return "base64".equals(v) ? "base64" : "hex";
-    }
-
-    /**
-     * Параметры фильтрации WAL по минимальному timestamp.
-     * Используется для выборки записей не старше заданного порога.
-     */
-    public static final class WalFilter {
-        /** Признак включения фильтрации WAL. */
-        public final boolean enabled;
-        /** Минимально допустимый timestamp (включительно), {@link Long#MIN_VALUE} если не задан. */
-        public final long minTs;
-        /**
-         * @param enabled включён ли фильтр
-         * @param minTs   минимальный timestamp; при выключенном фильтре игнорируется
-         */
-        public WalFilter(boolean enabled, long minTs) { this.enabled = enabled; this.minTs = minTs; }
-    }
-
-    /**
-     * Читает параметры фильтра WAL из конфигурации.
-     *
-     * @param cfg конфигурация Hadoop
-     * @param key ключ, содержащий минимальный timestamp
-     * @return {@link WalFilter} с флагом и значением минимального timestamp; при ошибке парсинга — выключенный фильтр
-     */
-    public static WalFilter readWalFilter(Configuration cfg, String key) {
-        String walMinStr = cfg.get(key);
-        if (walMinStr == null) return new WalFilter(false, Long.MIN_VALUE);
-        try {
-            return new WalFilter(true, Long.parseLong(walMinStr.trim()));
-        } catch (NumberFormatException nfe) {
-            return new WalFilter(false, Long.MIN_VALUE);
-        }
     }
 
     /**

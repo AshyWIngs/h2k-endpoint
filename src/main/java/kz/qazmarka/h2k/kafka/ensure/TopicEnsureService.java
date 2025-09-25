@@ -621,12 +621,15 @@ final class TopicEnsureService implements AutoCloseable {
     }
 
     /**
-     * Возвращает неизменяемый снимок внутренних счётчиков.
-     * Счётчики являются накопительными с момента создания инстанса; перезапуск пира обнуляет значения.
+     * Возвращает неизменяемый снимок внутренних счётчиков ensure-процесса.
+     * Счётчики накопительные с момента создания инстанса; после перезапуска пира
+     * значения обнуляются. Подсчёт размера очереди backoff выполняется без
+     * лишних аллокаций через {@code state.unknownSize()}.
      *
-     * @return карта «имя метрики → значение»
+     * @return неизменяемая карта «имя метрики → значение»
      */
     public Map<String, Long> getMetrics() {
+        // 9 метрик → начальная ёмкость 13 (формула JDK для LinkedHashMap)
         Map<String, Long> m = new LinkedHashMap<>(13);
         m.put("ensure.invocations", state.ensureInvocations.longValue());
         m.put("ensure.cache.hit",   state.ensureHitCache.longValue());
@@ -640,11 +643,24 @@ final class TopicEnsureService implements AutoCloseable {
         return Collections.unmodifiableMap(m);
     }
 
-    /** Возвращает снимок backoff-очереди: topic → оставшееся время (мс). */
+    /**
+     * Возвращает снимок очереди backoff: {@code topic → оставшееся время (мс)}.
+     *
+     * Контракт:
+     *  - все значения считаются от единой точки времени {@code System.nanoTime()} (консистентность);
+     *  - источник данных — немутируемая копия дедлайнов, см. {@link TopicEnsureState#snapshotUnknown()};
+     *  - результат — неизменяемая карта; попытка модификации приводит к {@link UnsupportedOperationException};
+     *  - сложность — {@code O(n)} по количеству элементов очереди; повторных снапшотов и лишних аллокаций нет.
+     *
+     * @return неизменяемая карта «topic → оставшиеся миллисекунды»
+     */
     public Map<String, Long> getBackoffSnapshot() {
-        Map<String, Long> pending = state.snapshotUnknown();
-        Map<String, Long> snapshot = new LinkedHashMap<>(pending.size());
-        long now = System.nanoTime();
+        final Map<String, Long> pending = state.snapshotUnknown();
+        if (pending.isEmpty()) {
+            return Collections.emptyMap();
+        }
+        final Map<String, Long> snapshot = new LinkedHashMap<>(pending.size());
+        final long now = System.nanoTime();
         for (Map.Entry<String, Long> e : pending.entrySet()) {
             long remainingNs = e.getValue() - now;
             if (remainingNs < 0L) remainingNs = 0L;

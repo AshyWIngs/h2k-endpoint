@@ -5,11 +5,10 @@ import java.util.Map;
 import java.util.Objects;
 
 import org.apache.hadoop.hbase.TableName;
-import org.apache.phoenix.schema.types.PDataType;
-
 import kz.qazmarka.h2k.schema.phoenix.PhoenixColumnTypeRegistry;
 import kz.qazmarka.h2k.schema.phoenix.PhoenixPkParser;
 import kz.qazmarka.h2k.schema.phoenix.PhoenixValueNormalizer;
+import kz.qazmarka.h2k.schema.phoenix.PhoenixColumnTypeRegistry.PhoenixType;
 import kz.qazmarka.h2k.schema.registry.SchemaRegistry;
 import kz.qazmarka.h2k.util.RowKeySlice;
 
@@ -23,10 +22,10 @@ import kz.qazmarka.h2k.util.RowKeySlice;
  * - Временные типы декодируются по правилам Phoenix 4.14/4.15 (мс с эпохи для {@code TIMESTAMP/DATE/TIME}).
  *
  * Назначение
- * - Декодер значений колонок через Phoenix {@link PDataType}, опираясь на {@link SchemaRegistry}.
+ * - Декодер значений колонок через обёртки Phoenix {@code PhoenixType}, опираясь на {@link SchemaRegistry}.
  * - Поддерживает семантику Phoenix для широкого набора типов (UNSIGNED‑типы, TIMESTAMP/DATE/TIME, ARRAY и т.п.).
  * - Унифицирует результат: TIMESTAMP/DATE/TIME → epoch millis (long); любой Phoenix ARRAY → {@code List<Object>};
- *   VARBINARY/BINARY → {@code byte[]} как есть; прочие типы — как вернул {@code PDataType}.
+ *   VARBINARY/BINARY → {@code byte[]} как есть; прочие типы — как вернул {@code PhoenixType}.
  *
  * Диагностика и исключения
  * - Если тип колонки известен (получен из {@link SchemaRegistry}), но байты не соответствуют формату,
@@ -110,9 +109,9 @@ public final class ValueCodecPhoenix implements Decoder {
                                   byte[] value,
                                   int vOff,
                                   int vLen) {
-        final PDataType<?> type = types.resolve(table, qualifier);
+        final PhoenixType type = types.resolve(table, qualifier);
 
-        final Integer expectedSize = type.getByteSize();
+        final Integer expectedSize = type.byteSize();
         if (expectedSize != null && expectedSize != vLen) {
             throw new IllegalStateException(
                 "Несоответствие длины значения для " + table + "." + qualifier

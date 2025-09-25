@@ -16,7 +16,6 @@ import kz.qazmarka.h2k.config.H2kConfig;
 
 /**
  * Высокоуровневый фасад ensure-логики Kafka-топиков.
- * <p>
  * Инкапсулирует {@link TopicEnsureService}, поставляя безопасный NOOP-экземпляр для сценариев,
  * когда ensure отключён конфигурацией или отсутствуют настройки bootstrap. Благодаря этому
  * вызывающий код не обязан проверять {@code null} и может работать с единым API.
@@ -27,15 +26,15 @@ public final class TopicEnsurer implements AutoCloseable {
     private static final TopicEnsurer DISABLED = new TopicEnsurer(null, true);
 
     private final TopicEnsureService service;
-    private final boolean disabled;
+    private final boolean disabledMode;
 
     private TopicEnsurer(TopicEnsureService service) {
         this(service, false);
     }
 
-    private TopicEnsurer(TopicEnsureService service, boolean disabled) {
+    private TopicEnsurer(TopicEnsureService service, boolean disabledMode) {
         this.service = service;
-        this.disabled = disabled;
+        this.disabledMode = disabledMode;
     }
 
     /**
@@ -70,7 +69,7 @@ public final class TopicEnsurer implements AutoCloseable {
      * Инициирует ensure для одиночной темы; вызов безопасен, даже если ensure отключён (NOOP).
      */
     public void ensureTopic(String topic) {
-        if (disabled) {
+        if (disabledMode) {
             return;
         }
         service.ensureTopic(topic);
@@ -80,7 +79,7 @@ public final class TopicEnsurer implements AutoCloseable {
      * Проверяет наличие темы и при необходимости инициирует ensure; возвращает true только после подтверждения.
      */
     public boolean ensureTopicOk(String topic) {
-        if (disabled) {
+        if (disabledMode) {
             return false;
         }
         return service.ensureTopicOk(topic);
@@ -90,7 +89,7 @@ public final class TopicEnsurer implements AutoCloseable {
      * Пакетный ensure для набора тем; NOOP в отключённом режиме.
      */
     public void ensureTopics(Collection<String> topics) {
-        if (disabled) {
+        if (disabledMode) {
             return;
         }
         service.ensureTopics(topics);
@@ -100,20 +99,20 @@ public final class TopicEnsurer implements AutoCloseable {
      * Снимок внутренних метрик ensure-процесса; для NOOP-реализации возвращает пустую карту.
      */
     public Map<String, Long> getMetrics() {
-        if (disabled) {
+        if (disabledMode) {
             return java.util.Collections.emptyMap();
         }
         return service.getMetrics();
     }
 
-    public boolean isEnabled() { return !disabled; }
+    public boolean isEnabled() { return !disabledMode; }
 
     @Override
     /**
      * Закрывает обёрнутый {@link TopicEnsureService}; в режиме NOOP ничего не делает.
      */
     public void close() {
-        if (disabled) {
+        if (disabledMode) {
             return;
         }
         service.close();
@@ -121,7 +120,7 @@ public final class TopicEnsurer implements AutoCloseable {
 
     @Override
     public String toString() {
-        if (disabled) {
+        if (disabledMode) {
             return "TopicEnsurer[disabled]";
         }
         return service.toString();

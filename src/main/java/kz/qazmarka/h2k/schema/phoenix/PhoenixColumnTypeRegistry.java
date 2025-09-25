@@ -4,7 +4,6 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -41,67 +40,83 @@ import kz.qazmarka.h2k.schema.registry.SchemaRegistry;
  */
 public final class PhoenixColumnTypeRegistry {
 
+    /**
+     * Создаёт реестр типов Phoenix поверх {@link SchemaRegistry}.
+     * Не допускает {@code null}, чтобы предотвратить ленивые сбои в горячем пути сериализации.
+     *
+     * @param registry источник метаданных Phoenix-таблиц
+     */
+    public PhoenixColumnTypeRegistry(kz.qazmarka.h2k.schema.registry.SchemaRegistry registry) {
+        if (registry == null) {
+            throw new NullPointerException("SchemaRegistry не может быть null");
+        }
+        this.registry = registry;
+    }
+
     private static final Logger LOG = LoggerFactory.getLogger(PhoenixColumnTypeRegistry.class);
     private static final String T_VARCHAR = "VARCHAR";
 
-    private static final Map<String, PDataType<?>> TYPE_MAP;
+    private static final Map<String, PhoenixType> TYPE_MAP;
+    private static final PhoenixType DEFAULT_TYPE = PhoenixType.of(PVarchar.INSTANCE);
     static {
-        Map<String, PDataType<?>> m = new HashMap<>(32);
-        m.put("VARCHAR", PVarchar.INSTANCE);
-        m.put("CHAR", PChar.INSTANCE);
-        m.put("CHARACTER", PChar.INSTANCE);
-        m.put("UNSIGNED TINYINT", PUnsignedTinyint.INSTANCE);
-        m.put("UNSIGNED SMALLINT", PUnsignedSmallint.INSTANCE);
-        m.put("UNSIGNED INT", PUnsignedInt.INSTANCE);
-        m.put("UNSIGNED LONG", PUnsignedLong.INSTANCE);
-        m.put("TINYINT", PTinyint.INSTANCE);
-        m.put("SMALLINT", PSmallint.INSTANCE);
-        m.put("INTEGER", PInteger.INSTANCE);
-        m.put("INT", PInteger.INSTANCE);
-        m.put("BIGINT", PLong.INSTANCE);
-        m.put("FLOAT", PFloat.INSTANCE);
-        m.put("DOUBLE", PDouble.INSTANCE);
-        m.put("DECIMAL", PDecimal.INSTANCE);
-        m.put("BOOLEAN", PBoolean.INSTANCE);
-        m.put("TIMESTAMP", PTimestamp.INSTANCE);
-        m.put("TIME", PTime.INSTANCE);
-        m.put("DATE", PDate.INSTANCE);
-        m.put("VARCHAR ARRAY", PVarcharArray.INSTANCE);
-        m.put("CHARACTER VARYING ARRAY", PVarcharArray.INSTANCE);
-        m.put("STRING ARRAY", PVarcharArray.INSTANCE);
-        m.put("VARBINARY", PVarbinary.INSTANCE);
-        m.put("BINARY", PBinary.INSTANCE);
-        m.put("NUMERIC", PDecimal.INSTANCE);
-        m.put("NUMBER", PDecimal.INSTANCE);
-        m.put("STRING", PVarchar.INSTANCE);
-        m.put("CHARACTER VARYING", PVarchar.INSTANCE);
-        m.put("BINARY VARYING", PVarbinary.INSTANCE);
-        m.put("LONG", PLong.INSTANCE);
-        m.put("BOOL", PBoolean.INSTANCE);
+        Map<String, PhoenixType> m = new HashMap<>(32);
+        m.put(T_VARCHAR, PhoenixType.of(PVarchar.INSTANCE));
+        m.put("CHAR", PhoenixType.of(PChar.INSTANCE));
+        m.put("CHARACTER", PhoenixType.of(PChar.INSTANCE));
+        m.put("UNSIGNED TINYINT", PhoenixType.of(PUnsignedTinyint.INSTANCE));
+        m.put("UNSIGNED SMALLINT", PhoenixType.of(PUnsignedSmallint.INSTANCE));
+        m.put("UNSIGNED INT", PhoenixType.of(PUnsignedInt.INSTANCE));
+        m.put("UNSIGNED LONG", PhoenixType.of(PUnsignedLong.INSTANCE));
+        m.put("TINYINT", PhoenixType.of(PTinyint.INSTANCE));
+        m.put("SMALLINT", PhoenixType.of(PSmallint.INSTANCE));
+        m.put("INTEGER", PhoenixType.of(PInteger.INSTANCE));
+        m.put("INT", PhoenixType.of(PInteger.INSTANCE));
+        m.put("BIGINT", PhoenixType.of(PLong.INSTANCE));
+        m.put("FLOAT", PhoenixType.of(PFloat.INSTANCE));
+        m.put("DOUBLE", PhoenixType.of(PDouble.INSTANCE));
+        m.put("DECIMAL", PhoenixType.of(PDecimal.INSTANCE));
+        m.put("BOOLEAN", PhoenixType.of(PBoolean.INSTANCE));
+        m.put("TIMESTAMP", PhoenixType.of(PTimestamp.INSTANCE));
+        m.put("TIME", PhoenixType.of(PTime.INSTANCE));
+        m.put("DATE", PhoenixType.of(PDate.INSTANCE));
+        m.put("VARCHAR ARRAY", PhoenixType.of(PVarcharArray.INSTANCE));
+        m.put("CHARACTER VARYING ARRAY", PhoenixType.of(PVarcharArray.INSTANCE));
+        m.put("STRING ARRAY", PhoenixType.of(PVarcharArray.INSTANCE));
+        m.put("VARBINARY", PhoenixType.of(PVarbinary.INSTANCE));
+        m.put("BINARY", PhoenixType.of(PBinary.INSTANCE));
+        m.put("NUMERIC", PhoenixType.of(PDecimal.INSTANCE));
+        m.put("NUMBER", PhoenixType.of(PDecimal.INSTANCE));
+        m.put("STRING", DEFAULT_TYPE);
+        m.put("CHARACTER VARYING", DEFAULT_TYPE);
+        m.put("BINARY VARYING", PhoenixType.of(PVarbinary.INSTANCE));
+        m.put("ANY", DEFAULT_TYPE);
+        m.put("ARRAY", PhoenixType.of(PVarcharArray.INSTANCE));
+        m.put("LONG", PhoenixType.of(PLong.INSTANCE));
+        m.put("BOOL", PhoenixType.of(PBoolean.INSTANCE));
         TYPE_MAP = Collections.unmodifiableMap(m);
     }
 
     private final SchemaRegistry registry;
-    private final ConcurrentMap<TableName, ConcurrentMap<String, PDataType<?>>> cache = new ConcurrentHashMap<>();
+    private final ConcurrentMap<TableName, ConcurrentMap<String, PhoenixType>> cache = new ConcurrentHashMap<>();
     private final Set<ColKey> unknownTypeWarned =
-            Collections.newSetFromMap(new ConcurrentHashMap<ColKey, Boolean>());
+            Collections.newSetFromMap(new ConcurrentHashMap<>());
 
-    public PhoenixColumnTypeRegistry(SchemaRegistry registry) {
-        this.registry = Objects.requireNonNull(registry, "registry");
-    }
-
-    /** Возвращает {@link PDataType} колонки, нормализуя строку типа и кэшируя результат. */
-    public PDataType<?> resolve(TableName table, String qualifier) {
-        final ConcurrentMap<String, PDataType<?>> byQualifier =
+    /**
+     * Возвращает лениво кэшируемый дескриптор Phoenix-типа для конкретной колонки.
+     * Дескриптор предоставляет только необходимые операции (размер, конвертация байтов),
+     * не раскрывая wildcard-типов наружу.
+     */
+    public PhoenixType resolve(TableName table, String qualifier) {
+        final ConcurrentMap<String, PhoenixType> byQualifier =
                 cache.computeIfAbsent(table, t -> new ConcurrentHashMap<>());
 
         return byQualifier.computeIfAbsent(qualifier, q -> {
             final String raw = registry.columnType(table, q);
             final String norm = normalizeTypeName(raw == null ? T_VARCHAR : raw);
 
-            final PDataType<?> pd = TYPE_MAP.get(norm);
-            if (pd != null) {
-                return pd;
+            final PhoenixType predefined = TYPE_MAP.get(norm);
+            if (predefined != null) {
+                return predefined;
             }
 
             final ColKey warnKey = new ColKey(table, q);
@@ -112,7 +127,7 @@ public final class PhoenixColumnTypeRegistry {
                 LOG.debug("Повтор неизвестного типа Phoenix: {}.{} -> '{}' (нормализовано '{}')",
                         table.getNameAsString(), q, raw, norm);
             }
-            return PVarchar.INSTANCE;
+            return DEFAULT_TYPE;
         });
     }
 
@@ -195,6 +210,50 @@ public final class PhoenixColumnTypeRegistry {
                     && this.ns.equals(other.ns)
                     && this.name.equals(other.name)
                     && this.qual.equals(other.qual);
+        }
+    }
+
+    /**
+     * Минимальный обёрточный тип вокруг {@link PDataType}, чтобы избежать утечек wildcard-типа в публичном API.
+     * Предоставляет только те операции, которые востребованы в коде проекта.
+     */
+    public static final class PhoenixType {
+        private final PDataType<?> delegate;
+
+        private PhoenixType(PDataType<?> delegate) {
+            this.delegate = delegate;
+        }
+
+        static PhoenixType of(PDataType<?> delegate) {
+            return new PhoenixType(delegate);
+        }
+
+        /** @return фиксированный размер в байтах или {@code null}, если тип переменной длины. */
+        public Integer byteSize() {
+            return delegate.getByteSize();
+        }
+
+        /** Проксирует {@link PDataType#toObject(byte[], int, int)}. */
+        public Object toObject(byte[] value, int offset, int length) {
+            return delegate.toObject(value, offset, length);
+        }
+
+        @Override
+        public String toString() {
+            return delegate.toString();
+        }
+
+        @Override
+        public int hashCode() {
+            return delegate.hashCode();
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (o == null || o.getClass() != PhoenixType.class) return false;
+            PhoenixType other = (PhoenixType) o;
+            return delegate.equals(other.delegate);
         }
     }
 }

@@ -43,6 +43,14 @@ final class TopicEnsureState {
         return java.util.Collections.unmodifiableMap(new java.util.HashMap<>(unknownUntil));
     }
 
+    /**
+     * Возвращает текущий размер backoff-очереди «неизвестных» топиков.
+     * Константная сложность {@code O(1)}. Метод потокобезопасен, так как
+     * {@link #unknownUntil} — это {@code ConcurrentMap}, размер которого
+     * запрашивается без внешней синхронизации.
+     *
+     * @return количество элементов в очереди backoff
+     */
     int unknownSize() {
         return unknownUntil.size();
     }

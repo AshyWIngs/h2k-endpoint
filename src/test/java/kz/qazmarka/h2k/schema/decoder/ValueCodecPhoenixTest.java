@@ -36,6 +36,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.function.Executable;
 
 import kz.qazmarka.h2k.schema.phoenix.PhoenixColumnTypeRegistry;
+import kz.qazmarka.h2k.schema.phoenix.PhoenixColumnTypeRegistry.PhoenixType;
 import kz.qazmarka.h2k.schema.phoenix.PhoenixValueNormalizer;
 import kz.qazmarka.h2k.schema.registry.SchemaRegistry;
 
@@ -154,25 +155,30 @@ class ValueCodecPhoenixTest {
             PhoenixColumnTypeRegistry types = new PhoenixColumnTypeRegistry(reg);
 
             reg.with("C1", "VARCHAR(100)");
-            assertEquals(org.apache.phoenix.schema.types.PVarchar.INSTANCE, types.resolve(TBL, "C1"));
+            assertType(types.resolve(TBL, "C1"), org.apache.phoenix.schema.types.PVarchar.INSTANCE);
 
             reg.with("C2", "DECIMAL(10,2)");
-            assertEquals(org.apache.phoenix.schema.types.PDecimal.INSTANCE, types.resolve(TBL, "C2"));
+            assertType(types.resolve(TBL, "C2"), org.apache.phoenix.schema.types.PDecimal.INSTANCE);
 
             reg.with("C3", "ARRAY<VARCHAR>");
-            assertEquals(org.apache.phoenix.schema.types.PVarcharArray.INSTANCE, types.resolve(TBL, "C3"));
+            assertType(types.resolve(TBL, "C3"), org.apache.phoenix.schema.types.PVarcharArray.INSTANCE);
 
             reg.with("C4", "UNSIGNED_INT");
-            assertEquals(org.apache.phoenix.schema.types.PUnsignedInt.INSTANCE, types.resolve(TBL, "C4"));
+            assertType(types.resolve(TBL, "C4"), org.apache.phoenix.schema.types.PUnsignedInt.INSTANCE);
 
             reg.with("C5", "  unsigned   int  ");
-            assertEquals(org.apache.phoenix.schema.types.PUnsignedInt.INSTANCE, types.resolve(TBL, "C5"));
+            assertType(types.resolve(TBL, "C5"), org.apache.phoenix.schema.types.PUnsignedInt.INSTANCE);
 
             reg.with("C6", "STRING");
-            assertEquals(org.apache.phoenix.schema.types.PVarchar.INSTANCE, types.resolve(TBL, "C6"));
+            assertType(types.resolve(TBL, "C6"), org.apache.phoenix.schema.types.PVarchar.INSTANCE);
 
             reg.with("C7", "UNKNOWN_TYPE");
-            assertEquals(org.apache.phoenix.schema.types.PVarchar.INSTANCE, types.resolve(TBL, "C7"));
+            assertType(types.resolve(TBL, "C7"), org.apache.phoenix.schema.types.PVarchar.INSTANCE);
+        }
+
+        private void assertType(PhoenixType actual, org.apache.phoenix.schema.types.PDataType<?> expected) {
+            assertEquals(expected.toString(), actual.toString(), "Ожидался тип " + expected + ", получено " + actual);
+            assertEquals(expected.getByteSize(), actual.byteSize(), "Несовпадение размера типа " + expected);
         }
     }
 

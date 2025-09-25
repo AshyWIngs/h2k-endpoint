@@ -101,13 +101,13 @@ public final class GenericAvroPayloadSerializer implements TableAwarePayloadSeri
     }
 
     private byte[] serializeJson(SerializerHolder holder, Map<String, ?> obj) {
-        GenericRecord record = AvroSerializer.buildRecord(holder.schema, obj);
+        GenericRecord rec = AvroSerializer.buildRecord(holder.schema, obj);
 
         ByteArrayOutputStream baos = new ByteArrayOutputStream(256);
         try {
             Encoder jsonEncoder = encoderFactory.jsonEncoder(holder.schema, baos);
             GenericDatumWriter<GenericRecord> writer = new GenericDatumWriter<>(holder.schema);
-            writer.write(record, jsonEncoder);
+            writer.write(rec, jsonEncoder);
             jsonEncoder.flush();
             baos.write(0x0A); // JSONEachRow: отдельная строка на событие
         } catch (IOException io) {

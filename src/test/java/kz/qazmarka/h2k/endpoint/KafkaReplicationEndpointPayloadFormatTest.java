@@ -3,10 +3,8 @@ package kz.qazmarka.h2k.endpoint;
 import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Paths;
-import java.util.AbstractMap;
 import java.util.Collections;
 import java.util.List;
-import java.util.Map;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.Cell;
@@ -15,6 +13,9 @@ import org.apache.hadoop.hbase.TableName;
 import org.apache.kafka.clients.producer.MockProducer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -29,10 +30,6 @@ import kz.qazmarka.h2k.payload.builder.PayloadBuilder;
 import kz.qazmarka.h2k.schema.decoder.Decoder;
 import kz.qazmarka.h2k.schema.decoder.SimpleDecoder;
 import kz.qazmarka.h2k.util.RowKeySlice;
-
-import static org.junit.jupiter.api.Assertions.assertArrayEquals;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class KafkaReplicationEndpointPayloadFormatTest {
 
@@ -56,24 +53,21 @@ class KafkaReplicationEndpointPayloadFormatTest {
         byte[] rowKey = "rk-json".getBytes(StandardCharsets.UTF_8);
         RowKeySlice slice = new RowKeySlice(rowKey, 0, rowKey.length);
         Cell cell = new KeyValue(rowKey, bytes("d"), bytes("value"), 123L, bytes("JSON"));
-        Map.Entry<RowKeySlice, List<Cell>> rowEntry = new AbstractMap.SimpleEntry<>(slice, Collections.singletonList(cell));
+        List<Cell> cells = Collections.singletonList(cell);
 
         WalMeta walMeta = new WalMeta(123L, 456L);
-        BatchSender sender = new BatchSender(10, 1_000);
-        try {
-            invokeSendRow(processor, "topic-json", TABLE, walMeta, rowEntry, sender);
-        } finally {
-            closeQuietly(sender);
+        try (BatchSender sender = new BatchSender(10, 1_000)) {
+            invokeSendRow(processor, "topic-json", TABLE, walMeta, slice, cells, sender);
         }
 
         assertEquals(1, producer.history().size(), "Ожидаем одну запись в MockProducer");
-        ProducerRecord<byte[], byte[]> record = producer.history().get(0);
-        assertArrayEquals(rowKey, record.key(), "Ключ Kafka должен совпадать с rowkey");
+        ProducerRecord<byte[], byte[]> rec = producer.history().get(0);
+        assertArrayEquals(rowKey, rec.key(), "Ключ Kafka должен совпадать с rowkey");
 
-        byte[] expected = builder.buildRowPayloadBytes(TABLE, rowEntry.getValue(), slice, 123L, 456L);
-        assertArrayEquals(expected, record.value(), "Значение должно совпадать с результатом PayloadBuilder");
+        byte[] expected = builder.buildRowPayloadBytes(TABLE, cells, slice, 123L, 456L);
+        assertArrayEquals(expected, rec.value(), "Значение должно совпадать с результатом PayloadBuilder");
 
-        String json = new String(record.value(), StandardCharsets.UTF_8).trim();
+        String json = new String(rec.value(), StandardCharsets.UTF_8).trim();
         assertTrue(json.contains("\"value\""), "JSON должен содержать исходное значение: " + json);
     }
 
@@ -96,23 +90,20 @@ class KafkaReplicationEndpointPayloadFormatTest {
         byte[] rowKey = "rk-avro".getBytes(StandardCharsets.UTF_8);
         RowKeySlice slice = new RowKeySlice(rowKey, 0, rowKey.length);
         Cell cell = new KeyValue(rowKey, bytes("d"), bytes("value"), 321L, bytes("OK"));
-        Map.Entry<RowKeySlice, List<Cell>> rowEntry = new AbstractMap.SimpleEntry<>(slice, Collections.singletonList(cell));
+        List<Cell> cells = Collections.singletonList(cell);
 
         WalMeta walMeta = new WalMeta(321L, 654L);
-        BatchSender sender = new BatchSender(10, 1_000);
-        try {
-            invokeSendRow(processor, "topic-avro", TABLE, walMeta, rowEntry, sender);
-        } finally {
-            closeQuietly(sender);
+        try (BatchSender sender = new BatchSender(10, 1_000)) {
+            invokeSendRow(processor, "topic-avro", TABLE, walMeta, slice, cells, sender);
         }
 
         assertEquals(1, producer.history().size(), "Ожидаем одну запись в MockProducer");
-        ProducerRecord<byte[], byte[]> record = producer.history().get(0);
-        assertArrayEquals(rowKey, record.key(), "Ключ Kafka должен совпадать с rowkey");
+        ProducerRecord<byte[], byte[]> rec = producer.history().get(0);
+        assertArrayEquals(rowKey, rec.key(), "Ключ Kafka должен совпадать с rowkey");
 
-        byte[] expected = builder.buildRowPayloadBytes(TABLE, rowEntry.getValue(), slice, 321L, 654L);
-        assertArrayEquals(expected, record.value(), "Значение должно совпадать с результатом PayloadBuilder");
-        assertTrue(record.value().length > 0, "Avro выход не должен быть пустым");
+        byte[] expected = builder.buildRowPayloadBytes(TABLE, cells, slice, 321L, 654L);
+        assertArrayEquals(expected, rec.value(), "Значение должно совпадать с результатом PayloadBuilder");
+        assertTrue(rec.value().length > 0, "Avro выход не должен быть пустым");
     }
 
     private static byte[] bytes(String s) {
@@ -123,19 +114,12 @@ class KafkaReplicationEndpointPayloadFormatTest {
                                       String topic,
                                       TableName table,
                                       WalMeta walMeta,
-                                      Map.Entry<RowKeySlice, List<Cell>> rowEntry,
+                                      RowKeySlice slice,
+                                      List<Cell> cells,
                                       BatchSender sender) throws Exception {
         Method method = WalEntryProcessor.class
-                .getDeclaredMethod("sendRow", String.class, TableName.class, WalMeta.class, Map.Entry.class, BatchSender.class);
+                .getDeclaredMethod("sendRow", String.class, TableName.class, WalMeta.class, RowKeySlice.class, List.class, BatchSender.class);
         method.setAccessible(true);
-        method.invoke(processor, topic, table, walMeta, rowEntry, sender);
-    }
-
-    private static void closeQuietly(BatchSender sender) {
-        try {
-            sender.close();
-        } catch (Exception e) {
-            throw new AssertionError("Не удалось корректно закрыть BatchSender", e);
-        }
+        method.invoke(processor, topic, table, walMeta, slice, cells, sender);
     }
 }

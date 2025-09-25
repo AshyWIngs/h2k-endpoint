@@ -20,6 +20,7 @@
 - Проверить, что peer включён (`enable_peer`).
 - Проверить, что репликация включена для таблиц (alter + REPLICATION_SCOPE).
 - Убедиться, что bootstrap.servers указывают на рабочий кластер Kafka.
+- Если используется фильтр `h2k.cf.list`, убедитесь, что ключ задан явно и список CF соответствует реальному регистру имён.
 
 ### Ошибки декодирования Phoenix
 - ValueCodecPhoenix проверяет фиксированные типы (например, UNSIGNED_INT = 4 байта).
@@ -42,6 +43,11 @@
   - Проверить права у Kafka Admin.
   - Проверить h2k.topic.replication и h2k.topic.partitions.
   - Проверить h2k.admin.timeout.ms и h2k.ensure.unknown.backoff.ms.
+  - В логах TopicEnsureService ищите метрики `ensure.*`, `exists.*`, `create.*` — они показываются при DEBUG и
+    доступны через `TopicEnsurer#getMetrics()`. Поле `unknown.backoff.size` отражает размер очереди ожидания без
+    лишних копий.
+  - Для детального анализа backoff воспользуйтесь `TopicEnsurer#getBackoffSnapshot()`: метод возвращает
+    неизменяемую карту `topic → миллисекунды до повторной попытки` (отрицательные значения уже обнуляются).
 
 ## Инструменты быстрой диагностики
 - `status 'replication'` в HBase shell — показывает статус пиров.

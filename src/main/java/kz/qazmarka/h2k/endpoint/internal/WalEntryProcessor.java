@@ -2,10 +2,7 @@ package kz.qazmarka.h2k.endpoint.internal;
 
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Collections;
-import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellUtil;
@@ -42,7 +39,7 @@ public final class WalEntryProcessor {
 
     /**
      * Конвертирует одну запись WAL в набор Kafka-сообщений: группирует по rowkey, опционально фильтрует
-     * по CF/минимальному timestamp, собирает payload и добавляет futures в переданный {@link BatchSender}.
+     * по CF, собирает payload и добавляет futures в переданный {@link BatchSender}.
      */
     /**
      * Конвертирует одну запись WAL в набор Kafka-сообщений: группирует по rowkey, фильтрует и отправляет в Kafka.
@@ -51,20 +48,62 @@ public final class WalEntryProcessor {
                         BatchSender sender,
                         boolean includeWalMeta,
                         boolean filterEnabled,
-                        byte[][] cfFamilies,
-                        long minTs) {
-        TableName table = entry.getKey().getTablename();
-        String topic = topicManager.resolveTopic(table);
+                        byte[][] cfFamilies) {
+        final List<Cell> cells = entry.getEdit().getCells();
+        if (cells == null || cells.isEmpty()) {
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("Репликация: запись WAL без ячеек — таблица={}, фильтр={}, ensure-включён={}",
+                        entry.getKey().getTablename(), filterEnabled, topicManager.ensureEnabled());
+            }
+            return;
+        }
+
+        final TableName table = entry.getKey().getTablename();
+        final String topic = topicManager.resolveTopic(table);
         topicManager.ensureTopicIfNeeded(topic);
 
-        WalMeta walMeta = includeWalMeta ? readWalMeta(entry) : WalMeta.EMPTY;
+        final WalMeta walMeta = includeWalMeta ? readWalMeta(entry) : WalMeta.EMPTY;
 
         int rowsSent = 0;
         int cellsSent = 0;
-        for (Map.Entry<RowKeySlice, List<Cell>> rowEntry : filteredRows(entry, filterEnabled, cfFamilies, minTs)) {
-            sendRow(topic, table, walMeta, rowEntry, sender);
+
+        final List<Cell> rowBuffer = new ArrayList<>(8);
+        RowKeySlice currentSlice = null;
+        byte[] prevArr = null;
+        int prevOff = -1;
+        int prevLen = -1;
+
+        for (Cell cell : cells) {
+            final byte[] arr = cell.getRowArray();
+            final int off = cell.getRowOffset();
+            final int len = cell.getRowLength();
+
+            if (currentSlice != null && arr == prevArr && off == prevOff && len == prevLen) {
+                rowBuffer.add(cell);
+                continue;
+            }
+
+            if (currentSlice != null) {
+                if (!filterEnabled || passCfFilter(rowBuffer, cfFamilies)) {
+                    sendRow(topic, table, walMeta, currentSlice, rowBuffer, sender);
+                    rowsSent++;
+                    cellsSent += rowBuffer.size();
+                }
+                rowBuffer.clear();
+            }
+
+            rowBuffer.add(cell);
+            currentSlice = new RowKeySlice(arr, off, len);
+            prevArr = arr;
+            prevOff = off;
+            prevLen = len;
+        }
+
+        if (currentSlice != null && (!filterEnabled || passCfFilter(rowBuffer, cfFamilies))) {
+            sendRow(topic, table, walMeta, currentSlice, rowBuffer, sender);
             rowsSent++;
-            cellsSent += rowEntry.getValue().size();
+            cellsSent += rowBuffer.size();
+            rowBuffer.clear();
         }
 
         if (LOG.isDebugEnabled()) {
@@ -73,107 +112,47 @@ public final class WalEntryProcessor {
         }
     }
 
-    /** Возвращает пары rowkey→ячейки, optionally фильтруя по CF и минимальному timestamp. */
-    private Iterable<Map.Entry<RowKeySlice, List<Cell>>> filteredRows(WAL.Entry entry,
-                                                                      boolean doFilter,
-                                                                      byte[][] cfFamilies,
-                                                                      long minTs) {
-        final Map<RowKeySlice, List<Cell>> byRow = groupByRow(entry);
-        if (!doFilter) {
-            return byRow.entrySet();
-        }
-        List<Map.Entry<RowKeySlice, List<Cell>>> out = null;
-        for (Map.Entry<RowKeySlice, List<Cell>> e : byRow.entrySet()) {
-            if (passWalTsFilter(e.getValue(), cfFamilies, minTs)) {
-                if (out == null) {
-                    out = new ArrayList<>(Math.min(byRow.size(), 16));
-                }
-                out.add(e);
-            }
-        }
-        return (out != null) ? out : Collections.<Map.Entry<RowKeySlice, List<Cell>>>emptyList();
-    }
-
-    /** Группирует ячейки записи WAL по rowkey, сохраняя порядок. */
-    private Map<RowKeySlice, List<Cell>> groupByRow(WAL.Entry entry) {
-        final List<Cell> cells = entry.getEdit().getCells();
-        if (cells == null || cells.isEmpty()) {
-            return Collections.emptyMap();
-        }
-        final Map<RowKeySlice, List<Cell>> byRow = new LinkedHashMap<>(initialCapacity(cells.size()));
-
-        byte[] prevArr = null;
-        int prevOff = -1;
-        int prevLen = -1;
-        List<Cell> currentList = null;
-
-        for (Cell c : cells) {
-            final byte[] arr = c.getRowArray();
-            final int off = c.getRowOffset();
-            final int len = c.getRowLength();
-
-            if (currentList != null && arr == prevArr && off == prevOff && len == prevLen) {
-                currentList.add(c);
-            } else {
-                RowKeySlice key = new RowKeySlice(arr, off, len);
-                currentList = byRow.computeIfAbsent(key, k -> new ArrayList<>(8));
-                currentList.add(c);
-                prevArr = arr;
-                prevOff = off;
-                prevLen = len;
-            }
-        }
-        return byRow;
-    }
-
-    /** Проверяет, содержат ли ячейки допустимые CF и timestamp ≥ {@code minTs}. */
-    private static boolean passWalTsFilter(List<Cell> cells, byte[][] cfFamilies, long minTs) {
+    /** Проверяет, содержат ли ячейки допустимые CF. */
+    private static boolean passCfFilter(List<Cell> cells, byte[][] cfFamilies) {
         if (cfFamilies == null || cfFamilies.length == 0) {
-            return true;
+            return true; // фильтр выключен
         }
         final int n = cfFamilies.length;
         if (n == 1) {
-            return passWalTsFilter1(cells, cfFamilies[0], minTs);
-        } else if (n == 2) {
-            return passWalTsFilter2(cells, cfFamilies[0], cfFamilies[1], minTs);
+            return passCfFilter1(cells, cfFamilies[0]);
         }
-        return passWalTsFilterN(cells, cfFamilies, minTs);
+        if (n == 2) {
+            return passCfFilter2(cells, cfFamilies[0], cfFamilies[1]);
+        }
+        return passCfFilterN(cells, cfFamilies);
     }
 
-    /** Быстрый вариант фильтра для одного CF. */
-    static boolean passWalTsFilter1(List<Cell> cells,
-                                            byte[] cf0,
-                                            long minTs) {
+    /** Проверяет CF при одном допустимом семействе. */
+    static boolean passCfFilter1(List<Cell> cells, byte[] cf0) {
         for (Cell c : cells) {
-            if (c.getTimestamp() >= minTs && CellUtil.matchingFamily(c, cf0)) {
+            if (CellUtil.matchingFamily(c, cf0)) {
                 return true;
             }
         }
         return false;
     }
 
-    /** Быстрый вариант фильтра для двух CF. */
-    static boolean passWalTsFilter2(List<Cell> cells,
-                                            byte[] cf0,
-                                            byte[] cf1,
-                                            long minTs) {
+    /** Проверяет CF при двух допустимых семействах. */
+    static boolean passCfFilter2(List<Cell> cells, byte[] cf0, byte[] cf1) {
         for (Cell c : cells) {
-            if (c.getTimestamp() >= minTs &&
-                (CellUtil.matchingFamily(c, cf0) || CellUtil.matchingFamily(c, cf1))) {
+            if (CellUtil.matchingFamily(c, cf0)) {
+                return true;
+            }
+            if (CellUtil.matchingFamily(c, cf1)) {
                 return true;
             }
         }
         return false;
     }
 
-    /** Общий фильтр для произвольного числа CF. */
-    static boolean passWalTsFilterN(List<Cell> cells,
-                                            byte[][] cfFamilies,
-                                            long minTs) {
+    /** Проверяет CF при трех и более допустимых семействах. */
+    static boolean passCfFilterN(List<Cell> cells, byte[][] cfFamilies) {
         for (Cell c : cells) {
-            if (c.getTimestamp() < minTs) {
-                continue;
-            }
             for (byte[] cf : cfFamilies) {
                 if (CellUtil.matchingFamily(c, cf)) {
                     return true;
@@ -187,11 +166,11 @@ public final class WalEntryProcessor {
     private void sendRow(String topic,
                          TableName table,
                          WalMeta wm,
-                         Map.Entry<RowKeySlice, List<Cell>> rowEntry,
+                         RowKeySlice rowKey,
+                         List<Cell> cells,
                          BatchSender sender) {
-        final List<Cell> cells = rowEntry.getValue();
-        final byte[] keyBytes = rowEntry.getKey().toByteArray();
-        final byte[] valueBytes = payloadBuilder.buildRowPayloadBytes(table, cells, rowEntry.getKey(), wm.seq, wm.writeTime);
+        final byte[] keyBytes = rowKey.toByteArray();
+        final byte[] valueBytes = payloadBuilder.buildRowPayloadBytes(table, new ArrayList<>(cells), rowKey, wm.seq, wm.writeTime);
         sender.add(send(topic, keyBytes, valueBytes));
     }
 
@@ -209,13 +188,5 @@ public final class WalEntryProcessor {
 
     private java.util.concurrent.Future<RecordMetadata> send(String topic, byte[] key, byte[] value) {
         return producer.send(new ProducerRecord<>(topic, key, value));
-    }
-
-    static int initialCapacity(int expected) {
-        if (expected <= 0) {
-            return 16;
-        }
-        long cap = 1L + (4L * expected + 2L) / 3L;
-        return cap > (1L << 30) ? (1 << 30) : (int) cap;
     }
 }

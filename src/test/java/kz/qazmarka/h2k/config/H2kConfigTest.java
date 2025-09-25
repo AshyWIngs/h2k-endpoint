@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertIterableEquals;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -145,6 +146,21 @@ class H2kConfigTest {
         assertArrayEquals(new String[]{"d","b","0"}, hc.getCfNames());
         assertEquals("d,b,0", hc.getCfNamesCsv());
         assertEquals(3, hc.getCfFamiliesBytes().length);
+        assertTrue(hc.isCfFilterExplicit());
+
+        byte[][] families = hc.getCfFamiliesBytes();
+        families[0][0] = (byte) 'X';
+        assertNotEquals((byte) 'X', hc.getCfFamiliesBytes()[0][0], "Возвращается копия CF-байтов");
+    }
+
+    @Test
+    @DisplayName("cf.list: ключ не задан → фильтр не считается явным")
+    void cfList_notSet() {
+        Configuration c = new Configuration(false);
+        H2kConfig hc = fromCfg(c);
+        assertArrayEquals(new String[]{"0"}, hc.getCfNames());
+        assertFalse(hc.isCfFilterExplicit());
+        assertEquals(1, hc.getCfFamiliesBytes().length);
     }
 
     @Test

@@ -20,8 +20,8 @@ import kz.qazmarka.h2k.config.H2kConfig;
 import kz.qazmarka.h2k.config.H2kConfig.Keys;
 import kz.qazmarka.h2k.endpoint.internal.TopicManager;
 import kz.qazmarka.h2k.endpoint.internal.WalEntryProcessor;
-import kz.qazmarka.h2k.kafka.producer.BatchSender;
 import kz.qazmarka.h2k.kafka.ensure.TopicEnsurer;
+import kz.qazmarka.h2k.kafka.producer.BatchSender;
 import kz.qazmarka.h2k.payload.builder.PayloadBuilder;
 import kz.qazmarka.h2k.schema.decoder.Decoder;
 import kz.qazmarka.h2k.schema.decoder.SimpleDecoder;
@@ -73,6 +73,9 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
     private H2kConfig h2k;
     private TopicManager topicManager;
     private WalEntryProcessor walEntryProcessor;
+    // CF-фильтр
+    private boolean doFilter;
+    private byte[][] cfFamilies;
 
     /**
      * Инициализация эндпоинта: чтение конфигурации, подготовка продьюсера, декодера и сборщика payload.
@@ -96,33 +99,76 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
 
         // immut-конфиг, билдер и энсюрер
         this.h2k = H2kConfig.from(cfg, bootstrap);
-        // Сводка по карте «соли» rowkey (h2k.salt.map) — только на DEBUG, чтобы не шуметь
-        try {
-            if (LOG.isDebugEnabled()) {
-                final Map<String, Integer> saltMap = h2k.getSaltBytesByTable();
-                if (saltMap == null || saltMap.isEmpty()) {
-                    LOG.debug("Соль rowkey не задана (h2k.salt.map).");
-                } else {
-                    LOG.debug("Соль rowkey (h2k.salt.map): {} ({} записей)", saltMap, saltMap.size());
-                }
-            }
-        } catch (Exception t) {
-            if (LOG.isDebugEnabled()) {
-                LOG.debug("Не удалось вывести сводку h2k.salt.map (не критично)", t);
-            }
-        }
+        logSaltSummary();
         final PayloadBuilder payload = new PayloadBuilder(decoder, h2k);
         final TopicEnsurer topicEnsurer = TopicEnsurer.createIfEnabled(h2k);
         this.topicManager = new TopicManager(h2k, topicEnsurer);
         this.walEntryProcessor = new WalEntryProcessor(payload, topicManager, producer);
+        initCfFilter();
+        logInitSummary();
+    }
 
-        if (LOG.isDebugEnabled()) {
-            LOG.debug("Инициализация завершена: шаблон_топика={}, cf_список={}, проверять_топики={}, включать_rowkey={}, кодировка_rowkey={}, включать_meta={}, включать_meta_WAL={}, счетчики_батчей={}, debug_батчей_при_ошибке={}",
-                    h2k.getTopicPattern(),
-                    h2k.getCfNamesCsv(),
-                    h2k.isEnsureTopics(), h2k.isIncludeRowKey(), h2k.getRowkeyEncoding(), h2k.isIncludeMeta(), h2k.isIncludeMetaWal(),
-                    h2k.isProducerBatchCountersEnabled(), h2k.isProducerBatchDebugOnFailure());
+    /**
+     * Печатает сводку по карте «соли» rowkey (h2k.salt.map) в DEBUG. Ошибки не критичны.
+     */
+    private void logSaltSummary() {
+        if (!LOG.isDebugEnabled()) {
+            return;
         }
+        try {
+            final Map<String, Integer> saltMap = h2k.getSaltBytesByTable();
+            if (saltMap == null || saltMap.isEmpty()) {
+                LOG.debug("Соль rowkey не задана (h2k.salt.map).");
+            } else {
+                LOG.debug("Соль rowkey (h2k.salt.map): {} ({} записей)", saltMap, saltMap.size());
+            }
+        } catch (Exception t) {
+            LOG.debug("Не удалось вывести сводку h2k.salt.map (не критично)", t);
+        }
+    }
+
+    /**
+     * Инициализирует фильтрацию по CF из конфигурации h2k.cf.list. Выполняется один раз.
+     */
+    private void initCfFilter() {
+        if (!h2k.isCfFilterExplicit()) {
+            this.cfFamilies = null;
+            this.doFilter = false;
+            logCfFilterState();
+            return;
+        }
+
+        final byte[][] families = h2k.getCfFamiliesBytes();
+        if (families.length == 0) {
+            this.cfFamilies = null;
+            this.doFilter = false;
+        } else {
+            this.cfFamilies = families;
+            this.doFilter = true;
+        }
+        logCfFilterState();
+    }
+
+    private void logCfFilterState() {
+        if (!LOG.isDebugEnabled()) {
+            return;
+        }
+        final int count = (cfFamilies == null) ? 0 : cfFamilies.length;
+        LOG.debug("CF-фильтр: enabled={}, cf.count={}, cf.list={}", doFilter, count, h2k.getCfNamesCsv());
+    }
+
+    /**
+     * Итоговая сводка параметров инициализации в DEBUG.
+     */
+    private void logInitSummary() {
+        if (!LOG.isDebugEnabled()) {
+            return;
+        }
+        LOG.debug("Инициализация завершена: шаблон_топика={}, cf_список={}, проверять_топики={}, включать_rowkey={}, кодировка_rowkey={}, включать_meta={}, включать_meta_WAL={}, счетчики_батчей={}, debug_батчей_при_ошибке={}",
+                h2k.getTopicPattern(),
+                h2k.getCfNamesCsv(),
+                h2k.isEnsureTopics(), h2k.isIncludeRowKey(), h2k.getRowkeyEncoding(), h2k.isIncludeMeta(), h2k.isIncludeMetaWal(),
+                h2k.isProducerBatchCountersEnabled(), h2k.isProducerBatchDebugOnFailure());
     }
     /**
      * Возвращает строку bootstrap‑серверов Kafka из конфигурации или бросает {@link IOException}, если параметр отсутствует.
@@ -149,26 +195,37 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
     private Decoder chooseDecoder(Configuration cfg) {
         String mode = cfg.get(Keys.DECODE_MODE, DEFAULT_DECODE_MODE);
         if ("json-phoenix".equalsIgnoreCase(mode)) {
-            String schemaPath = cfg.get(Keys.SCHEMA_PATH);
-            if (schemaPath == null || schemaPath.trim().isEmpty()) {
-                throw new IllegalStateException(
-                    "Включён режим json-phoenix, но не задан обязательный параметр h2k.schema.path");
-            }
-            try {
-                SchemaRegistry schema = new JsonSchemaRegistry(schemaPath.trim());
-                LOG.debug("Режим декодирования: json-phoenix, схема={}", schemaPath);
-                return new ValueCodecPhoenix(schema);
-            } catch (Exception e) {
-                LOG.warn("Не удалось инициализировать JsonSchemaRegistry ({}): {} — переключаюсь на простой декодер",
-                        schemaPath, e.toString());
-                if (LOG.isDebugEnabled()) {
-                    LOG.debug("Трассировка ошибки JsonSchemaRegistry", e);
-                }
-                return SimpleDecoder.INSTANCE;
-            }
+            return initPhoenixDecoder(cfg.get(Keys.SCHEMA_PATH));
         }
         LOG.debug("Режим декодирования: simple");
         return SimpleDecoder.INSTANCE;
+    }
+
+    /**
+     * Инициализирует декодер json-phoenix по пути к схеме.
+     * Выполняет валидацию обязательного параметра и безопасный фолбэк на {@link SimpleDecoder#INSTANCE}.
+     *
+     * @param schemaPath путь к файлу схемы (может быть null)
+     * @return декодер Phoenix или простой декодер при ошибке инициализации
+     */
+    private Decoder initPhoenixDecoder(String schemaPath) {
+        if (schemaPath == null || schemaPath.trim().isEmpty()) {
+            throw new IllegalStateException(
+                "Включён режим json-phoenix, но не задан обязательный параметр h2k.schema.path");
+        }
+        final String path = schemaPath.trim();
+        try {
+            SchemaRegistry schema = new JsonSchemaRegistry(path);
+            LOG.debug("Режим декодирования: json-phoenix, схема={}", path);
+            return new ValueCodecPhoenix(schema);
+        } catch (Exception e) {
+            LOG.warn("Не удалось инициализировать JsonSchemaRegistry ({}): {} — переключаюсь на простой декодер",
+                    path, e.toString());
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("Трассировка ошибки JsonSchemaRegistry", e);
+            }
+            return SimpleDecoder.INSTANCE;
+        }
     }
 
     /**
@@ -214,9 +271,6 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
             final int awaitEvery = h2k.getAwaitEvery();
             final int awaitTimeoutMs = h2k.getAwaitTimeoutMs();
             final boolean includeWalMeta = h2k.isIncludeMetaWal();
-            final boolean doFilter = false;
-            final byte[][] cfFamilies = null;
-            final long minTs = -1L;
 
             if (LOG.isDebugEnabled()) {
                 LOG.debug("Репликация: записей={}, awaitEvery={}, awaitTimeoutMs={}, включать WAL‑мета={}",
@@ -229,7 +283,7 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
                     h2k.isProducerBatchCountersEnabled(),
                     h2k.isProducerBatchDebugOnFailure())) {
                 for (WAL.Entry entry : entries) {
-                    processEntry(entry, sender, includeWalMeta, doFilter, cfFamilies, minTs);
+                    processEntry(entry, sender, includeWalMeta, this.doFilter, this.cfFamilies);
                 }
                 // Строгий flush выполнится при закрытии sender (AutoCloseable)
                 return true;
@@ -264,16 +318,13 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
      * @param includeWalMeta включать ли метаданные WAL в payload
      * @param doFilter      включена ли фильтрация по WAL‑timestamp
      * @param cfFamilies    список целевых CF (в байтах) для фильтра; {@code null}, если фильтр выключен
-     * @param minTs         минимальный timestamp для допуска через фильтр
      */
     private void processEntry(WAL.Entry entry,
                               BatchSender sender,
                               boolean includeWalMeta,
                               boolean doFilter,
-                              byte[][] cfFamilies,
-                              long minTs) {
-        // Вынесено в WalEntryProcessor: здесь оставляем только делегирование, чтобы не дублировать логику
-        walEntryProcessor.process(entry, sender, includeWalMeta, doFilter, cfFamilies, minTs);
+                              byte[][] cfFamilies) {
+        walEntryProcessor.process(entry, sender, includeWalMeta, doFilter, cfFamilies);
     }
 
     /** В HBase 1.4 {@code Context} не предоставляет getPeerUUID(); сигнатура метода требуется API базового класса.

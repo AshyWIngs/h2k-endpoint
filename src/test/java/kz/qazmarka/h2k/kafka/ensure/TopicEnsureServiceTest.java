@@ -22,7 +22,6 @@ import org.apache.kafka.common.Node;
 import org.apache.kafka.common.TopicPartitionInfo;
 import org.apache.kafka.common.config.ConfigResource;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -45,9 +44,9 @@ class TopicEnsureServiceTest {
                 .unknownBackoffMs(10L)
                 .build();
 
-        TopicEnsureService svc = new TopicEnsureService(admin, cfg, new TopicEnsureState());
-
-        svc.ensureTopic("orders");
+        try (TopicEnsureService svc = new TopicEnsureService(admin, cfg, new TopicEnsureState())) {
+            svc.ensureTopic("orders");
+        }
 
         assertTrue(admin.increaseCalled, "Ожидалось увеличение партиций до 3");
         assertEquals(3, admin.increaseNewCount, "Новая мощность должна совпадать с конфигом");
@@ -72,9 +71,9 @@ class TopicEnsureServiceTest {
                 .unknownBackoffMs(10L)
                 .build();
 
-        TopicEnsureService svc = new TopicEnsureService(admin, cfg, new TopicEnsureState());
-
-        svc.ensureTopic("analytics");
+        try (TopicEnsureService svc = new TopicEnsureService(admin, cfg, new TopicEnsureState())) {
+            svc.ensureTopic("analytics");
+        }
 
         assertTrue(admin.configUpdated, "Ожидалась передача ALTER CONFIG для retention.ms");
         assertEquals("60000", admin.lastConfigValue, "На брокер должен уйти diff с новым значением");

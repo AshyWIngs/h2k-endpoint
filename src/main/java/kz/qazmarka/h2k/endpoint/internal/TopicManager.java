@@ -13,7 +13,6 @@ import kz.qazmarka.h2k.kafka.ensure.TopicEnsurer;
 
 /**
  * Отвечает за разрешение имён Kafka-топиков и ленивые ensure-вызовы.
- * <p>
  * Использует {@link H2kConfig#topicFor(org.apache.hadoop.hbase.TableName)} для кеширования имён,
  * а также {@link TopicEnsurer} в режиме NOOP/active — вызывающий код не проверяет конфигурацию.
  */
@@ -46,6 +45,9 @@ public final class TopicManager {
      */
     public void ensureTopicIfNeeded(String topic) {
         if (topic == null || topic.isEmpty()) {
+            return;
+        }
+        if (!topicEnsurer.isEnabled()) {
             return;
         }
         try {

@@ -7,10 +7,10 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.apache.hadoop.hbase.TableName;
-import org.apache.phoenix.schema.types.PDataType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import kz.qazmarka.h2k.schema.phoenix.PhoenixColumnTypeRegistry.PhoenixType;
 import kz.qazmarka.h2k.schema.registry.SchemaRegistry;
 import kz.qazmarka.h2k.util.RowKeySlice;
 
@@ -25,9 +25,9 @@ public final class PhoenixPkParser {
     private final PhoenixColumnTypeRegistry types;
 
     private static final Set<String> PK_WARNED =
-            Collections.newSetFromMap(new ConcurrentHashMap<String, Boolean>());
+            Collections.newSetFromMap(new ConcurrentHashMap<>());
     private static final Set<ColWarnKey> PK_COLUMN_WARNED =
-            Collections.newSetFromMap(new ConcurrentHashMap<ColWarnKey, Boolean>());
+            Collections.newSetFromMap(new ConcurrentHashMap<>());
 
     public PhoenixPkParser(SchemaRegistry registry, PhoenixColumnTypeRegistry types) {
         this.registry = registry;
@@ -49,47 +49,75 @@ public final class PhoenixPkParser {
         final byte[] a = rk.getArray();
         int pos = rk.getOffset() + Math.max(0, saltBytes);
         final int end = rk.getOffset() + rk.getLength();
+        final PkCtx ctx = new PkCtx(table, a, end);
         if (pos > end) return;
 
         int added = 0;
-        boolean hadFailures = false;
         for (int i = 0; i < pk.length; i++) {
             final String col = pk[i];
             if (col == null) {
-                hadFailures = true;
-                warnPkColumnDecodeFailure(table, "#" + i, "Имя PK-колонки отсутствует в реестре");
-                break;
+                onMissingPkColumn(table, i, added, pk);
+                return;
             }
 
-            final PDataType<?> t = types.resolve(table, col);
+            final PhoenixType t = types.resolve(table, col);
             final boolean isLast = (i == pk.length - 1);
-            final ValSeg vs = parsePkValue(table, col, t, a, pos, end, isLast);
-            if (!vs.ok) {
-                hadFailures = true;
-                warnPkColumnDecodeFailure(table, col, vs.error);
-                if (vs.nextPos <= pos) {
-                    break; // дальнейший разбор невозможен (нет разделителя или неполный сегмент)
-                }
-                pos = vs.nextPos;
-                continue;
+            final int sizeBefore = out.size();
+            final int newPos = applyPkSegment(ctx, col, t, pos, isLast, out);
+            if (newPos == Integer.MIN_VALUE) {
+                break; // дальнейший разбор невозможен (нет разделителя или неполный сегмент)
             }
-            pos = vs.nextPos;
-            out.put(col, vs.val);
-            added++;
+            if (out.size() != sizeBefore) {
+                added++;
+            }
+            pos = newPos;
         }
         if (added == 0) {
             warnPkNotDecodedOnce(table, pk);
         }
     }
 
+    /**
+     * Обрабатывает ситуацию, когда имя PK-колонки отсутствует в реестре: пишет предупреждение
+     * и фиксирует факт пустого результата (если ничего не распознано).
+     */
+    private void onMissingPkColumn(TableName table, int index, int added, String[] pk) {
+        warnPkColumnDecodeFailure(table, "#" + index, "Имя PK-колонки отсутствует в реестре");
+        if (added == 0) {
+            warnPkNotDecodedOnce(table, pk);
+        }
+    }
+
+    /**
+     * Парсит один сегмент PK и при успехе помещает значение в {@code out}.
+     * Возвращает новый {@code pos}, либо {@link Integer#MIN_VALUE} если разбор невозможно продолжить.
+     */
+    private int applyPkSegment(PkCtx ctx,
+                               String column,
+                               PhoenixType t,
+                               int pos,
+                               boolean isLast,
+                               Map<String, Object> out) {
+        final ValSeg vs = parsePkValue(ctx.table, column, t, ctx.a, pos, ctx.end, isLast);
+        if (vs.ok) {
+            out.put(column, vs.val);
+            return vs.nextPos;
+        }
+        warnPkColumnDecodeFailure(ctx.table, column, vs.error);
+        if (vs.nextPos <= pos) {
+            return Integer.MIN_VALUE;
+        }
+        return vs.nextPos;
+    }
+
     private ValSeg parsePkValue(TableName table,
                                 String column,
-                                PDataType<?> t,
+                                PhoenixType t,
                                 byte[] a,
                                 int pos,
                                 int end,
                                 boolean isLast) {
-        final Integer fixed = t.getByteSize();
+        final Integer fixed = t.byteSize();
         final Seg seg = (fixed != null)
                 ? readFixedSegment(pos, end, fixed)
                 : readVarSegment(a, pos, end, isLast);
@@ -106,7 +134,7 @@ public final class PhoenixPkParser {
 
     private Object convertBytesToObject(TableName table,
                                         String column,
-                                        PDataType<?> t,
+                                        PhoenixType t,
                                         byte[] a,
                                         int off,
                                         int len,
@@ -260,6 +288,18 @@ public final class PhoenixPkParser {
             if (o == null || o.getClass() != ColWarnKey.class) return false;
             ColWarnKey other = (ColWarnKey) o;
             return hash == other.hash && table.equals(other.table) && column.equals(other.column);
+        }
+    }
+
+    /** Контекст разбора PK: неизменяемые атрибуты текущего rowkey. */
+    private static final class PkCtx {
+        final TableName table;
+        final byte[] a;
+        final int end;
+        PkCtx(TableName table, byte[] a, int end) {
+            this.table = table;
+            this.a = a;
+            this.end = end;
         }
     }
 }

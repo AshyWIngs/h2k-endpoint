@@ -244,6 +244,10 @@ public final class H2kConfig {
     private final String[] cfNames;
     /** Те же CF в виде UTF‑8 байтов (для быстрого сравнения в горячем пути). */
     private final byte[][] cfBytes;
+    /** CSV-представление cfNames (для логов и отладочной информации). */
+    private final String cfNamesCsv;
+    /** Ключ h2k.cf.list был задан явно (а не подставлен дефолт). */
+    private final boolean cfFilterExplicit;
 
     // ==== Payload/метаданные/rowkey ====
     private final boolean includeRowKey;
@@ -314,6 +318,8 @@ public final class H2kConfig {
         } else {
             this.cfBytes = new byte[][]{ DEFAULT_CF_NAME.getBytes(StandardCharsets.UTF_8) };
         }
+        this.cfNamesCsv = String.join(",", this.cfNames);
+        this.cfFilterExplicit = b.cfFilterExplicit;
         this.includeRowKey = b.includeRowKey;
         this.rowkeyEncoding = b.rowkeyEncoding;
         this.rowkeyBase64 = b.rowkeyBase64;
@@ -360,6 +366,8 @@ public final class H2kConfig {
         private String[] cfNames = new String[]{DEFAULT_CF_NAME};
         /** Байтовые представления имён CF (UTF‑8) для быстрого сравнения. */
         private byte[][] cfBytes = new byte[][]{ DEFAULT_CF_NAME.getBytes(StandardCharsets.UTF_8) };
+        /** Флаг: ключ h2k.cf.list задан явно. */
+        private boolean cfFilterExplicit;
 
         /** Включать ли rowkey в payload. */
         private boolean includeRowKey = DEFAULT_INCLUDE_ROWKEY;
@@ -462,14 +470,49 @@ public final class H2kConfig {
          * @param v массив имён CF
          * @return this
          */
-        public Builder cfNames(String[] v) { this.cfNames = v; return this; }
+        public Builder cfNames(String[] v) {
+            String[] names;
+            if (v == null || v.length == 0) {
+                names = new String[]{DEFAULT_CF_NAME};
+            } else {
+                names = v.clone();
+            }
+            this.cfNames = names;
+            this.cfBytes = Parsers.toUtf8Bytes(names);
+            return this;
+        }
 
         /**
          * Устанавливает байтовые представления имён CF (UTF‑8).
          * @param v массив байтовых имён CF
          * @return this
          */
-        public Builder cfBytes(byte[][] v) { this.cfBytes = v; return this; }
+        public Builder cfBytes(byte[][] v) {
+            if (v == null || v.length == 0) {
+                this.cfBytes = new byte[][]{ DEFAULT_CF_NAME.getBytes(StandardCharsets.UTF_8) };
+                return this;
+            }
+            byte[][] copy = new byte[v.length][];
+            for (int i = 0; i < v.length; i++) {
+                byte[] src = v[i];
+                if (src == null) {
+                    copy[i] = new byte[0];
+                } else {
+                    byte[] dst = new byte[src.length];
+                    System.arraycopy(src, 0, dst, 0, src.length);
+                    copy[i] = dst;
+                }
+            }
+            this.cfBytes = copy;
+            return this;
+        }
+
+        /**
+         * Отмечает, что h2k.cf.list был задан явно в конфигурации.
+         * @param v true, если значение пришло из конфигурации; false — использован дефолт
+         * @return this
+         */
+        public Builder cfFilterExplicit(boolean v) { this.cfFilterExplicit = v; return this; }
 
         /**
          * Включать ли rowkey в формируемый payload.
@@ -732,16 +775,25 @@ public final class H2kConfig {
     public String[] getCfNames() { return cfNames.clone(); }
 
     /**
-     * @return байтовые представления имён CF (UTF‑8). ВАЖНО: возвращается ссылка на внутренний массив
-     * для исключения лишних аллокаций на горячем пути. Не модифицируйте содержимое снаружи.
-     */
-    /**
      * Возвращает CF-имена в виде массива {@code byte[]} (UTF-8), пригодного для фильтров HBase.
+     * Возвращается копия, чтобы сохранить иммутабельность {@link H2kConfig}.
      */
-    public byte[][] getCfFamiliesBytes() { return cfBytes; }
+    public byte[][] getCfFamiliesBytes() {
+        byte[][] copy = new byte[cfBytes.length][];
+        for (int i = 0; i < cfBytes.length; i++) {
+            byte[] src = cfBytes[i];
+            byte[] dst = new byte[src.length];
+            System.arraycopy(src, 0, dst, 0, src.length);
+            copy[i] = dst;
+        }
+        return copy;
+    }
 
     /** @return CSV с именами CF — удобно для логов */
-    public String getCfNamesCsv() { return String.join(",", cfNames); }
+    public String getCfNamesCsv() { return cfNamesCsv; }
+
+    /** @return true, если ключ h2k.cf.list присутствовал в конфигурации явно. */
+    public boolean isCfFilterExplicit() { return cfFilterExplicit; }
 
     /** @return флаг включения rowkey в payload */
     public boolean isIncludeRowKey() { return includeRowKey; }

@@ -1,5 +1,6 @@
 package kz.qazmarka.h2k.util;
 
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.Base64;
 
@@ -37,17 +38,18 @@ public final class Bytes {
     }
 
     /**
-     * Кодирует срез байтов в Base64.
-     * JDK8 не поддерживает (offset,len), поэтому делаем ровно одну копию нужного диапазона.
+     * Кодирует срез байтов в Base64 без промежуточного копирования.
      */
     public static String base64(byte[] a, int off, int len) {
         if (a == null) return null;
         if (len <= 0) return "";
-        byte[] slice = new byte[len];
-        System.arraycopy(a, off, slice, 0, len);
-        int outLen = ((len + 2) / 3) * 4;
-        byte[] out = new byte[outLen];
-        int n = BASE64.encode(slice, out); // = outLen
-        return new String(out, 0, n, StandardCharsets.US_ASCII);
+        ByteBuffer src = ByteBuffer.wrap(a, off, len);
+        ByteBuffer encoded = BASE64.encode(src); // создаёт новый heap-буфер
+        if (encoded.hasArray()) {
+            return new String(encoded.array(), encoded.arrayOffset(), encoded.remaining(), StandardCharsets.US_ASCII);
+        }
+        byte[] out = new byte[encoded.remaining()];
+        encoded.get(out);
+        return new String(out, StandardCharsets.US_ASCII);
     }
 }

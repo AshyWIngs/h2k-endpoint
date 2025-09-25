@@ -103,7 +103,7 @@ h2k.topic.pattern=${table}
 | Ключ | Назначение | Примечание |
 |---|---|---|
 | `h2k.kafka.bootstrap.servers` | Список брокеров Kafka | `host:port[,host2:port2]` |
-| `h2k.cf.list` | Список CF для экспорта | CSV |
+| `h2k.cf.list` | Список CF для экспорта | CSV; пробелы обрезаются, регистр сохраняется |
 | `h2k.decode.mode` | `simple` \| `json-phoenix` | Для Phoenix нужен `schema.json` |
 | `h2k.schema.path` | Путь к `schema.json` | Только для `json-phoenix` |
 | `h2k.topic.pattern` | Шаблон имени топика | `${table}` по умолчанию |
@@ -111,6 +111,11 @@ h2k.topic.pattern=${table}
 | `h2k.payload.include.meta` | Добавлять служебные поля | +`_event_ts`,`delete` и т.д. |
 | `h2k.payload.include.meta.wal` | Добавлять `_wal_seq`,`_wal_write_time` | требует включить meta |
 | `h2k.payload.include.rowkey` | Включать `_rowkey` | `BASE64`/`HEX` управляется `h2k.rowkey.encoding` |
+
+
+> Endpoint фильтрует WAL только по указанным CF и не меняет регистр имён. Если ключ `h2k.cf.list`
+> не задан — реплицируются все CF. При явном списке, но ошибке в регистре, записи соответствующего
+> семейства будут отброшены.
 
 > Полная справка по ключам и значениям — см. **docs/config.md**.
 

@@ -37,7 +37,7 @@ final class H2kConfigLoader {
                 .topicPattern(topic.topicPattern)
                 .topicMaxLength(topic.topicMaxLength)
                 .cfNames(topic.cfNames)
-                .cfBytes(topic.cfBytes)
+                .cfFilterExplicit(topic.cfFilterExplicit)
                 .includeRowKey(payload.includeRowKey)
                 .rowkeyEncoding(payload.rowkeyEncoding)
                 .rowkeyBase64(payload.rowkeyBase64)
