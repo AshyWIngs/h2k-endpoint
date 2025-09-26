@@ -10,7 +10,6 @@ import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.wal.WAL;
 import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerRecord;
-import org.apache.kafka.clients.producer.RecordMetadata;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -64,8 +63,15 @@ public final class WalEntryProcessor {
 
         final WalMeta walMeta = includeWalMeta ? readWalMeta(entry) : WalMeta.EMPTY;
 
-        int rowsSent = 0;
-        int cellsSent = 0;
+        ProcessingCounters counters = new ProcessingCounters();
+        RowProcessingContext context = new RowProcessingContext(
+                filterEnabled,
+                cfFamilies,
+                topic,
+                table,
+                walMeta,
+                sender,
+                counters);
 
         final List<Cell> rowBuffer = new ArrayList<>(8);
         RowKeySlice currentSlice = null;
@@ -78,19 +84,12 @@ public final class WalEntryProcessor {
             final int off = cell.getRowOffset();
             final int len = cell.getRowLength();
 
-            if (currentSlice != null && arr == prevArr && off == prevOff && len == prevLen) {
+            if (isSameRow(currentSlice, arr, off, len, prevArr, prevOff, prevLen)) {
                 rowBuffer.add(cell);
                 continue;
             }
 
-            if (currentSlice != null) {
-                if (!filterEnabled || passCfFilter(rowBuffer, cfFamilies)) {
-                    sendRow(topic, table, walMeta, currentSlice, rowBuffer, sender);
-                    rowsSent++;
-                    cellsSent += rowBuffer.size();
-                }
-                rowBuffer.clear();
-            }
+            context.flushRow(rowBuffer, currentSlice);
 
             rowBuffer.add(cell);
             currentSlice = new RowKeySlice(arr, off, len);
@@ -99,16 +98,73 @@ public final class WalEntryProcessor {
             prevLen = len;
         }
 
-        if (currentSlice != null && (!filterEnabled || passCfFilter(rowBuffer, cfFamilies))) {
-            sendRow(topic, table, walMeta, currentSlice, rowBuffer, sender);
-            rowsSent++;
-            cellsSent += rowBuffer.size();
-            rowBuffer.clear();
-        }
+        context.flushRow(rowBuffer, currentSlice);
 
         if (LOG.isDebugEnabled()) {
             LOG.debug("Репликация: запись WAL обработана: таблица={}, топик={}, строк отправлено={}, ячеек отправлено={}, фильтр={}, ensure-включён={}",
-                    table, topic, rowsSent, cellsSent, filterEnabled, topicManager.ensureEnabled());
+                    table, topic, counters.rowsSent, counters.cellsSent, filterEnabled, topicManager.ensureEnabled());
+        }
+    }
+
+    /**
+     * Быстрый тест: принадлежит ли текущая ячейка тому же rowkey, что и предыдущая.
+     * Сравнение выполняется по ссылке и координатам, чтобы избежать побайтного сравнения на горячем пути.
+     */
+    private static boolean isSameRow(RowKeySlice currentSlice,
+                                     byte[] arr,
+                                     int off,
+                                     int len,
+                                     byte[] prevArr,
+                                     int prevOff,
+                                     int prevLen) {
+        return currentSlice != null && arr == prevArr && off == prevOff && len == prevLen;
+    }
+
+    /**
+     * Контекст обработки строки WAL: инкапсулирует настройки фильтрации и сборки payload,
+     * чтобы передавать в helper-методы меньше параметров и снизить когнитивную сложность.
+     */
+    private final class RowProcessingContext {
+        private final boolean filterEnabled;
+        private final byte[][] cfFamilies;
+        private final String topic;
+        private final TableName table;
+        private final WalMeta walMeta;
+        private final BatchSender sender;
+        private final ProcessingCounters counters;
+
+        RowProcessingContext(boolean filterEnabled,
+                             byte[][] cfFamilies,
+                             String topic,
+                             TableName table,
+                             WalMeta walMeta,
+                             BatchSender sender,
+                             ProcessingCounters counters) {
+            this.filterEnabled = filterEnabled;
+            this.cfFamilies = cfFamilies;
+            this.topic = topic;
+            this.table = table;
+            this.walMeta = walMeta;
+            this.sender = sender;
+            this.counters = counters;
+        }
+
+        /**
+         * Отправляет накопленную по текущему rowkey партию ячеек, если она прошла фильтр CF.
+         * Метод очищает буфер вне зависимости от результата, чтобы подготовиться к следующей строке.
+         */
+        void flushRow(List<Cell> rowBuffer, RowKeySlice currentSlice) {
+            if (currentSlice == null || rowBuffer.isEmpty()) {
+                return;
+            }
+            if (filterEnabled && !passCfFilter(rowBuffer, cfFamilies)) {
+                rowBuffer.clear();
+                return;
+            }
+            WalEntryProcessor.this.sendRow(topic, table, walMeta, currentSlice, rowBuffer, sender);
+            counters.rowsSent++;
+            counters.cellsSent += rowBuffer.size();
+            rowBuffer.clear();
         }
     }
 
@@ -162,16 +218,28 @@ public final class WalEntryProcessor {
         return false;
     }
 
-    /** Формирует Kafka-запись для одной строки HBase и добавляет future в {@link BatchSender}. */
-    private void sendRow(String topic,
-                         TableName table,
-                         WalMeta wm,
-                         RowKeySlice rowKey,
-                         List<Cell> cells,
-                         BatchSender sender) {
+    /**
+     * Лёгкие счётчики по записи WAL — количество отправленных строк и ячеек.
+     * Выделены в отдельный объект, чтобы передавать по ссылке и избегать возврата pair-структур.
+     */
+    private static final class ProcessingCounters {
+        int rowsSent;
+        int cellsSent;
+    }
+
+    /**
+     * Отправляет одну собранную строку в Kafka. Используется как горячим путём, так и в тестах
+     * для проверки выбранного сериализатора без запуска полного цикла {@link #process}.
+     */
+    void sendRow(String topic,
+                 TableName table,
+                 WalMeta walMeta,
+                 RowKeySlice rowKey,
+                 List<Cell> cells,
+                 BatchSender sender) {
         final byte[] keyBytes = rowKey.toByteArray();
-        final byte[] valueBytes = payloadBuilder.buildRowPayloadBytes(table, new ArrayList<>(cells), rowKey, wm.seq, wm.writeTime);
-        sender.add(send(topic, keyBytes, valueBytes));
+        final byte[] valueBytes = payloadBuilder.buildRowPayloadBytes(table, new ArrayList<>(cells), rowKey, walMeta.seq, walMeta.writeTime);
+        sender.add(producer.send(new ProducerRecord<>(topic, keyBytes, valueBytes)));
     }
 
     /** Считывает sequenceId/writeTime из ключа WAL; ошибки приводят к -1. */
@@ -186,7 +254,4 @@ public final class WalEntryProcessor {
         return new WalMeta(walSeq, walWriteTime);
     }
 
-    private java.util.concurrent.Future<RecordMetadata> send(String topic, byte[] key, byte[] value) {
-        return producer.send(new ProducerRecord<>(topic, key, value));
-    }
 }

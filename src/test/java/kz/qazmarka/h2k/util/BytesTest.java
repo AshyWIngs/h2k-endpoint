@@ -24,6 +24,7 @@ class BytesTest {
     @DisplayName("toHex(): выбрасывает IndexOutOfBounds при некорректном срезе")
     void toHex_outOfBounds() {
         byte[] data = {0x00, 0x01};
-        assertThrows(IndexOutOfBoundsException.class, () -> Bytes.toHex(data, 1, 5));
+        IndexOutOfBoundsException error = assertThrows(IndexOutOfBoundsException.class, () -> Bytes.toHex(data, 1, 5));
+        assertEquals(IndexOutOfBoundsException.class, error.getClass());
     }
 }

@@ -120,7 +120,7 @@ ClickHouse: Kafka‑источник понимает `FORMAT AvroConfluent` (р
 - Nullable → `["null",<T>]` + `"default": null`.  
 - Любой mismatch (фикс‑размеры/nullability) → **ISE**.
 
-Пример живой схемы колонок/PK для `TBL_JTI_TRACE_CIS_HISTORY` смотрите в `schema.json`: первичный ключ `["c","t","opd"]`, а типы колонок соответствуют Phoenix‑описанию. fileciteturn3file2
+Пример живой схемы колонок/PK для `TBL_JTI_TRACE_CIS_HISTORY` смотрите в `schema.json`: первичный ключ `["c","t","opd"]`, а типы колонок соответствуют Phoenix‑описанию.
 
 ---
 
@@ -130,7 +130,7 @@ ClickHouse: Kafka‑источник понимает `FORMAT AvroConfluent` (р
 - Требования к полям:
   - имена/порядок согласованы с `SchemaRegistry`/`schema.json`;  
   - времена — **long epoch‑ms**;  
-  - бинарные — `bytes`; флаг `delete` — `boolean/UInt8` на стороне CH.  
+  - бинарные — `bytes`; флаг _delete — `boolean/UInt8` на стороне CH.  
 - Кеш по `TableName`/`topic`; on‑miss → детальная ошибка на русском.
 
 ---
@@ -163,7 +163,7 @@ CREATE TABLE stg.kafka_tbl_jti_trace_cis_history_src
   p Nullable(String), pt Nullable(Int32), o Nullable(String), pn Nullable(String), b Nullable(String),
   tt Nullable(Int64), tm Nullable(Int64),
   ch Array(String), j Nullable(String), pg Nullable(Int32), et Nullable(Int32), pvad Nullable(String), ag Nullable(String),
-  _event_ts Nullable(Int64), `delete` UInt8
+  _event_ts Nullable(Int64), _delete UInt8
 )
 ENGINE = Kafka
 SETTINGS
@@ -179,7 +179,7 @@ SETTINGS
 CREATE TABLE stg.tbl_jti_trace_cis_history_raw
 (
   c String, t UInt8, opd DateTime64(3, 'UTC'),
-  _event_ts Nullable(DateTime64(3, 'UTC')), `delete` UInt8,
+  _event_ts Nullable(DateTime64(3, 'UTC')), _delete UInt8,
   id Nullable(String), did Nullable(String), rid Nullable(String), rinn Nullable(String), rn Nullable(String),
   sid Nullable(String), sinn Nullable(String), sn Nullable(String), gt Nullable(String), prid Nullable(String),
   st Nullable(UInt8), ste Nullable(UInt8), elr Nullable(UInt8),
@@ -198,7 +198,7 @@ SELECT
   CAST(t AS UInt8) AS t,
   toDateTime64(opd/1000.0, 3, 'UTC') AS opd,
   ifNull(toDateTime64(_event_ts/1000.0, 3, 'UTC'), NULL) AS _event_ts,
-  `delete`,
+  _delete,
   id, did, rid, rinn, rn, sid, sinn, sn, gt, prid,
   CAST(st  AS Nullable(UInt8))  AS st,
   CAST(ste AS Nullable(UInt8))  AS ste,
@@ -253,4 +253,4 @@ FROM stg.kafka_tbl_jti_trace_cis_history_src;
 
 ## 14) История и источники
 
-Этот документ — обновлённая версия первоначальной дорожной карты, где статус фич отражал только JSON‑режим. Для истории изменений и ранних предпосылок см. предыдущую редакцию roadmap. fileciteturn3file3
+Этот документ — обновлённая версия первоначальной дорожной карты, где статус фич отражал только JSON‑режим. Для истории изменений и ранних предпосылок см. предыдущую редакцию roadmap.

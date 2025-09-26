@@ -22,7 +22,7 @@ CREATE TABLE stg.kafka_tbl_jti_trace_cis_history_src ON CLUSTER shardless
     t UInt8,
     opd Int64,
 
-    `delete` UInt8,
+    _delete UInt8,
     _event_ts Int64,
 
     id   Nullable(String),
@@ -93,7 +93,7 @@ CREATE TABLE stg.tbl_jti_trace_cis_history_raw ON CLUSTER shardless
     opd_local DateTime64(3, 'Asia/Almaty') ALIAS toTimeZone(opd, 'Asia/Almaty'),
     opd_local_date Date MATERIALIZED toDate(toTimeZone(opd, 'Asia/Almaty')),
 
-    `delete` UInt8,
+    _delete UInt8,
 
     _event_ts DateTime64(3, 'UTC'),
     _event_ts_local DateTime64(3, 'Asia/Almaty')
@@ -164,7 +164,7 @@ SELECT
   t,
   toDateTime64(opd / 1000.0, 3, 'UTC')                                  AS opd,
 
-  `delete`,
+  _delete,
   toDateTime64(_event_ts / 1000.0, 3, 'UTC')                          AS _event_ts,
 
   id, did, rid, rinn, rn, sid, sinn, sn, gt, prid,

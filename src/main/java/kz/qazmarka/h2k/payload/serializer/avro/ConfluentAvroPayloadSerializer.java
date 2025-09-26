@@ -154,30 +154,44 @@ public final class ConfluentAvroPayloadSerializer implements TableAwarePayloadSe
         String base;
         String strategy = subjectStrategy.toLowerCase(Locale.ROOT);
         switch (strategy) {
-            case "table": {
-                String ns = table.getNamespaceAsString();
-                String qualifier = table.getQualifierAsString();
-                if (ns != null && !ns.isEmpty() && !"default".equalsIgnoreCase(ns)) {
-                    base = ns + ":" + qualifier;
-                } else {
-                    base = qualifier;
-                }
-                break;
-            }
-            case "qualifier":
-                base = table.getQualifierAsString();
-                break;
-            case "table-lower":
-                base = table.getNameAsString().toLowerCase(Locale.ROOT);
+            case "table":
+                base = tableNameForSubject(table, CaseMode.ORIGINAL);
                 break;
             case "table-upper":
-                base = table.getNameAsString().toUpperCase(Locale.ROOT);
+                base = tableNameForSubject(table, CaseMode.UPPER);
+                break;
+            case "table-lower":
+                base = tableNameForSubject(table, CaseMode.LOWER);
+                break;
+            case "qualifier":
+                base = table.getQualifierAsString();
                 break;
             default:
                 base = table.getQualifierAsString();
         }
         String sanitized = sanitizeSubject(base);
         return subjectPrefix + sanitized + subjectSuffix;
+    }
+
+    private enum CaseMode { ORIGINAL, UPPER, LOWER }
+
+    private static String tableNameForSubject(TableName table, CaseMode mode) {
+        String ns = table.getNamespaceAsString();
+        String qualifier = table.getQualifierAsString();
+        String base;
+        if (ns != null && !ns.isEmpty() && !"default".equalsIgnoreCase(ns)) {
+            base = ns + ":" + qualifier;
+        } else {
+            base = qualifier;
+        }
+        switch (mode) {
+            case UPPER:
+                return base.toUpperCase(Locale.ROOT);
+            case LOWER:
+                return base.toLowerCase(Locale.ROOT);
+            default:
+                return base;
+        }
     }
 
     private static String sanitizeSubject(String raw) {

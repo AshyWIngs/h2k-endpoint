@@ -5,6 +5,7 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -24,7 +25,8 @@ class TopicEnsureServiceBackoffSnapshotTest {
             Map<String, Long> snapshot = service.getBackoffSnapshot();
             assertTrue(snapshot.isEmpty(), "ожидается пустой снимок");
             assertEquals(Collections.emptyMap(), snapshot, "коллекция должна совпадать с emptyMap");
-            assertThrows(UnsupportedOperationException.class, () -> snapshot.put("x", 1L));
+            UnsupportedOperationException putError = assertThrows(UnsupportedOperationException.class, () -> snapshot.put("x", 1L));
+            assertNotNull(putError, "ожидалось исключение UnsupportedOperationException при snapshot.put");
         }
     }
 
@@ -43,7 +45,8 @@ class TopicEnsureServiceBackoffSnapshotTest {
             snapshot.values().forEach(v -> assertTrue(v >= 0L, "значения не могут быть отрицательными"));
             assertEquals(0L, snapshot.get("topic.past"), "прошедший дедлайн должен обнуляться");
             assertNotSame(Collections.emptyMap(), snapshot, "для непустого состояния возвращается собственная копия");
-            assertThrows(UnsupportedOperationException.class, () -> snapshot.clear(), "снимок не должен модифицироваться");
+            UnsupportedOperationException clearError = assertThrows(UnsupportedOperationException.class, snapshot::clear, "снимок не должен модифицироваться");
+            assertNotNull(clearError, "ожидалось UnsupportedOperationException при snapshot.clear");
         }
     }
 

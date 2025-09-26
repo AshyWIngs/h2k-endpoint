@@ -171,6 +171,37 @@ class ConfluentAvroPayloadSerializerTest {
         }
     }
 
+    @Test
+    @DisplayName("Confluent: стратегия table-upper + suffix формирует ожидаемый subject")
+    void confluentSubjectStrategyUpper() throws Exception {
+        try (MockWebServer server = new MockWebServer()) {
+            server.enqueue(new MockResponse()
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"id\":11}"));
+            server.start();
+            String baseUrl = baseUrl(server);
+
+            Configuration c = new Configuration(false);
+            c.set("h2k.cf.list", "d");
+            c.set("h2k.payload.format", "avro-binary");
+            c.set("h2k.avro.mode", "confluent");
+            c.set("h2k.avro.schema.dir", Paths.get("src", "test", "resources", "avro").toAbsolutePath().toString());
+            c.set("h2k.avro.sr.urls", baseUrl);
+            c.set("h2k.avro.subject.strategy", "table-upper");
+            c.set("h2k.avro.subject.suffix", "-value");
+
+            H2kConfig cfg = H2kConfig.from(c, "dummy:9092");
+            PayloadBuilder builder = new PayloadBuilder(STRING_DECODER, cfg);
+            byte[] rowKey = Bytes.toBytes("rk_subject");
+            Cell cell = new KeyValue(rowKey, Bytes.toBytes("d"), Bytes.toBytes("value"), 1L, Bytes.toBytes("x"));
+            builder.buildRowPayloadBytes(TABLE, Collections.singletonList(cell), RowKeySlice.whole(rowKey), 1L, 1L);
+
+            RecordedRequest request = takeRequest(server, 5, TimeUnit.SECONDS);
+            assertNotNull(request, "Schema Registry должен получить запрос на регистрацию");
+            assertEquals("/subjects/T_AVRO-value/versions", request.getPath());
+        }
+    }
+
     private static H2kConfig buildConfig(String format, String srUrl) {
         Configuration c = new Configuration(false);
         c.set("h2k.cf.list", "d");

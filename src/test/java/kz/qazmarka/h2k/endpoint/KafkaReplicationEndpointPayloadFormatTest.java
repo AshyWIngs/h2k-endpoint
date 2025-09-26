@@ -1,6 +1,5 @@
 package kz.qazmarka.h2k.endpoint;
 
-import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Paths;
 import java.util.Collections;
@@ -25,6 +24,7 @@ import kz.qazmarka.h2k.config.H2kConfig;
 import kz.qazmarka.h2k.endpoint.internal.TopicManager;
 import kz.qazmarka.h2k.endpoint.internal.WalEntryProcessor;
 import kz.qazmarka.h2k.endpoint.internal.WalMeta;
+import kz.qazmarka.h2k.endpoint.internal.WalEntryProcessorTestSupport;
 import kz.qazmarka.h2k.kafka.producer.BatchSender;
 import kz.qazmarka.h2k.payload.builder.PayloadBuilder;
 import kz.qazmarka.h2k.schema.decoder.Decoder;
@@ -57,7 +57,7 @@ class KafkaReplicationEndpointPayloadFormatTest {
 
         WalMeta walMeta = new WalMeta(123L, 456L);
         try (BatchSender sender = new BatchSender(10, 1_000)) {
-            invokeSendRow(processor, "topic-json", TABLE, walMeta, slice, cells, sender);
+            WalEntryProcessorTestSupport.sendRow(processor, "topic-json", TABLE, walMeta, slice, cells, sender);
         }
 
         assertEquals(1, producer.history().size(), "Ожидаем одну запись в MockProducer");
@@ -94,7 +94,7 @@ class KafkaReplicationEndpointPayloadFormatTest {
 
         WalMeta walMeta = new WalMeta(321L, 654L);
         try (BatchSender sender = new BatchSender(10, 1_000)) {
-            invokeSendRow(processor, "topic-avro", TABLE, walMeta, slice, cells, sender);
+            WalEntryProcessorTestSupport.sendRow(processor, "topic-avro", TABLE, walMeta, slice, cells, sender);
         }
 
         assertEquals(1, producer.history().size(), "Ожидаем одну запись в MockProducer");
@@ -110,16 +110,4 @@ class KafkaReplicationEndpointPayloadFormatTest {
         return s.getBytes(StandardCharsets.UTF_8);
     }
 
-    private static void invokeSendRow(WalEntryProcessor processor,
-                                      String topic,
-                                      TableName table,
-                                      WalMeta walMeta,
-                                      RowKeySlice slice,
-                                      List<Cell> cells,
-                                      BatchSender sender) throws Exception {
-        Method method = WalEntryProcessor.class
-                .getDeclaredMethod("sendRow", String.class, TableName.class, WalMeta.class, RowKeySlice.class, List.class, BatchSender.class);
-        method.setAccessible(true);
-        method.invoke(processor, topic, table, walMeta, slice, cells, sender);
-    }
 }

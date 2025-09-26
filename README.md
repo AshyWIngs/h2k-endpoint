@@ -69,6 +69,12 @@ bin/hbase shell conf/add_peer_shell_balanced.txt
    - `lz4-java-1.6.0+.jar` (для FAST/BALANCED)
    - `snappy-java-1.1.x+.jar` (для RELIABLE, если `compression.type=snappy`)
    - Если используете Confluent Avro: положить только `kafka-avro-serializer-5.3.8.jar` и `kafka-schema-registry-client-5.3.8.jar`
+   ```bash
+   # kafka-avro-serializer
+   curl -fLO https://packages.confluent.io/maven/io/confluent/kafka-avro-serializer/5.3.8/kafka-avro-serializer-5.3.8.jar
+   # schema-registry-client
+   curl -fLO https://packages.confluent.io/maven/io/confluent/kafka-schema-registry-client/5.3.8/kafka-schema-registry-client-5.3.8.jar
+   ```
 3. Перезапустите RegionServer.
 
 Быстрая проверка:
