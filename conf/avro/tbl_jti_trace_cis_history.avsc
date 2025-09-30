@@ -3,46 +3,322 @@
   "name": "TBL_JTI_TRACE_CIS_HISTORY_Row",
   "namespace": "kz.qazmarka.h2k",
   "doc": "Событие из Phoenix TBL_JTI_TRACE_CIS_HISTORY. Все TIMESTAMP представлены как long epoch-millis. Доп. метаполя: _event_ts (ms) и _delete (логическое удаление). PK: (c, t, opd).",
+  "h2k.saltBytes": 1,
+  "h2k.capacityHint": 32,
   "fields": [
-    { "name": "c",   "type": "string", "doc": "PK часть 1: VARCHAR" },
-    { "name": "t",   "type": "int",    "doc": "PK часть 2: UNSIGNED_TINYINT (0..255) хранится как int" },
-    { "name": "opd", "type": "long",   "doc": "PK часть 3: TIMESTAMP в миллисекундах epoch" },
-
-    { "name": "id",   "type": ["null","string"], "default": null },
-    { "name": "did",  "type": ["null","string"], "default": null },
-    { "name": "rid",  "type": ["null","string"], "default": null },
-    { "name": "rinn", "type": ["null","string"], "default": null },
-    { "name": "rn",   "type": ["null","string"], "default": null },
-    { "name": "sid",  "type": ["null","string"], "default": null },
-    { "name": "sinn", "type": ["null","string"], "default": null },
-    { "name": "sn",   "type": ["null","string"], "default": null },
-    { "name": "gt",   "type": ["null","string"], "default": null },
-    { "name": "prid", "type": ["null","string"], "default": null },
-
-    { "name": "st",  "type": ["null","int"],  "default": null, "doc": "UNSIGNED_TINYINT" },
-    { "name": "ste", "type": ["null","int"],  "default": null, "doc": "UNSIGNED_TINYINT" },
-    { "name": "elr", "type": ["null","int"],  "default": null, "doc": "UNSIGNED_TINYINT" },
-
-    { "name": "emd", "type": ["null","long"], "default": null, "doc": "TIMESTAMP ms" },
-    { "name": "apd", "type": ["null","long"], "default": null, "doc": "TIMESTAMP ms" },
-    { "name": "exd", "type": ["null","long"], "default": null, "doc": "TIMESTAMP ms" },
-
-    { "name": "p",  "type": ["null","string"], "default": null },
-    { "name": "pt", "type": ["null","int"],    "default": null, "doc": "UNSIGNED_TINYINT" },
-    { "name": "o",  "type": ["null","string"], "default": null },
-    { "name": "pn", "type": ["null","string"], "default": null },
-    { "name": "b",  "type": ["null","string"], "default": null },
-    { "name": "tt", "type": ["null","long"],   "default": null, "doc": "BIGINT" },
-    { "name": "tm", "type": ["null","long"],   "default": null, "doc": "TIMESTAMP ms" },
-
-    { "name": "ch", "type": ["null", { "type": "array", "items": "string" }], "default": null, "doc": "VARCHAR ARRAY" },
-    { "name": "j",  "type": ["null","string"], "default": null },
-    { "name": "pg", "type": ["null","int"],    "default": null, "doc": "UNSIGNED_SMALLINT" },
-    { "name": "et", "type": ["null","int"],    "default": null, "doc": "UNSIGNED_TINYINT" },
-    { "name": "pvad","type": ["null","string"], "default": null },
-    { "name": "ag",  "type": ["null","string"], "default": null },
-
-    { "name": "_event_ts", "type": ["null","long"], "default": null, "doc": "Доп. метаполе: версия события, ms epoch" },
-    { "name": "_delete", "type": "boolean", "default": false, "doc": "Доп. метаполе: логическое удаление" }
+    {
+      "name": "c",
+      "type": "string",
+      "doc": "PK часть 1: VARCHAR",
+      "h2k.phoenixType": "VARCHAR"
+    },
+    {
+      "name": "t",
+      "type": "int",
+      "doc": "PK часть 2: UNSIGNED_TINYINT (0..255) хранится как int",
+      "h2k.phoenixType": "UNSIGNED_TINYINT"
+    },
+    {
+      "name": "opd",
+      "type": "long",
+      "doc": "PK часть 3: TIMESTAMP в миллисекундах epoch",
+      "h2k.phoenixType": "TIMESTAMP"
+    },
+    {
+      "name": "id",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null,
+      "h2k.phoenixType": "VARCHAR"
+    },
+    {
+      "name": "did",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null,
+      "h2k.phoenixType": "VARCHAR"
+    },
+    {
+      "name": "rid",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null,
+      "h2k.phoenixType": "VARCHAR"
+    },
+    {
+      "name": "rinn",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null,
+      "h2k.phoenixType": "VARCHAR"
+    },
+    {
+      "name": "rn",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null,
+      "h2k.phoenixType": "VARCHAR"
+    },
+    {
+      "name": "sid",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null,
+      "h2k.phoenixType": "VARCHAR"
+    },
+    {
+      "name": "sinn",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null,
+      "h2k.phoenixType": "VARCHAR"
+    },
+    {
+      "name": "sn",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null,
+      "h2k.phoenixType": "VARCHAR"
+    },
+    {
+      "name": "gt",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null,
+      "h2k.phoenixType": "VARCHAR"
+    },
+    {
+      "name": "prid",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null,
+      "h2k.phoenixType": "VARCHAR"
+    },
+    {
+      "name": "st",
+      "type": [
+        "null",
+        "int"
+      ],
+      "default": null,
+      "doc": "UNSIGNED_TINYINT",
+      "h2k.phoenixType": "UNSIGNED_TINYINT"
+    },
+    {
+      "name": "ste",
+      "type": [
+        "null",
+        "int"
+      ],
+      "default": null,
+      "doc": "UNSIGNED_TINYINT",
+      "h2k.phoenixType": "UNSIGNED_TINYINT"
+    },
+    {
+      "name": "elr",
+      "type": [
+        "null",
+        "int"
+      ],
+      "default": null,
+      "doc": "UNSIGNED_TINYINT",
+      "h2k.phoenixType": "UNSIGNED_TINYINT"
+    },
+    {
+      "name": "emd",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null,
+      "doc": "TIMESTAMP ms",
+      "h2k.phoenixType": "TIMESTAMP"
+    },
+    {
+      "name": "apd",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null,
+      "doc": "TIMESTAMP ms",
+      "h2k.phoenixType": "TIMESTAMP"
+    },
+    {
+      "name": "exd",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null,
+      "doc": "TIMESTAMP ms",
+      "h2k.phoenixType": "TIMESTAMP"
+    },
+    {
+      "name": "p",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null,
+      "h2k.phoenixType": "VARCHAR"
+    },
+    {
+      "name": "pt",
+      "type": [
+        "null",
+        "int"
+      ],
+      "default": null,
+      "doc": "UNSIGNED_TINYINT",
+      "h2k.phoenixType": "UNSIGNED_TINYINT"
+    },
+    {
+      "name": "o",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null,
+      "h2k.phoenixType": "VARCHAR"
+    },
+    {
+      "name": "pn",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null,
+      "h2k.phoenixType": "VARCHAR"
+    },
+    {
+      "name": "b",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null,
+      "h2k.phoenixType": "VARCHAR"
+    },
+    {
+      "name": "tt",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null,
+      "doc": "BIGINT",
+      "h2k.phoenixType": "BIGINT"
+    },
+    {
+      "name": "tm",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null,
+      "doc": "TIMESTAMP ms",
+      "h2k.phoenixType": "TIMESTAMP"
+    },
+    {
+      "name": "ch",
+      "type": [
+        "null",
+        {
+          "type": "array",
+          "items": "string"
+        }
+      ],
+      "default": null,
+      "doc": "VARCHAR ARRAY",
+      "h2k.phoenixType": "VARCHAR ARRAY"
+    },
+    {
+      "name": "j",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null,
+      "h2k.phoenixType": "VARCHAR"
+    },
+    {
+      "name": "pg",
+      "type": [
+        "null",
+        "int"
+      ],
+      "default": null,
+      "doc": "UNSIGNED_SMALLINT",
+      "h2k.phoenixType": "UNSIGNED_SMALLINT"
+    },
+    {
+      "name": "et",
+      "type": [
+        "null",
+        "int"
+      ],
+      "default": null,
+      "doc": "UNSIGNED_TINYINT",
+      "h2k.phoenixType": "UNSIGNED_TINYINT"
+    },
+    {
+      "name": "pvad",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null,
+      "h2k.phoenixType": "VARCHAR"
+    },
+    {
+      "name": "ag",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null,
+      "h2k.phoenixType": "VARCHAR"
+    },
+    {
+      "name": "_event_ts",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null,
+      "doc": "Доп. метаполе: версия события, ms epoch"
+    },
+    {
+      "name": "_delete",
+      "type": "boolean",
+      "default": false,
+      "doc": "Доп. метаполе: логическое удаление"
+    }
+  ],
+  "h2k.pk": [
+    "c",
+    "t",
+    "opd"
   ]
 }

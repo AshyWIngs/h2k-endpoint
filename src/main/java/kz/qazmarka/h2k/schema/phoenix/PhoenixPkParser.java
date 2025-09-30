@@ -1,5 +1,9 @@
 package kz.qazmarka.h2k.schema.phoenix;
 
+/**
+ * Вспомогательный парсер rowkey Phoenix для выделения значений PK.
+ */
+
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Map;

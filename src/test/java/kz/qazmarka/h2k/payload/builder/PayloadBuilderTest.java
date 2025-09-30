@@ -1,6 +1,7 @@
 package kz.qazmarka.h2k.payload.builder;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Map;
 
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.KeyValue;
@@ -420,5 +421,27 @@ class PayloadBuilderTest {
         org.junit.jupiter.api.Assertions.assertNotNull(ignored);
         Class<?> ignoredStub = IntegrationPkInjection.StubRegistry.class;
         org.junit.jupiter.api.Assertions.assertNotNull(ignoredStub);
+    }
+
+    @Test
+    @DisplayName("Сборка payload не зависит от повторного использования буфера ячеек")
+    void payloadIndependentFromRowBufferReuse() {
+        Decoder decoder = (table, qualifier, value) -> value == null ? null : new String(value, StandardCharsets.UTF_8);
+        H2kConfig cfg = new H2kConfig.Builder("test-bootstrap").build();
+        PayloadBuilder builder = new PayloadBuilder(decoder, cfg);
+
+        java.util.List<Cell> cells = new java.util.ArrayList<>();
+        byte[] row = Bytes.toBytes("rk");
+        cells.add(new KeyValue(row,
+                Bytes.toBytes("d"),
+                Bytes.toBytes("name"),
+                Bytes.toBytes("value")));
+
+        Map<String, Object> payload = builder.buildRowPayload(TableName.valueOf("T"),
+                cells, RowKeySlice.whole(row), 7L, 9L);
+
+        cells.clear();
+
+        org.junit.jupiter.api.Assertions.assertEquals("value", payload.get("name"));
     }
 }

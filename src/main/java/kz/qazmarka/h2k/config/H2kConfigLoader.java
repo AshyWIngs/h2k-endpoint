@@ -1,9 +1,14 @@
 package kz.qazmarka.h2k.config;
 
+/**
+ * Конструирует {@link H2kConfig} из HBase-конфигурации.
+ */
+
 import java.util.Map;
 
 import org.apache.hadoop.conf.Configuration;
 
+import kz.qazmarka.h2k.schema.registry.PhoenixTableMetadataProvider;
 import kz.qazmarka.h2k.util.Parsers;
 
 /**
@@ -12,6 +17,10 @@ import kz.qazmarka.h2k.util.Parsers;
 final class H2kConfigLoader {
 
     H2kConfig load(Configuration cfg, String bootstrap) {
+        return load(cfg, bootstrap, PhoenixTableMetadataProvider.NOOP);
+    }
+
+    H2kConfig load(Configuration cfg, String bootstrap, PhoenixTableMetadataProvider metadataProvider) {
         /**
          * Формирует основной {@link H2kConfig}, объединяя секции {@code h2k.*} из конфигурации.
          *
@@ -33,39 +42,56 @@ final class H2kConfigLoader {
         TableMapSection tables = TableMapSection.from(cfg);
         Map<String, String> topicConfigs = Parsers.readWithPrefix(cfg, H2kConfig.Keys.TOPIC_CONFIG_PREFIX);
 
-        return new H2kConfig.Builder(bootstrap)
-                .topicPattern(topic.topicPattern)
-                .topicMaxLength(topic.topicMaxLength)
+        H2kConfig.Builder builder = new H2kConfig.Builder(bootstrap);
+
+        builder.topic()
+                .pattern(topic.topicPattern)
+                .maxLength(topic.topicMaxLength)
                 .cfNames(topic.cfNames)
-                .cfFilterExplicit(topic.cfFilterExplicit)
+                .filterExplicit(topic.cfFilterExplicit)
+                .configs(topicConfigs)
+                .done();
+
+        builder.tables()
+                .saltBytes(tables.saltMap)
+                .capacityHints(tables.capacityHints)
+                .metadataProvider(metadataProvider)
+                .done();
+
+        builder.payload()
                 .includeRowKey(payload.includeRowKey)
                 .rowkeyEncoding(payload.rowkeyEncoding)
                 .rowkeyBase64(payload.rowkeyBase64)
                 .includeMeta(payload.includeMeta)
                 .includeMetaWal(payload.includeMetaWal)
                 .jsonSerializeNulls(payload.jsonSerializeNulls)
-                .payloadFormat(payload.payloadFormat)
-                .serializerFactoryClass(payload.serializerFactoryClass)
+                .format(payload.payloadFormat)
+                .serializerFactory(payload.serializerFactoryClass)
                 .avroMode(avro.mode)
                 .avroSchemaDir(avro.schemaDir)
-                .avroSchemaRegistryUrls(avro.schemaRegistryUrls)
-                .avroSrAuth(avro.auth)
+                .schemaRegistryUrls(avro.schemaRegistryUrls)
+                .schemaRegistryAuth(avro.auth)
                 .avroProps(avro.props)
-                .ensureTopics(ensure.ensureTopics)
-                .ensureIncreasePartitions(ensure.ensureIncreasePartitions)
-                .ensureDiffConfigs(ensure.ensureDiffConfigs)
-                .topicPartitions(ensure.topicPartitions)
-                .topicReplication(ensure.topicReplication)
+                .done();
+
+        builder.ensure()
+                .enabled(ensure.ensureTopics)
+                .allowIncreasePartitions(ensure.ensureIncreasePartitions)
+                .allowDiffConfigs(ensure.ensureDiffConfigs)
+                .partitions(ensure.topicPartitions)
+                .replication(ensure.topicReplication)
                 .adminTimeoutMs(ensure.adminTimeoutMs)
                 .adminClientId(ensure.adminClientId)
                 .unknownBackoffMs(ensure.unknownBackoffMs)
+                .done();
+
+        builder.producer()
                 .awaitEvery(batch.awaitEvery)
                 .awaitTimeoutMs(batch.awaitTimeoutMs)
-                .producerBatchCountersEnabled(batch.countersEnabled)
-                .producerBatchDebugOnFailure(batch.debugOnFailure)
-                .topicConfigs(topicConfigs)
-                .saltBytesByTable(tables.saltMap)
-                .capacityHintByTable(tables.capacityHints)
-                .build();
+                .batchCountersEnabled(batch.countersEnabled)
+                .batchDebugOnFailure(batch.debugOnFailure)
+                .done();
+
+        return builder.build();
     }
 }

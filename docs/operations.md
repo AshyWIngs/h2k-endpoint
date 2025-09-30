@@ -1,5 +1,12 @@
 # Операции эксплуатации
 
+## Требования окружения
+
+- RegionServer'ы и Kafka-CLI работают на **Java 8** (ниже или выше не допускаются).
+- На каждый RS раскладывается **толстый** `h2k-endpoint-*.jar` (внутри уже есть Avro/Jackson/Gson и Confluent Schema Registry 5.3.8).
+- Kafka clients строго **2.3.1**, без SASL/SSL (по проектной договорённости безопасность обеспечивается внешней инфраструктурой).
+- Конфигурация ReplicationEndpoint задаётся только ключами `h2k.*`; новые параметры документируем в `docs/` перед использованием.
+
 ## Подготовка таблиц
 
 Перед настройкой репликации убедитесь, что нужные Column Family (CF) включены в репликацию (параметр `REPLICATION_SCOPE=1`).
@@ -40,7 +47,7 @@ add_peer 'peer1',
       'h2k.kafka.bootstrap.servers' => 'host1:9092,host2:9092',
       'h2k.topic.pattern'           => '${table}',
       'h2k.cf.list'                 => 'd',
-      'h2k.decode.mode'             => 'json-phoenix',
+      'h2k.decode.mode'             => 'phoenix-avro',
       'h2k.schema.path'             => '/opt/hbase-default-current/conf/schema.json'
     }
   }
@@ -171,12 +178,12 @@ cfg['CONFIG'].select { |k,_| k.start_with?('h2k.') }
      ```
   2) Включите ключи:
      ```ruby
-     update_peer_config 'h2k_balanced',
-       { 'CONFIG' => {
-           'h2k.payload.format'  => 'avro',
-           'h2k.avro.schema.dir' => '/opt/hbase-default-current/conf/avro'
-         }
-       }
+  update_peer_config 'h2k_balanced',
+    { 'CONFIG' => {
+        'h2k.payload.format'  => 'avro-binary',
+        'h2k.avro.schema.dir' => '/opt/hbase-default-current/conf/avro'
+      }
+    }
      ```
   3) Перезапустите peer (disable/enable) и смотрите логи RegionServer:
      ```bash
@@ -188,18 +195,37 @@ cfg['CONFIG'].select { |k,_| k.start_with?('h2k.') }
 - **Confluent Schema Registry (open‑source 5.3.8):**
   1) Проверьте доступность SR:
      ```bash
-     curl -s http://sr1:8081/subjects
+     curl -s http://10.254.3.111:8081/subjects
      ```
   2) Включите ключи (после реализации поддержки в коде):
      ```ruby
      update_peer_config 'h2k_balanced',
        { 'CONFIG' => {
-           'h2k.payload.format'        => 'avro',
-           'h2k.avro.mode'             => 'confluent',
-           'h2k.avro.schema.registry'  => 'http://sr1:8081,http://sr2:8081'
+           'h2k.payload.format'  => 'avro-binary',
+           'h2k.avro.mode'       => 'confluent',
+           'h2k.avro.schema.dir' => '/opt/hbase-default-current/conf/avro',
+           'h2k.avro.sr.urls'    => 'http://10.254.3.111:8081,http://10.254.3.112:8081,http://10.254.3.113:8081'
          }
        }
      ```
+  3) По умолчанию subject формируется как `namespace:table` (стратегия `table`). При необходимости старого поведения укажите `h2k.avro.props.subject.strategy=qualifier`.
+  4) Размер кеша SR регулируется через `h2k.avro.props.client.cache.capacity`; рекомендуется держать ≥ `1024`, чтобы избежать повторных запросов при горячем профиле.
+
+## Раскатка и мониторинг
+
+1. **Staged rollout.** Скопируйте новый `h2k-endpoint-*.jar` только на один RegionServer, отключите peer на остальных (`disable_peer`) и включите репликацию на тестовых таблицах. Убедитесь, что SR выдал id и в логах нет ошибок сериализации.
+2. **Метрики во время обкатки.**
+   - `status 'replication'` → контролируем `SizeOfLogQueue` и `AgeOfLastShippedOp`.
+   - `HRegionServer.GcTimeMillis` и размер heap (`jstat -gcutil <pid> 5s`) — не должно быть резких скачков.
+   - Kafka-продьюсер: `ProducerMetrics` (`records-send-rate`, `request-latency-avg`, `record-error-rate`).
+   - Schema Registry: `curl $SR/subjects` и `journalctl -u schema-registry` — исключаем 409/500 ошибки, следим за latency.
+   - `TopicManager.getMetrics()` → `ensure.*`, `unknown.backoff.size`, `wal.entries.total`, `wal.rows.total`, `wal.rows.filtered`, `schema.registry.register.success/failures` — удобно отдавать в JMX.
+   - `WalEntryProcessor.metrics()` для локального контроля и INFO-лог `WAL throughput: ... rows/sec=...` каждые ~5 секунд.
+3. **Расширение.** Если в течение 1–2 часов производительность и задержки стабильны, разложите JAR на остальные RS, поочерёдно включайте peer и проверяйте метрики.
+4. **Откат.** При проблемах:
+   - `disable_peer 'h2k_balanced'` на всех RS.
+   - Верните предыдущий JAR из `lib/backup`, перезапустите `hbase-regionserver`.
+   - После стабилизации включите peer обратно.
 
 ## Быстрая диагностика
 

@@ -10,7 +10,7 @@
 ## Проверка конфигурации
 - Убедиться, что задан h2k.kafka.bootstrap.servers.
 - Проверить корректность h2k.topic.pattern и h2k.cf.list (несуществующие CF игнорируются).
-- Для decode.mode=json-phoenix обязательно указать h2k.schema.path.
+- Для decode.mode=phoenix-avro рекомендуется указать h2k.schema.path как фолбэк; для json-phoenix этот ключ обязателен.
 - При несоответствии типов в schema.json `PhoenixColumnTypeRegistry` логирует WARN и использует VARCHAR, а `ValueCodecPhoenix` бросает `IllegalStateException` при декодировании фиксированных типов.
 
 ## Частые проблемы
@@ -26,11 +26,12 @@
 - ValueCodecPhoenix проверяет фиксированные типы (например, UNSIGNED_INT = 4 байта).
 - Если длина не совпадает — выбрасывается IllegalStateException с сообщением «ожидалось N байт».
 - При неизвестном типе смотрите WARN от PhoenixColumnTypeRegistry (тип будет принят как VARCHAR).
-- Проверить schema.json, обновить при изменениях таблицы.
+- Для phoenix-avro проверить `.avsc` (атрибуты `h2k.phoenixType`/`h2k.pk`) и, при необходимости, schema.json для фолбэка.
 
 ### Ошибки при формировании JSON
 - Null в обязательных параметрах (TableName/qualifier) → NullPointerException.
 - При decode.mode=json-phoenix без schema.path → ошибка конфигурации.
+- При decode.mode=phoenix-avro без `.avsc` и без schema.json → декодер не сможет инициализироваться.
 - При некорректной кодировке rowkey (BASE64/HEX) → ошибка парсинга RowKeySlice.
 
 ### Ошибки Kafka Producer

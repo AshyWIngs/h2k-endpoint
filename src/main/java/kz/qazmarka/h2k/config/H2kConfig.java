@@ -9,6 +9,7 @@ import java.util.Properties;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.TableName;
 
+import kz.qazmarka.h2k.schema.registry.PhoenixTableMetadataProvider;
 import kz.qazmarka.h2k.util.Parsers;
 
 /**
@@ -136,7 +137,7 @@ public final class H2kConfig {
          */
         public static final String JSON_SERIALIZE_NULLS = "h2k.json.serialize.nulls";
         /**
-         * Режим декодирования значений из HBase: "simple" или "json-phoenix".
+         * Режим декодирования значений из HBase: {@code simple}, {@code phoenix-avro} или {@code json-phoenix} (legacy).
          * Используется при инициализации декодеров.
          */
         public static final String DECODE_MODE = "h2k.decode.mode";
@@ -186,6 +187,8 @@ public final class H2kConfig {
         /** FQCN фабрики сериализаторов (SPI) */
         public static final String PAYLOAD_SERIALIZER_FACTORY = "h2k.payload.serializer.factory";
         /** AVRO-настройки (минимальный набор ключей) */
+        /** Каталог локальных Avro-схем (generic Avro и режим phoenix-avro для декодера). */
+        public static final String AVRO_SCHEMA_DIR = "h2k.avro.schema.dir";
         public static final String AVRO_SCHEMA_REGISTRY_URL = "h2k.avro.schema.registry.url";
         public static final String AVRO_SUBJECT_STRATEGY    = "h2k.avro.subject.strategy";
         public static final String AVRO_COMPATIBILITY       = "h2k.avro.compatibility";
@@ -234,7 +237,7 @@ public final class H2kConfig {
     /** Режим Avro по умолчанию. */
     static final AvroMode DEFAULT_AVRO_MODE = AvroMode.GENERIC;
     /** Каталог локальных Avro-схем по умолчанию. */
-    static final String DEFAULT_AVRO_SCHEMA_DIR = "conf/avro";
+    public static final String DEFAULT_AVRO_SCHEMA_DIR = "conf/avro";
 
     // ==== Базовые ====
     private final String bootstrap;
@@ -295,6 +298,8 @@ public final class H2kConfig {
     private final Map<String, Integer> saltBytesByTable;
     /** Подсказки ёмкости корневого JSON по таблицам (ожидаемое число полей). */
     private final Map<String, Integer> capacityHintByTable;
+    /** Внешний поставщик табличных метаданных (например, Avro-схемы). */
+    private final PhoenixTableMetadataProvider tableMetadataProvider;
 
     /**
      * Приватный конструктор: вызывается только билдером для инициализации
@@ -348,6 +353,7 @@ public final class H2kConfig {
         this.topicConfigs = Collections.unmodifiableMap(new HashMap<>(b.topicConfigs));
         this.saltBytesByTable = Collections.unmodifiableMap(new HashMap<>(b.saltBytesByTable));
         this.capacityHintByTable = Collections.unmodifiableMap(new HashMap<>(b.capacityHintByTable));
+        this.tableMetadataProvider = b.tableMetadataProvider;
     }
 
     /**
@@ -428,6 +434,8 @@ public final class H2kConfig {
         private Map<String, Integer> saltBytesByTable = Collections.emptyMap();
         /** Подсказки ёмкости корневого JSON по таблицам. */
         private Map<String, Integer> capacityHintByTable = Collections.emptyMap();
+        /** Внешний поставщик табличных метаданных (Avro и т.п.). */
+        private PhoenixTableMetadataProvider tableMetadataProvider = PhoenixTableMetadataProvider.NOOP;
         /**
          * Устанавливает карту переопределений соли по таблицам: имя → байты (0 — без соли).
          * Ожидается уже готовая карта (например, результат {@link Parsers#readSaltMap(Configuration, String)}).
@@ -443,6 +451,11 @@ public final class H2kConfig {
          * @return this
          */
         public Builder capacityHintByTable(Map<String, Integer> v) { this.capacityHintByTable = v; return this; }
+
+        public Builder tableMetadataProvider(PhoenixTableMetadataProvider provider) {
+            this.tableMetadataProvider = (provider == null) ? PhoenixTableMetadataProvider.NOOP : provider;
+            return this;
+        }
 
         /**
          * Создаёт билдер с обязательным адресом Kafka bootstrap.servers.
@@ -525,7 +538,15 @@ public final class H2kConfig {
          * @param v "hex" | "base64"
          * @return this
          */
-        public Builder rowkeyEncoding(String v) { this.rowkeyEncoding = v; return this; }
+        public Builder rowkeyEncoding(String v) {
+            this.rowkeyEncoding = v;
+            if (v != null && ROWKEY_ENCODING_BASE64.equalsIgnoreCase(v)) {
+                this.rowkeyBase64 = true;
+            } else if (v != null && ROWKEY_ENCODING_HEX.equalsIgnoreCase(v)) {
+                this.rowkeyBase64 = false;
+            }
+            return this;
+        }
         /**
          * Предвычисленный флаг: true — rowkey будет сериализован в Base64 (для горячего пути).
          * Обычно вычисляется автоматически на основе rowkeyEncoding.
@@ -688,6 +709,21 @@ public final class H2kConfig {
          */
         public Builder topicConfigs(Map<String, String> v) { this.topicConfigs = v; return this; }
 
+        /** @return сгруппированные настройки топика (pattern, CF, дополнительные конфиги). */
+        public TopicOptions topic() { return new TopicOptions(); }
+
+        /** @return сгруппированные настройки payload и Avro. */
+        public PayloadOptions payload() { return new PayloadOptions(); }
+
+        /** @return сгруппированные настройки ensure/topics. */
+        public EnsureOptions ensure() { return new EnsureOptions(); }
+
+        /** @return сгруппированные настройки ожиданий и batch‑поведения. */
+        public ProducerOptions producer() { return new ProducerOptions(); }
+
+        /** @return сгруппированные настройки подсказок по таблицам (соль/ёмкость). */
+        public TableOptions tables() { return new TableOptions(); }
+
         /**
          * Собирает неизменяемый объект конфигурации с текущими значениями билдера.
          *
@@ -695,6 +731,69 @@ public final class H2kConfig {
          * @return готовый {@link H2kConfig}
          */
         public H2kConfig build() { return new H2kConfig(this); }
+
+        /** Опции, относящиеся к шаблону топика и CF. */
+        public final class TopicOptions {
+            public TopicOptions pattern(String v) { Builder.this.topicPattern(v); return this; }
+            public TopicOptions maxLength(int v) { Builder.this.topicMaxLength(v); return this; }
+            public TopicOptions cfNames(String[] v) { Builder.this.cfNames(v); return this; }
+            public TopicOptions cfBytes(byte[][] v) { Builder.this.cfBytes(v); return this; }
+            public TopicOptions filterExplicit(boolean v) { Builder.this.cfFilterExplicit(v); return this; }
+            public TopicOptions configs(Map<String, String> v) { Builder.this.topicConfigs(v); return this; }
+            public Builder done() { return Builder.this; }
+        }
+
+        /** Опции payload/Avro. */
+        public final class PayloadOptions {
+            public PayloadOptions includeRowKey(boolean v) { Builder.this.includeRowKey(v); return this; }
+            public PayloadOptions rowkeyEncoding(String v) {
+                Builder.this.rowkeyEncoding(v);
+                Builder.this.rowkeyBase64(H2kConfig.ROWKEY_ENCODING_BASE64.equalsIgnoreCase(v));
+                return this;
+            }
+            public PayloadOptions rowkeyBase64(boolean v) { Builder.this.rowkeyBase64(v); return this; }
+            public PayloadOptions includeMeta(boolean v) { Builder.this.includeMeta(v); return this; }
+            public PayloadOptions includeMetaWal(boolean v) { Builder.this.includeMetaWal(v); return this; }
+            public PayloadOptions jsonSerializeNulls(boolean v) { Builder.this.jsonSerializeNulls(v); return this; }
+            public PayloadOptions format(PayloadFormat v) { Builder.this.payloadFormat(v); return this; }
+            public PayloadOptions serializerFactory(String v) { Builder.this.serializerFactoryClass(v); return this; }
+            public PayloadOptions avroMode(AvroMode v) { Builder.this.avroMode(v); return this; }
+            public PayloadOptions avroSchemaDir(String dir) { Builder.this.avroSchemaDir(dir); return this; }
+            public PayloadOptions schemaRegistryUrls(java.util.List<String> urls) { Builder.this.avroSchemaRegistryUrls(urls); return this; }
+            public PayloadOptions schemaRegistryAuth(Map<String, String> auth) { Builder.this.avroSrAuth(auth); return this; }
+            public PayloadOptions avroProps(Map<String, String> props) { Builder.this.avroProps(props); return this; }
+            public Builder done() { return Builder.this; }
+        }
+
+        /** Опции ensure/topics. */
+        public final class EnsureOptions {
+            public EnsureOptions enabled(boolean v) { Builder.this.ensureTopics(v); return this; }
+            public EnsureOptions allowIncreasePartitions(boolean v) { Builder.this.ensureIncreasePartitions(v); return this; }
+            public EnsureOptions allowDiffConfigs(boolean v) { Builder.this.ensureDiffConfigs(v); return this; }
+            public EnsureOptions partitions(int v) { Builder.this.topicPartitions(v); return this; }
+            public EnsureOptions replication(short v) { Builder.this.topicReplication(v); return this; }
+            public EnsureOptions adminTimeoutMs(long v) { Builder.this.adminTimeoutMs(v); return this; }
+            public EnsureOptions adminClientId(String v) { Builder.this.adminClientId(v); return this; }
+            public EnsureOptions unknownBackoffMs(long v) { Builder.this.unknownBackoffMs(v); return this; }
+            public Builder done() { return Builder.this; }
+        }
+
+        /** Опции ожиданий/продьюсера. */
+        public final class ProducerOptions {
+            public ProducerOptions awaitEvery(int v) { Builder.this.awaitEvery(v); return this; }
+            public ProducerOptions awaitTimeoutMs(int v) { Builder.this.awaitTimeoutMs(v); return this; }
+            public ProducerOptions batchCountersEnabled(boolean v) { Builder.this.producerBatchCountersEnabled(v); return this; }
+            public ProducerOptions batchDebugOnFailure(boolean v) { Builder.this.producerBatchDebugOnFailure(v); return this; }
+            public Builder done() { return Builder.this; }
+        }
+
+        /** Опции табличных подсказок. */
+        public final class TableOptions {
+            public TableOptions saltBytes(Map<String, Integer> v) { Builder.this.saltBytesByTable(v); return this; }
+            public TableOptions capacityHints(Map<String, Integer> v) { Builder.this.capacityHintByTable(v); return this; }
+            public TableOptions metadataProvider(PhoenixTableMetadataProvider provider) { Builder.this.tableMetadataProvider(provider); return this; }
+            public Builder done() { return Builder.this; }
+        }
     }
 
     /**
@@ -705,9 +804,18 @@ public final class H2kConfig {
      * @return полностью инициализированная иммутабельная конфигурация
      * @throws IllegalArgumentException если bootstrap пустой или не указан
      */
-    public static H2kConfig from(Configuration cfg, String bootstrap) { return new H2kConfigLoader().load(cfg, bootstrap); }
+    public static H2kConfig from(Configuration cfg, String bootstrap) {
+        return new H2kConfigLoader().load(cfg, bootstrap, PhoenixTableMetadataProvider.NOOP);
+    }
 
-    
+    public static H2kConfig from(Configuration cfg,
+                                 String bootstrap,
+                                 PhoenixTableMetadataProvider metadataProvider) {
+        PhoenixTableMetadataProvider provider =
+                (metadataProvider == null) ? PhoenixTableMetadataProvider.NOOP : metadataProvider;
+        return new H2kConfigLoader().load(cfg, bootstrap, provider);
+    }
+
 
     /**
      * Для namespace "default" префикс не добавляется (см. правила по h2k.topic.pattern).
@@ -899,7 +1007,17 @@ public final class H2kConfig {
         Integer v = saltBytesByTable.get(full);
         if (v != null) return v; // auto-unboxing
         v = saltBytesByTable.get(Parsers.up(table.getQualifierAsString()));
-        return v == null ? 0 : v; // auto-unboxing
+        if (v != null) {
+            return v;
+        }
+        Integer meta = tableMetadataProvider.saltBytes(table);
+        if (meta != null) {
+            if (meta < 0) {
+                return 0;
+            }
+            return meta > 8 ? 8 : meta;
+        }
+        return 0;
     }
 
     /** Удобный булев геттер: используется ли соль для таблицы. */
@@ -924,7 +1042,14 @@ public final class H2kConfig {
         Integer v = capacityHintByTable.get(full);
         if (v != null) return v; // auto-unboxing
         v = capacityHintByTable.get(Parsers.up(table.getQualifierAsString()));
-        return v == null ? 0 : v; // auto-unboxing
+        if (v != null) {
+            return v;
+        }
+        Integer meta = tableMetadataProvider.capacityHint(table);
+        if (meta != null && meta > 0) {
+            return meta;
+        }
+        return 0;
     }
     /**
      * Строковое представление конфигурации с маскировкой bootstrap.servers.

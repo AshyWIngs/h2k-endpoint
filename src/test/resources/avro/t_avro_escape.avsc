@@ -4,6 +4,15 @@
   "namespace": "kz.qazmarka.test",
   "doc": "line \"q\"\nnext\u0001",
   "fields": [
-    {"name": "value", "type": ["null", "string"], "default": null}
-  ]
+    {
+      "name": "value",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null,
+      "h2k.phoenixType": "VARCHAR"
+    }
+  ],
+  "h2k.pk": []
 }

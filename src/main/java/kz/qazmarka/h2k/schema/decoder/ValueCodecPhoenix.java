@@ -1,5 +1,9 @@
 package kz.qazmarka.h2k.schema.decoder;
 
+/**
+ * Декодер Phoenix: преобразует Cell в Java-объекты с учётом типов и PK.
+ */
+
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.Objects;

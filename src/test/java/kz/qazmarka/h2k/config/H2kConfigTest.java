@@ -11,6 +11,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import kz.qazmarka.h2k.schema.registry.PhoenixTableMetadataProvider;
+
 /**
  * Набор юнит‑тестов для конфигурации {@link H2kConfig}.
  *
@@ -46,6 +48,10 @@ class H2kConfigTest {
      */
     private static H2kConfig fromCfg(Configuration cfg) {
         return H2kConfig.from(cfg, "kafka1:9092");
+    }
+
+    private static H2kConfig fromCfg(Configuration cfg, PhoenixTableMetadataProvider provider) {
+        return H2kConfig.from(cfg, "kafka1:9092", provider);
     }
 
     /**
@@ -87,6 +93,42 @@ class H2kConfigTest {
         assertEquals(36, hc.getCapacityHintFor(TableName.valueOf("DEFAULT", "TBL")));
         assertEquals(18, hc.getCapacityHintFor(TableName.valueOf("ANY", "ONLYQUAL")));
         assertEquals(0,  hc.getCapacityHintFor(TableName.valueOf("DEFAULT", "ABSENT")));
+    }
+
+    @Test
+    @DisplayName("Avro metadata provider дополняет соль и capacity при отсутствии конфигурации")
+    void metadataProvider_overridesMissingConfig() {
+        Configuration c = new Configuration(false);
+        PhoenixTableMetadataProvider provider = new PhoenixTableMetadataProvider() {
+            @Override
+            public Integer saltBytes(TableName table) {
+                if ("DEFAULT:T_META".equalsIgnoreCase(table.getNameAsString())) {
+                    return 3;
+                }
+                return null;
+            }
+
+            @Override
+            public Integer capacityHint(TableName table) {
+                if ("DEFAULT:T_META".equalsIgnoreCase(table.getNameAsString())) {
+                    return 42;
+                }
+                return null;
+            }
+        };
+
+        H2kConfig hc = fromCfg(c, provider);
+
+        TableName table = TableName.valueOf("DEFAULT", "T_META");
+        assertEquals(3, hc.getSaltBytesFor(table));
+        assertEquals(42, hc.getCapacityHintFor(table));
+
+        // Конфигурация имеет приоритет над метаданными
+        c.set("h2k.salt.map", "T_META=5");
+        c.set("h2k.capacity.hint.T_META", "7");
+        hc = fromCfg(c, provider);
+        assertEquals(5, hc.getSaltBytesFor(table));
+        assertEquals(7, hc.getCapacityHintFor(table));
     }
 
     /**

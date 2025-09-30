@@ -28,6 +28,11 @@ h2k.avro.schema.dir=/opt/hbase/conf/avro
 3. **Проверка** — используйте `bin/hbase classpath` для проверки наличия Avro-зависимостей и
    команду `mvn -q -DskipITs -Dtest=GenericAvroPayloadSerializerTest test` для локальной валидации.
 
+4. **Phoenix-метаданные** — добавьте к каждому полю Avro атрибут `"h2k.phoenixType"` (строгое имя Phoenix-типа),
+   на корневом уровне опишите массив `"h2k.pk"`, а также дополнительные свойства `"h2k.saltBytes"`
+   (0..8) и `"h2k.capacityHint"` (ожидаемое число полей в JSON). Все значения считываются
+   `AvroPhoenixSchemaRegistry`; `schema.json` остаётся резервным источником на период миграции.
+
 ## Confluent Schema Registry (`confluent`)
 
 1. **Версии** — SR 5.3.8 (совместимый с Kafka clients 2.3.1, Java 8). Wire-format:
@@ -57,18 +62,19 @@ h2k.avro.subject.suffix=-value
    > В режиме `confluent` поддерживается только `h2k.payload.format=avro-binary`.
    > Итог: в Kafka идёт payload вида 0x00 + int32(schemaId) + avroBinary, где schemaId берётся из SR при первой регистрации. Повторные публикации используют кэшированный id.
 
-3. **Subject strategy** — по умолчанию используется `qualifier`. Укажите `table`, если нужно
-   включать namespace; `table-lower/upper` — для совместимости с существующими subject-именами.
+3. **Subject strategy** — по умолчанию используется `table`, что формирует `namespace:table` (для namespace `default` остаётся просто qualifier). Для совместимости со старыми раскладками доступны варианты `qualifier`, `table-lower`, `table-upper`, а также префикс/суффикс.
 
-4. **Расширенная авторизация** — пока поддерживается только Basic. Для TLS/OAuth добавьте ключи
+4. **Кэш клиента** — параметр `h2k.avro.props.client.cache.capacity` управляет размером identity-map `CachedSchemaRegistryClient` (дефолт 1000). Увеличивайте его, если в пуле много разных subject'ов и активна быстрая смена схем.
+
+5. **Расширенная авторизация** — пока поддерживается только Basic. Для TLS/OAuth добавьте ключи
    в секцию `h2k.avro.sr.auth.*` и реализуйте обработку при необходимости.
 
-5. **Экранирование JSON** — перед отправкой в Schema Registry локальная схема проходит безопасное
+6. **Экранирование JSON** — перед отправкой в Schema Registry локальная схема проходит безопасное
    экранирование: кавычки, управляющие символы (`\n`, `\r`, `\t`, `\u0000`…`\u001F`, `\u2028/\u2029`)
    кодируются по правилам JSON. Это устраняет проблемы с doc/description, где встречаются переносы и
    управляющие символы, и гарантирует валидный payload для SR 5.3.8.
 
-6. **Диагностика** — при ошибках регистрации в логах появляются WARN с адресом SR и телом ответа.
+7. **Диагностика** — при ошибках регистрации в логах появляются WARN с адресом SR и телом ответа.
    Помните о бэкоффах и кешировании schemaId: повторные сообщения не бьют SR повторно.
 
 ### Разворачивание Confluent Schema Registry 5.3.8 (кластерный режим)
@@ -84,13 +90,7 @@ h2k.avro.subject.suffix=-value
    - Java 8 (`/usr/bin/java -version`).
    - Доступны Kafka брокеры: `10.254.3.111:9092,10.254.3.112:9092,10.254.3.113:9092`.
    - Открыт порт `8081/tcp` на каждой SR-нодах (firewalld).
-   - Положить `kafka-avro-serializer-5.3.8.jar` и `kafka-schema-registry-client-5.3.8.jar` в `/opt/hbase-default-1.4.13/lib/`
-```bash
-# kafka-avro-serializer
-curl -fLO https://packages.confluent.io/maven/io/confluent/kafka-avro-serializer/5.3.8/kafka-avro-serializer-5.3.8.jar
-# schema-registry-client
-curl -fLO https://packages.confluent.io/maven/io/confluent/kafka-schema-registry-client/5.3.8/kafka-schema-registry-client-5.3.8.jar
-```
+   - На RegionServer достаточно разместить JAR `h2k-endpoint`: он уже содержит Avro/Jackson/Schema Registry-зависимости.
 
 1. **Архитектура**
    - Версия строго 5.3.8 (совместима с Kafka 2.3.1, Java 8).
@@ -110,24 +110,24 @@ cd /opt
 # confluent-community-5.3.8-2.12.tar.gz
 tar -xzf confluent-community-5.3.8-2.12.tar.gz -C /opt
 # Для чистоты держим отдельную директорию под SR:
-ln -sfn /opt/confluent-5.3.8 /opt/confluent-defualt-current
+ln -sfn /opt/confluent-5.3.8 /opt/confluent-default-current
 ```
    - Пользователь `schema-registry` без shell.
 ```bash
-sudo useradd -r -s /sbin/nologin -m -d /opt/confluent-defualt-current schema-registry || true
-sudo chown -R schema-registry:schema-registry /opt/confluent-5.3.8 /opt/confluent-defualt-current
+sudo useradd -r -s /sbin/nologin -m -d /opt/confluent-default-current schema-registry || true
+sudo chown -R schema-registry:schema-registry /opt/confluent-5.3.8 /opt/confluent-default-current
 ```
 
    **Итоговая структура:**
 ```
-/opt/confluent-defualt-current               -> symlink на /opt/confluent-5.3.8
+/opt/confluent-default-current               -> symlink на /opt/confluent-5.3.8
 bin/schema-registry-start
 bin/schema-registry-stop
 etc/schema-registry/schema-registry.properties
 share/java/schema-registry/*/*.jar
 ```
 
-3. **Конфигурация `/opt/confluent-defualt-current/etc/schema-registry/schema-registry.properties`:**
+3. **Конфигурация `/opt/confluent-default-current/etc/schema-registry/schema-registry.properties`:**
 ```properties
 listeners=http://0.0.0.0:8081
 host.name=${HOSTNAME} # или FQDN/короткое имя, но реальное, не ${HOSTNAME}
@@ -144,7 +144,7 @@ debug=false
 
    - Права:
 ```bash
-chown -R schema-registry:schema-registry /opt/confluent-defualt-current
+chown -R schema-registry:schema-registry /opt/confluent-default-current
 ```
 
 4. **Создание `_schemas` топика (один раз):**
@@ -171,14 +171,14 @@ Type=simple
 User=schema-registry
 Group=schema-registry
 # ВАЖНО: стартуем штатным скриптом, конфиг как аргумент
-ExecStart=/opt/confluent-defualt-current/bin/schema-registry-start /opt/confluent-defualt-current/etc/schema-registry/schema-registry.properties
-ExecStop=/opt/confluent-defualt-current/bin/schema-registry-stop
+ExecStart=/opt/confluent-default-current/bin/schema-registry-start /opt/confluent-default-current/etc/schema-registry/schema-registry.properties
+ExecStop=/opt/confluent-default-current/bin/schema-registry-stop
 Restart=always
 RestartSec=5
 # Задаём переменные окружения, которые понимают скрипты 5.3.x
-Environment="SCHEMA_REGISTRY_HOME=/opt/confluent-defualt-current"
+Environment="SCHEMA_REGISTRY_HOME=/opt/confluent-default-current"
 Environment="KAFKA_HEAP_OPTS=-Xms512m -Xmx512m" "JAVA_TOOL_OPTIONS=-Dfile.encoding=UTF-8"
-WorkingDirectory=/opt/confluent-defualt-current
+WorkingDirectory=/opt/confluent-default-current
 LimitNOFILE=65536
 # Журнал:
 StandardOutput=journal
@@ -202,7 +202,7 @@ curl -s http://10.254.3.111:8081/subjects
 7. **Работа со схемами**
    - Регистрация схемы в SR 5.3.8 (subject: TBL_JTI_TRACE_CIS_HISTORY-value)
 
-   На одной из нод (или с рабочего места) поместите файл схемы на диск, например: /opt/schema-registry/schemas/tbl_jti_trace_cis_history.avsc.
+   На одной из нод (или с рабочего места) поместите файл схемы на диск, например: /opt/hbase-default-current/conf/avro/tbl_jti_trace_cis_history.avsc.
 
    - Путь к схеме
 ```bash

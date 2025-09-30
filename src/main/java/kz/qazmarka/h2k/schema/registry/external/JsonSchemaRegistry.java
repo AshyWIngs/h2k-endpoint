@@ -1,4 +1,4 @@
-package kz.qazmarka.h2k.schema.registry;
+package kz.qazmarka.h2k.schema.registry.external;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -25,6 +25,8 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+
+import kz.qazmarka.h2k.schema.registry.SchemaRegistry;
 
 /**
  * JsonSchemaRegistry — реестр типов колонок, загружаемый из JSON-файла.
@@ -268,8 +270,7 @@ public final class JsonSchemaRegistry implements SchemaRegistry {
         String json = new String(bytes, StandardCharsets.UTF_8);
         json = stripUtf8Bom(json);
 
-        // Gson 2.2.4 API: only instance method parse(String)
-        final JsonElement el = new JsonParser().parse(json);
+        final JsonElement el = JsonParser.parseString(json);
         if (!el.isJsonObject()) {
             throw new IOException("Корень JSON схемы должен быть объектом, но получено: " + el.getClass().getSimpleName());
         }

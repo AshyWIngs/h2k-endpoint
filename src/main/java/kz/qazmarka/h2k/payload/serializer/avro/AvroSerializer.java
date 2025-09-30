@@ -9,6 +9,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.apache.avro.AvroRuntimeException;
 import org.apache.avro.Schema;
@@ -52,6 +53,7 @@ public final class AvroSerializer implements PayloadSerializer {
     // Небольшой внутренний кэш объектов на поток (Avro-энкодер не является потокобезопасным)
     private final ThreadLocal<ByteArrayOutputStream> localBaos = ThreadLocal.withInitial(() -> new ByteArrayOutputStream(512));
     private final ThreadLocal<BinaryEncoder> localEncoder = new ThreadLocal<>();
+    private static final ConcurrentHashMap<Schema, ThreadLocal<GenericDatumWriter<GenericRecord>>> WRITER_CACHE = new ConcurrentHashMap<>(16);
 
     /**
      * Фиксированная схема (подходит, если все сообщения одной таблицы/структуры).
@@ -118,7 +120,7 @@ public final class AvroSerializer implements PayloadSerializer {
         enc = EncoderFactory.get().directBinaryEncoder(baos, enc);
         localEncoder.set(enc);
 
-        final GenericDatumWriter<GenericRecord> writer = new GenericDatumWriter<>(schema);
+        final GenericDatumWriter<GenericRecord> writer = writerFor(schema);
         try {
             writer.write(avroRecord, enc);
             enc.flush();
@@ -127,6 +129,14 @@ public final class AvroSerializer implements PayloadSerializer {
             throw new IllegalStateException("Avro: ошибка сериализации: " + e.getMessage(), e);
         }
         return baos.toByteArray();
+    }
+
+    private static GenericDatumWriter<GenericRecord> writerFor(Schema schema) {
+        ThreadLocal<GenericDatumWriter<GenericRecord>> tl = WRITER_CACHE.computeIfAbsent(schema,
+                s -> ThreadLocal.withInitial(() -> new GenericDatumWriter<>(s)));
+        GenericDatumWriter<GenericRecord> writer = tl.get();
+        writer.setSchema(schema);
+        return writer;
     }
 
     // --- coercion strategies (reduce cognitive complexity of coerceValue) ---
@@ -295,7 +305,9 @@ public final class AvroSerializer implements PayloadSerializer {
     }
 
     private static List<Object> coerceArray(Schema fieldSchema, Object v, String path) {
-        if (v == null) return java.util.Collections.emptyList();
+        if (v == null) {
+            throw new IllegalStateException("Avro: поле '" + path + "' обязательно и не может быть null");
+        }
         if (!(v instanceof List)) throw typeError(path, "ARRAY", v);
         Schema elem = fieldSchema.getElementType();
         List<?> in = (List<?>) v;
@@ -307,7 +319,9 @@ public final class AvroSerializer implements PayloadSerializer {
     }
 
     private static Map<String, Object> coerceMap(Schema fieldSchema, Object v, String path) {
-        if (v == null) return java.util.Collections.emptyMap();
+        if (v == null) {
+            throw new IllegalStateException("Avro: поле '" + path + "' обязательно и не может быть null");
+        }
         Map<String, Object> in = toStringObjectMap(v, path);
         Schema vt = fieldSchema.getValueType();
         Map<String, Object> mapOut = new HashMap<>(in.size());
@@ -325,18 +339,37 @@ public final class AvroSerializer implements PayloadSerializer {
 
     private static Object coerceUnion(Schema fieldSchema, Object v, String path) {
         Schema nullable = null;
-        Schema nonNull = null;
-        for (Schema s : fieldSchema.getTypes()) {
-            if (s.getType() == Schema.Type.NULL) { nullable = s; } else { nonNull = s; }
+        for (Schema option : fieldSchema.getTypes()) {
+            if (option.getType() == Schema.Type.NULL) {
+                nullable = option;
+                break;
+            }
         }
         if (v == null) {
-            if (nullable != null) return null;
+            if (nullable != null) {
+                return null;
+            }
             throw new IllegalStateException("Avro: поле обязательно: " + path);
         }
-        if (nonNull == null) {
-            throw new IllegalStateException("Avro: сложный union не поддержан для поля: " + path);
+
+        IllegalStateException lastError = null;
+        for (Schema option : fieldSchema.getTypes()) {
+            if (option.getType() == Schema.Type.NULL) {
+                continue;
+            }
+            try {
+                return coerceValue(option, v, path);
+            } catch (IllegalStateException ex) {
+                if (lastError == null) {
+                    lastError = ex;
+                }
+            }
         }
-        return coerceValue(nonNull, v, path);
+
+        if (lastError != null) {
+            throw new IllegalStateException("Avro: значение поля '" + path + "' не подходит ни к одной ветке union", lastError);
+        }
+        throw new IllegalStateException("Avro: значение поля '" + path + "' не подходит ни к одной ветке union");
     }
 
     /**

@@ -1,8 +1,8 @@
 <!--
-  H2K Endpoint: Репликация HBase 1.4.13 → Kafka 2.3.1 (тонкий JAR для запуска внутри RegionServer)
+  H2K Endpoint: Репликация HBase 1.4.13 → Kafka 2.3.1 (толстый JAR для запуска внутри RegionServer)
 
   Назначение этого pom.xml:
-   • собирать ТОНКИЙ (thin) JAR (все тяжёлые библиотеки — provided);
+   • собирать ТОЛСТЫЙ (fat) JAR: критичные зависимости шейдятся внутрь артефакта;
    • жёстко фиксировать версии транзитивных зависимостей под стек HBase 1.4.13 / Hadoop 2.7.x;
    • обеспечить сборку строго на JDK 8 (без использования API 9+);
    • дать удобный dev‑профиль для локального запуска с простым логгером.
@@ -12,7 +12,7 @@
    • ClickHouse — на уровне формата сообщений (JSONEachRow/Avro) без прямых зависимостей.
 
   Важно:
-   • dependencyManagement служит «якорем» версий транзитивных зависимостей (JAR остаётся тонким);
+   • dependencyManagement служит «якорем» версий транзитивных зависимостей (IDE/анализаторы);
    • exclusions у phoenix‑core и hbase‑server предотвращают дубли и конфликтующие версии на runtime.
 -->
 <project xmlns="http://maven.apache.org/POM/4.0.0"
@@ -21,7 +21,7 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>kz.qazmarka</groupId>
   <artifactId>h2k-endpoint</artifactId>
-  <version>0.0.10</version>
+  <version>0.0.12</version>
   <name>HBase 1.4.13 -> Kafka 2.3.1 ReplicationEndpoint</name>
 
   <properties>
@@ -38,12 +38,12 @@
     <!-- Логирование через SLF4J API; бэкенд выбирается окружением (log4j2/logback/slf4j-simple в dev) -->
     <slf4j.version>1.7.25</slf4j.version>
     <!-- Версия Gson: фиксируем отдельно для IDE/compile; на рантайме библиотека берётся из окружения (scope=provided) -->
-    <gson.version>2.2.4</gson.version>
+    <gson.version>2.8.9</gson.version>
 
     <!-- lz4-java нужна только если на брокере включён compression.type=lz4; помечаем provided -->
     <lz4.version>1.6.0</lz4.version>
     <!-- Avro и Confluent Schema Registry (совместимо с Kafka 2.3.1 и Java 8) -->
-    <avro.version>1.7.7</avro.version>
+    <avro.version>1.9.2</avro.version>
     <confluent.sr.version>5.3.8</confluent.sr.version>
 
     <!-- Кодировка компиляции -->
@@ -52,8 +52,8 @@
 
   <!--
     dependencyManagement: фиксируем версии транзитивных библиотек под HBase/Hadoop/Phoenix,
-    чтобы IDE/сборка не предлагали конфликтующие обновления. Эти артефакты НЕ включаются в JAR,
-    т.к. либо подтягиваются только транзитивно, либо используются со scope=provided.
+    чтобы IDE/сборка не предлагали конфликтующие обновления. Толстый JAR шейдит только перечисленные
+    ниже зависимости; всё остальное остаётся provided и поднимается из окружения RegionServer.
   -->
   <dependencyManagement>
     <dependencies>
@@ -103,7 +103,7 @@
       <dependency>
         <groupId>org.apache.commons</groupId>
         <artifactId>commons-compress</artifactId>
-        <version>1.4.1</version>
+        <version>1.21</version>
       </dependency>
       <!-- Старый Jackson 1.x, который тянут HBase/Hadoop. Фиксируем последнюю 1.9.13 для единообразия. -->
       <dependency>
@@ -121,17 +121,17 @@
       <dependency>
         <groupId>com.fasterxml.jackson.core</groupId>
         <artifactId>jackson-databind</artifactId>
-        <version>2.9.10.1</version>
+        <version>2.10.2</version>
       </dependency>
       <dependency>
         <groupId>com.fasterxml.jackson.core</groupId>
         <artifactId>jackson-core</artifactId>
-        <version>2.9.10</version>
+        <version>2.10.2</version>
       </dependency>
       <dependency>
         <groupId>com.fasterxml.jackson.core</groupId>
         <artifactId>jackson-annotations</artifactId>
-        <version>2.9.10</version>
+        <version>2.10.2</version>
       </dependency>
       <dependency>
         <groupId>org.apache.kafka</groupId>
@@ -173,7 +173,7 @@
         <version>3.0.0</version>
       </dependency>
 
-      <!-- === Якоря версий Avro / Confluent SR (фиксация версий для компиляции; JAR остаётся тонким) === -->
+      <!-- === Якоря версий Avro / Confluent SR (фиксация версий для компиляции и шейдинга) === -->
       <dependency>
         <groupId>org.apache.avro</groupId>
         <artifactId>avro</artifactId>
@@ -240,18 +240,10 @@
         </property>
       </activation>
       <dependencies>
-        <!-- Avro runtime для сериализации GenericRecord (scope=provided: банка не попадает в JAR). -->
+        <!-- Avro runtime для сериализации GenericRecord (включаем в JAR через shading). -->
         <dependency>
           <groupId>org.apache.avro</groupId>
           <artifactId>avro</artifactId>
-          <scope>provided</scope>
-          <exclusions>
-            <!-- Исключаем commons‑compress 1.19 из Avro: оставляем 1.4.1 из Hadoop 2.7.x/HBase 1.4.x. -->
-            <exclusion>
-              <groupId>org.apache.commons</groupId>
-              <artifactId>commons-compress</artifactId>
-            </exclusion>
-          </exclusions>
         </dependency>
       </dependencies>
     </profile>
@@ -264,11 +256,10 @@
         </property>
       </activation>
       <dependencies>
-        <!-- Проводной формат Confluent (magic byte + schemaId + payload). scope=provided — JAR остаётся тонким. -->
+        <!-- Проводной формат Confluent (magic byte + schemaId + payload). -->
         <dependency>
           <groupId>io.confluent</groupId>
           <artifactId>kafka-avro-serializer</artifactId>
-          <scope>provided</scope>
           <exclusions>
             <exclusion>
               <groupId>org.apache.kafka</groupId>
@@ -280,11 +271,10 @@
             </exclusion>
           </exclusions>
         </dependency>
-        <!-- Опциональный клиент SR (если используем напрямую из кода); scope=provided для тонкого JAR. -->
+        <!-- Опциональный клиент SR (если используем напрямую из кода). -->
         <dependency>
           <groupId>io.confluent</groupId>
           <artifactId>kafka-schema-registry-client</artifactId>
-          <scope>provided</scope>
           <exclusions>
             <!-- Не тянем клиент Kafka «5.3.8-ccs» из Confluent: используем ровно ${kafka.version} из окружения -->
             <exclusion>
@@ -403,11 +393,10 @@
       <artifactId>lz4-java</artifactId>
       <scope>provided</scope>
     </dependency>
-    <!-- Gson для JSON‑пейлоада. scope=provided: доступен на compile/test, в JAR не включается. -->
+    <!-- Gson для JSON‑пейлоада. -->
     <dependency>
       <groupId>com.google.code.gson</groupId>
       <artifactId>gson</artifactId>
-      <scope>provided</scope>
     </dependency>
 
     <!-- SLF4J API: поставляется окружением (logback/log4j2). -->
@@ -446,69 +435,7 @@
   <!-- Конфигурация сборочных плагинов: контроль JDK/Maven, компиляция под 1.8, MANIFEST и запуск тестов JUnit 5. -->
   <build>
     <plugins>
-      <!-- Жёстко запрещаем сборку не на JDK 8; проверяем версию Maven. -->
-      <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-enforcer-plugin</artifactId>
-        <version>3.4.1</version>
-        <executions>
-          <execution>
-            <id>enforce-java-maven</id>
-            <goals><goal>enforce</goal></goals>
-            <configuration>
-      <!-- Жёсткие правила окружения сборки -->
-      <rules>
-        <!-- Жёсткая проверка JDK: запрещаем любую версию, кроме 1.8 (никаких API 9+) -->
-        <requireJavaVersion>
-          <version>[1.8,1.9)</version>
-          <message>Сборка должна выполняться на JDK 8 (HBase 1.4.x / Hadoop 2.x / Phoenix 4.14 этого требуют).</message>
-        </requireJavaVersion>
-        <!-- Требуем Maven >= 3.6 -->
-        <requireMavenVersion>
-          <version>[3.6.0,)</version>
-        </requireMavenVersion>
-                <!-- Запрещаем прямые зависимости, которые ломают совместимость стека (логгеры/версии/клиенты). -->
-        <bannedDependencies>
-          <!-- Блокируем ТОЛЬКО прямые зависимости (а не транзитивные из HBase/Hadoop/Phoenix с scope=provided) -->
-          <searchTransitive>false</searchTransitive>
-          <excludes>
-            <exclude>org.slf4j:slf4j-api:(1.7.25,)</exclude>
-            <exclude>com.fasterxml.jackson.core:jackson-databind:(2.9.10.1,)</exclude>
-            <exclude>com.fasterxml.jackson.core:jackson-core:(2.9.10,)</exclude>
-            <exclude>com.fasterxml.jackson.core:jackson-annotations:(2.9.10,)</exclude>
-            <exclude>org.xerial.snappy:snappy-java:(1.0.5,)</exclude>
-            <exclude>org.apache.avro:avro:(1.7.7,)</exclude>
-            <exclude>log4j:log4j</exclude>
-            <exclude>org.slf4j:slf4j-log4j12</exclude>
-            <!-- Запрещаем прямую зависимость на gson новее 2.2.4 -->
-            <exclude>com.google.code.gson:gson:[2.2.5,)</exclude>
-            <exclude>org.apache.zookeeper:zookeeper:[3.5,)</exclude>
-            <exclude>io.netty:netty-all:[4.1.9,)</exclude>
-            <exclude>com.google.guava:guava:(12.0.1,)</exclude>
-            <exclude>org.slf4j:slf4j-api:[1.8,)</exclude>
-            <exclude>org.apache.kafka:kafka-clients:(2.3.1,)</exclude>
-            <exclude>org.apache.phoenix:phoenix-core:[0,4.14.2-HBase-1.4)</exclude>
-            <exclude>org.apache.phoenix:phoenix-core:[4.16,)</exclude>
-            <exclude>org.apache.avro:avro:[1.9.3,)</exclude>
-            <exclude>io.confluent:kafka-avro-serializer:[5.4,)</exclude>
-            <exclude>io.confluent:kafka-schema-registry-client:[5.4,)</exclude>
-          </excludes>
-        </bannedDependencies>
-        <!-- Tiny‑guard: запрещаем commons‑compress новее 1.4.1 даже если прилетит транзитивно (например, из Avro). -->
-        <bannedDependencies>
-          <searchTransitive>true</searchTransitive>
-          <excludes>
-            <!-- Любая версия строго выше 1.4.1 недопустима: ломает бинарную совместимость со стеком Hadoop 2.7.x / HBase 1.4.x -->
-            <exclude>org.apache.commons:commons-compress:(1.4.1,)</exclude>
-          </excludes>
-        </bannedDependencies>
-        <!-- Не включаем dependencyConvergence сознательно: нам нужен тонкий JAR без жёсткой унификации всего дерева. -->
-      </rules>
-      <fail>true</fail>
-            </configuration>
-          </execution>
-        </executions>
-      </plugin>
+
 
       <!-- Компилятор Java: строго bytecode 1.8 + полезные предупреждения. -->
       <plugin>
@@ -524,6 +451,62 @@
             <arg>-Xlint:unchecked</arg>
           </compilerArgs>
         </configuration>
+      </plugin>
+
+      <!-- Enforcer: гарантируем сборку на JDK 8 и отслеживаем дубли классов в толстом JAR -->
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-enforcer-plugin</artifactId>
+        <version>3.4.1</version>
+        <dependencies>
+          <dependency>
+            <groupId>org.codehaus.mojo</groupId>
+            <artifactId>extra-enforcer-rules</artifactId>
+            <version>1.7.0</version>
+          </dependency>
+        </dependencies>
+        <executions>
+          <execution>
+            <id>enforce-java-and-duplicates</id>
+            <goals>
+              <goal>enforce</goal>
+            </goals>
+            <configuration>
+              <rules>
+                <requireJavaVersion>
+                  <message>Проект должен собираться на JDK 1.8 без поддержки API 9+.</message>
+                  <version>[1.8,1.9)</version>
+                </requireJavaVersion>
+                <requireMavenVersion>
+                  <version>[3.6.0,)</version>
+                  <message>Требуется Maven 3.6.0 или новее (устойчивость плагинов Shade/Enforcer).</message>
+                </requireMavenVersion>
+                <bannedDependencies>
+                  <searchTransitive>false</searchTransitive>
+                  <excludes>
+                    <exclude>org.slf4j:slf4j-api:(1.7.25,)</exclude>
+                    <exclude>com.fasterxml.jackson.core:jackson-databind:(2.10.2,)</exclude>
+                    <exclude>com.fasterxml.jackson.core:jackson-core:(2.10.2,)</exclude>
+                    <exclude>com.fasterxml.jackson.core:jackson-annotations:(2.10.2,)</exclude>
+                    <exclude>org.xerial.snappy:snappy-java:(1.0.5,)</exclude>
+                    <exclude>org.apache.avro:avro:(1.9.2,)</exclude>
+                    <exclude>log4j:log4j</exclude>
+                    <exclude>org.slf4j:slf4j-log4j12</exclude>
+                    <exclude>com.google.code.gson:gson:(2.8.9,)</exclude>
+                    <exclude>org.apache.zookeeper:zookeeper:[3.5,)</exclude>
+                    <exclude>io.netty:netty-all:[4.1.9,)</exclude>
+                    <exclude>com.google.guava:guava:(12.0.1,)</exclude>
+                    <exclude>org.slf4j:slf4j-api:[1.8,)</exclude>
+                    <exclude>org.apache.kafka:kafka-clients:(2.3.1,)</exclude>
+                    <exclude>org.apache.phoenix:phoenix-core:[0,4.14.2-HBase-1.4)</exclude>
+                    <exclude>org.apache.phoenix:phoenix-core:[4.16,)</exclude>
+                  </excludes>
+                </bannedDependencies>
+              </rules>
+              <fail>true</fail>
+            </configuration>
+          </execution>
+        </executions>
       </plugin>
 
       <!-- JAR‑плагин: добавляем записи в MANIFEST для отладки версий. -->
@@ -549,6 +532,93 @@
           <!-- Для Java 8 отключаем module path: старые библиотеки не должны становиться «модулями». -->
           <useModulePath>false</useModulePath>
         </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>3.5.1</version>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals>
+              <goal>shade</goal>
+            </goals>
+            <configuration>
+              <createDependencyReducedPom>false</createDependencyReducedPom>
+              <!-- Минимизацию отключаем: Avro/Jackson/Confluent активно используют рефлексию. -->
+              <minimizeJar>false</minimizeJar>
+              <filters>
+                <filter>
+                  <artifact>*:*</artifact>
+                  <excludes>
+                    <exclude>META-INF/*.SF</exclude>
+                    <exclude>META-INF/*.DSA</exclude>
+                    <exclude>META-INF/*.RSA</exclude>
+                    <exclude>module-info.class</exclude>
+                    <exclude>META-INF/LICENSE</exclude>
+                    <exclude>META-INF/LICENSE.txt</exclude>
+                    <exclude>META-INF/NOTICE</exclude>
+                    <exclude>META-INF/NOTICE.txt</exclude>
+                    <exclude>META-INF/ASL2.0</exclude>
+                    <exclude>META-INF/MANIFEST.MF</exclude>
+                  </excludes>
+                </filter>
+              </filters>
+              <transformers>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer"/>
+              </transformers>
+              <artifactSet>
+                <includes>
+                  <include>org.apache.avro:*</include>
+                  <include>com.fasterxml.jackson.core:*</include>
+                  <include>com.fasterxml.jackson.databind:*</include>
+                  <include>com.fasterxml.jackson.annotation:*</include>
+                  <include>org.codehaus.jackson:*</include>
+                  <include>com.google.code.gson:gson</include>
+                  <include>org.apache.commons:commons-compress</include>
+                  <include>io.confluent:*</include>
+                  <include>com.squareup.okhttp3:*</include>
+                  <include>com.squareup.okio:*</include>
+                </includes>
+              </artifactSet>
+              <relocations>
+                <relocation>
+                  <pattern>org.apache.avro</pattern>
+                  <shadedPattern>kz.qazmarka.shaded.avro</shadedPattern>
+                </relocation>
+                <relocation>
+                  <pattern>com.fasterxml.jackson</pattern>
+                  <shadedPattern>kz.qazmarka.shaded.jackson</shadedPattern>
+                </relocation>
+                <relocation>
+                  <pattern>org.codehaus.jackson</pattern>
+                  <shadedPattern>kz.qazmarka.shaded.codehaus.jackson</shadedPattern>
+                </relocation>
+                <relocation>
+                  <pattern>com.google.gson</pattern>
+                  <shadedPattern>kz.qazmarka.shaded.gson</shadedPattern>
+                </relocation>
+                <relocation>
+                  <pattern>org.apache.commons.compress</pattern>
+                  <shadedPattern>kz.qazmarka.shaded.commons.compress</shadedPattern>
+                </relocation>
+                <relocation>
+                  <pattern>io.confluent</pattern>
+                  <shadedPattern>kz.qazmarka.shaded.confluent</shadedPattern>
+                </relocation>
+                <relocation>
+                  <pattern>okhttp3</pattern>
+                  <shadedPattern>kz.qazmarka.shaded.okhttp3</shadedPattern>
+                </relocation>
+                <relocation>
+                  <pattern>okio</pattern>
+                  <shadedPattern>kz.qazmarka.shaded.okio</shadedPattern>
+                </relocation>
+              </relocations>
+            </configuration>
+          </execution>
+        </executions>
       </plugin>
     </plugins>
   </build>

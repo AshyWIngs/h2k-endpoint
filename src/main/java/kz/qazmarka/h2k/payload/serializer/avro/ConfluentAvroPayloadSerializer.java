@@ -1,22 +1,16 @@
 package kz.qazmarka.h2k.payload.serializer.avro;
 
-import java.io.ByteArrayOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
-import java.net.HttpURLConnection;
-import java.net.URL;
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.LongAdder;
 
 import org.apache.avro.Schema;
 import org.apache.hadoop.hbase.TableName;
@@ -25,7 +19,11 @@ import org.slf4j.LoggerFactory;
 
 import kz.qazmarka.h2k.config.H2kConfig;
 import kz.qazmarka.h2k.payload.serializer.TableAwarePayloadSerializer;
-import kz.qazmarka.h2k.schema.registry.AvroSchemaRegistry;
+import kz.qazmarka.h2k.schema.registry.local.AvroSchemaRegistry;
+
+import io.confluent.kafka.schemaregistry.client.SchemaRegistryClient;
+import io.confluent.kafka.schemaregistry.client.rest.exceptions.RestClientException;
+import io.confluent.kafka.serializers.AbstractKafkaAvroSerDeConfig;
 
 /**
  * Сериализация Avro через Confluent Schema Registry 5.3.x.
@@ -37,12 +35,13 @@ public final class ConfluentAvroPayloadSerializer implements TableAwarePayloadSe
     private static final Logger LOG = LoggerFactory.getLogger(ConfluentAvroPayloadSerializer.class);
     private static final byte MAGIC_BYTE = 0x0;
     private static final int MAGIC_HEADER_LENGTH = 5;
-    private static final int HTTP_TIMEOUT_MS = 10_000;
-    private static final char[] HEX = "0123456789ABCDEF".toCharArray();
-
+    private static final String STRATEGY_TABLE = "table";
+    private static final String SCHEMA_REGISTRY_BASIC_AUTH_USER_INFO = "schema.registry.basic.auth.user.info";
     private final AvroSchemaRegistry localRegistry;
     private final List<String> registryUrls;
-    private final String basicAuthHeader;
+    private final SchemaRegistryClient schemaRegistryClient;
+    private final LongAdder schemaRegisterSuccess = new LongAdder();
+    private final LongAdder schemaRegisterFailure = new LongAdder();
     private final String subjectStrategy;
     private final String subjectPrefix;
     private final String subjectSuffix;
@@ -51,7 +50,22 @@ public final class ConfluentAvroPayloadSerializer implements TableAwarePayloadSe
     private final ConcurrentHashMap<String, SchemaInfo> cache = new ConcurrentHashMap<>();
 
     public ConfluentAvroPayloadSerializer(H2kConfig cfg) {
+        this(cfg, SchemaRegistryClientFactory.cached(), null);
+    }
+
+    ConfluentAvroPayloadSerializer(H2kConfig cfg, SchemaRegistryClient externalClient) {
+        this(cfg, SchemaRegistryClientFactory.cached(), externalClient);
+    }
+
+    public ConfluentAvroPayloadSerializer(H2kConfig cfg, SchemaRegistryClientFactory factory) {
+        this(cfg, factory, null);
+    }
+
+    ConfluentAvroPayloadSerializer(H2kConfig cfg,
+                                   SchemaRegistryClientFactory factory,
+                                   SchemaRegistryClient externalClient) {
         Objects.requireNonNull(cfg, "cfg");
+        Objects.requireNonNull(factory, "schemaRegistryClientFactory");
         if (cfg.getAvroMode() != H2kConfig.AvroMode.CONFLUENT) {
             throw new IllegalStateException("Avro: режим '" + cfg.getAvroMode() + "' не является Confluent");
         }
@@ -84,12 +98,14 @@ public final class ConfluentAvroPayloadSerializer implements TableAwarePayloadSe
         this.registryUrls = Collections.unmodifiableList(normalized);
 
         Map<String, String> auth = cfg.getAvroSrAuth();
-        this.basicAuthHeader = buildBasicAuth(auth);
 
         Map<String, String> avroProps = cfg.getAvroProps();
-        this.subjectStrategy = prop(avroProps, "subject.strategy", "qualifier");
+        this.subjectStrategy = prop(avroProps, "subject.strategy", STRATEGY_TABLE);
         this.subjectPrefix = prop(avroProps, "subject.prefix", "");
         this.subjectSuffix = prop(avroProps, "subject.suffix", "");
+        this.schemaRegistryClient = externalClient != null
+                ? externalClient
+                : createClient(factory, auth, avroProps);
     }
 
     @Override
@@ -97,13 +113,14 @@ public final class ConfluentAvroPayloadSerializer implements TableAwarePayloadSe
      * Сериализует payload в формат Confluent (magic byte + schema id + бинарный Avro).
      */
     public byte[] serialize(TableName table, Map<String, ?> obj) {
-        Objects.requireNonNull(table, "table");
+        Objects.requireNonNull(table, "table name is null");
         Objects.requireNonNull(obj, "payload");
 
-        SchemaInfo info = cache.get(table.getNameAsString());
+        final String subject = buildSubject(table);
+        SchemaInfo info = cache.get(subject);
         if (info == null) {
-            info = register(table);
-            SchemaInfo existing = cache.putIfAbsent(table.getNameAsString(), info);
+            info = register(table, subject);
+            SchemaInfo existing = cache.putIfAbsent(subject, info);
             if (existing != null) {
                 info = existing;
             }
@@ -132,11 +149,10 @@ public final class ConfluentAvroPayloadSerializer implements TableAwarePayloadSe
     }
 
     /** Регистрирует схему в Confluent SR и возвращает информацию (schemaId + сериализатор). */
-    private SchemaInfo register(TableName table) {
+    private SchemaInfo register(TableName table, String subject) {
         String tableKey = table.getNameAsString();
         Schema schema = loadSchema(tableKey);
-        String subject = buildSubject(table);
-        int schemaId = registerSchema(subject, schema.toString());
+        int schemaId = registerSchema(subject, schema);
         LOG.debug("Avro Confluent: схема зарегистрирована: subject={}, id={}.", subject, schemaId);
         return new SchemaInfo(schemaId, new AvroSerializer(schema));
     }
@@ -154,7 +170,7 @@ public final class ConfluentAvroPayloadSerializer implements TableAwarePayloadSe
         String base;
         String strategy = subjectStrategy.toLowerCase(Locale.ROOT);
         switch (strategy) {
-            case "table":
+            case STRATEGY_TABLE:
                 base = tableNameForSubject(table, CaseMode.ORIGINAL);
                 break;
             case "table-upper":
@@ -210,164 +226,24 @@ public final class ConfluentAvroPayloadSerializer implements TableAwarePayloadSe
         return sb.toString();
     }
 
-    private int registerSchema(String subject, String schemaJson) {
-        String payload = buildRegisterPayload(schemaJson);
-        IOException last = null;
-        for (String baseUrl : registryUrls) {
-            try {
-                return doRegister(baseUrl, subject, payload);
-            } catch (IOException ex) {
-                last = ex;
-                LOG.warn("Avro Confluent: не удалось зарегистрировать схему в {}: {}", baseUrl, ex.getMessage());
-            }
+    private SchemaRegistryClient createClient(SchemaRegistryClientFactory factory,
+                                              Map<String, String> auth,
+                                              Map<String, String> avroProps) {
+        Map<String, Object> clientConfig = new HashMap<>();
+        String user = prop(auth, "basic.username", null);
+        String pass = prop(auth, "basic.password", null);
+        if (user != null && pass != null) {
+            String credentials = user + ':' + pass;
+            clientConfig.put(AbstractKafkaAvroSerDeConfig.BASIC_AUTH_CREDENTIALS_SOURCE, "USER_INFO");
+            clientConfig.put(AbstractKafkaAvroSerDeConfig.USER_INFO_CONFIG, credentials);
+            clientConfig.put(SCHEMA_REGISTRY_BASIC_AUTH_USER_INFO, credentials);
         }
-        throw new IllegalStateException("Avro: регистрация схемы в Schema Registry не удалась: " +
-                (last == null ? "нет доступных адресов" : last.getMessage()), last);
-    }
 
-    private int doRegister(String baseUrl, String subject, String payload) throws IOException {
-        String path = baseUrl + "/subjects/" + urlEncode(subject) + "/versions";
-        HttpURLConnection conn = openConnection(path);
-        try {
-            conn.setRequestMethod("POST");
-            conn.setDoOutput(true);
-            conn.setRequestProperty("Content-Type", "application/vnd.schemaregistry.v1+json");
-            if (basicAuthHeader != null) {
-                conn.setRequestProperty("Authorization", basicAuthHeader);
-            }
-            byte[] bytes = payload.getBytes(StandardCharsets.UTF_8);
-            conn.setFixedLengthStreamingMode(bytes.length);
-            try (OutputStream os = conn.getOutputStream()) {
-                os.write(bytes);
-            }
-            int code = conn.getResponseCode();
-            String body = readBody(code >= 200 && code < 300 ? conn.getInputStream() : conn.getErrorStream());
-            if (code == HttpURLConnection.HTTP_OK || code == HttpURLConnection.HTTP_CREATED) {
-                return parseId(body, subject);
-            }
-            throw new IOException("Ответ " + code + " от Schema Registry: " + body);
-        } finally {
-            conn.disconnect();
-        }
-    }
+        int identityMapCapacity = parsePositiveInt(
+                prop(avroProps, "client.cache.capacity", null),
+                AbstractKafkaAvroSerDeConfig.MAX_SCHEMAS_PER_SUBJECT_DEFAULT);
 
-    private static String buildRegisterPayload(String schemaJson) {
-        String escaped = escapeForJson(schemaJson);
-        StringBuilder sb = new StringBuilder(escaped.length() + 64);
-        sb.append('{')
-          .append("\"schema\":\"")
-          .append(escaped)
-          .append("\"}");
-        return sb.toString();
-    }
-
-    private static String escapeForJson(String s) {
-        StringBuilder sb = new StringBuilder(s.length() + 32);
-        for (int i = 0; i < s.length(); i++) {
-            char c = s.charAt(i);
-            switch (c) {
-                case '"':
-                case '\\':
-                    sb.append('\\').append(c);
-                    break;
-                case '\b':
-                    sb.append("\\b");
-                    break;
-                case '\f':
-                    sb.append("\\f");
-                    break;
-                case '\n':
-                    sb.append("\\n");
-                    break;
-                case '\r':
-                    sb.append("\\r");
-                    break;
-                case '\t':
-                    sb.append("\\t");
-                    break;
-                default:
-                    if (c < 0x20 || c == 0x2028 || c == 0x2029) {
-                        sb.append('\\').append('u');
-                        appendHex(sb, c);
-                    } else {
-                        sb.append(c);
-                    }
-            }
-        }
-        return sb.toString();
-    }
-
-    private static void appendHex(StringBuilder sb, int ch) {
-        sb.append(HEX[(ch >>> 12) & 0x0F])
-          .append(HEX[(ch >>> 8) & 0x0F])
-          .append(HEX[(ch >>> 4) & 0x0F])
-          .append(HEX[ch & 0x0F]);
-    }
-
-    private static int parseId(String body, String subject) {
-        if (body == null) {
-            throw new IllegalStateException("Avro: пустой ответ Schema Registry при регистрации subject=" + subject);
-        }
-        int idx = body.indexOf("\"id\"");
-        if (idx < 0) {
-            throw new IllegalStateException("Avro: ответ Schema Registry не содержит поля id: " + body);
-        }
-        int colon = body.indexOf(':', idx);
-        if (colon < 0) {
-            throw new IllegalStateException("Avro: ответ Schema Registry некорректен: " + body);
-        }
-        int start = colon + 1;
-        while (start < body.length() && Character.isWhitespace(body.charAt(start))) start++;
-        int end = start;
-        while (end < body.length() && Character.isDigit(body.charAt(end))) end++;
-        if (start == end) {
-            throw new IllegalStateException("Avro: идентификатор схемы не распознан: " + body);
-        }
-        return Integer.parseInt(body.substring(start, end));
-    }
-
-    private static HttpURLConnection openConnection(String url) throws IOException {
-        HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
-        conn.setConnectTimeout(HTTP_TIMEOUT_MS);
-        conn.setReadTimeout(HTTP_TIMEOUT_MS);
-        return conn;
-    }
-
-    private static String readBody(InputStream is) throws IOException {
-        if (is == null) {
-            return "";
-        }
-        try (InputStream in = is;
-             ByteArrayOutputStream baos = new ByteArrayOutputStream(256)) {
-            byte[] buf = new byte[256];
-            int r;
-            while ((r = in.read(buf)) != -1) {
-                baos.write(buf, 0, r);
-            }
-            return new String(baos.toByteArray(), StandardCharsets.UTF_8);
-        }
-    }
-
-    private static String urlEncode(String s) {
-        try {
-            return URLEncoder.encode(s, "UTF-8");
-        } catch (java.io.UnsupportedEncodingException ex) {
-            throw new IllegalStateException("Avro: не удалось закодировать subject: " + s, ex);
-        }
-    }
-
-    private static String buildBasicAuth(Map<String, String> props) {
-        if (props == null || props.isEmpty()) {
-            return null;
-        }
-        String user = prop(props, "basic.username", null);
-        String pass = prop(props, "basic.password", null);
-        if (user == null || pass == null) {
-            return null;
-        }
-        String token = user + ":" + pass;
-        byte[] encoded = java.util.Base64.getEncoder().encode(token.getBytes(StandardCharsets.UTF_8));
-        return "Basic " + new String(encoded, StandardCharsets.US_ASCII);
+        return factory.create(registryUrls, clientConfig, identityMapCapacity);
     }
 
     private static String prop(Map<String, String> props, String key, String def) {
@@ -392,5 +268,55 @@ public final class ConfluentAvroPayloadSerializer implements TableAwarePayloadSe
             this.schemaId = schemaId;
             this.serializer = serializer;
         }
+    }
+
+    private static int parsePositiveInt(String value, int def) {
+        if (value == null) {
+            return def;
+        }
+        try {
+            int parsed = Integer.parseInt(value.trim());
+            return parsed > 0 ? parsed : def;
+        } catch (NumberFormatException ex) {
+            return def;
+        }
+    }
+
+    private int registerSchema(String subject, Schema schema) {
+        try {
+            int id = schemaRegistryClient.register(subject, schema);
+            schemaRegisterSuccess.increment();
+            return id;
+        } catch (RestClientException ex) {
+            schemaRegisterFailure.increment();
+            throw new IllegalStateException("Avro: регистрация схемы в Schema Registry не удалась: "
+                    + restError(ex) + ", subject=" + subject, ex);
+        } catch (java.io.IOException ex) {
+            schemaRegisterFailure.increment();
+            throw new IllegalStateException("Avro: ошибка сетевого взаимодействия с Schema Registry: " + ex.getMessage(), ex);
+        }
+    }
+
+    private static String restError(RestClientException ex) {
+        return ex.getStatus() + " " + ex.getMessage();
+    }
+
+    /** Возвращает неизменяемый снимок счётчиков взаимодействия со Schema Registry. */
+    public SchemaRegistryMetrics metrics() {
+        return new SchemaRegistryMetrics(schemaRegisterSuccess.sum(), schemaRegisterFailure.sum());
+    }
+
+    public static final class SchemaRegistryMetrics {
+        private final long registered;
+        private final long failures;
+
+        SchemaRegistryMetrics(long registered, long failures) {
+            this.registered = registered;
+            this.failures = failures;
+        }
+
+        public long registeredSchemas() { return registered; }
+
+        public long registrationFailures() { return failures; }
     }
 }

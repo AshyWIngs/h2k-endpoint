@@ -1,5 +1,9 @@
 package kz.qazmarka.h2k.util;
 
+/**
+ * Служебные парсеры и нормализация значений конфигурации {@code h2k.*}.
+ */
+
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;

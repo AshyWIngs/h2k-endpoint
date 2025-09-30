@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.UUID;
+import java.nio.file.Paths;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.replication.BaseReplicationEndpoint;
@@ -26,8 +27,11 @@ import kz.qazmarka.h2k.payload.builder.PayloadBuilder;
 import kz.qazmarka.h2k.schema.decoder.Decoder;
 import kz.qazmarka.h2k.schema.decoder.SimpleDecoder;
 import kz.qazmarka.h2k.schema.decoder.ValueCodecPhoenix;
-import kz.qazmarka.h2k.schema.registry.JsonSchemaRegistry;
+import kz.qazmarka.h2k.schema.registry.PhoenixTableMetadataProvider;
 import kz.qazmarka.h2k.schema.registry.SchemaRegistry;
+import kz.qazmarka.h2k.schema.registry.avro.AvroPhoenixSchemaRegistry;
+import kz.qazmarka.h2k.schema.registry.external.JsonSchemaRegistry;
+import kz.qazmarka.h2k.schema.registry.local.AvroSchemaRegistry;
 
 /**
  * Репликация изменений из HBase 1.4.13 в Kafka (производитель 2.x).
@@ -72,6 +76,7 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
     // CF-фильтр
     private boolean doFilter;
     private byte[][] cfFamilies;
+    private PhoenixTableMetadataProvider tableMetadataProvider = PhoenixTableMetadataProvider.NOOP;
 
     /**
      * Инициализация эндпоинта: чтение конфигурации, подготовка продьюсера, декодера и сборщика payload.
@@ -94,12 +99,13 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
         Decoder decoder = chooseDecoder(cfg);
 
         // immut-конфиг, билдер и энсюрер
-        this.h2k = H2kConfig.from(cfg, bootstrap);
+        this.h2k = H2kConfig.from(cfg, bootstrap, tableMetadataProvider);
         logSaltSummary();
         final PayloadBuilder payload = new PayloadBuilder(decoder, h2k);
         final TopicEnsurer topicEnsurer = TopicEnsurer.createIfEnabled(h2k);
         this.topicManager = new TopicManager(h2k, topicEnsurer);
         this.walEntryProcessor = new WalEntryProcessor(payload, topicManager, producer);
+        registerMetrics(payload, walEntryProcessor);
         initCfFilter();
         logPayloadSerializer(payload);
         logInitSummary();
@@ -185,6 +191,22 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
             }
         }
     }
+
+    private void registerMetrics(PayloadBuilder payload, WalEntryProcessor walProcessor) {
+        try {
+            topicManager.registerMetric("wal.entries.total", walProcessor::entriesTotal);
+            topicManager.registerMetric("wal.rows.total", walProcessor::rowsTotal);
+            topicManager.registerMetric("wal.cells.total", walProcessor::cellsTotal);
+            topicManager.registerMetric("wal.rows.filtered", walProcessor::rowsFilteredTotal);
+            topicManager.registerMetric("schema.registry.register.success", payload::schemaRegistryRegisteredCount);
+            topicManager.registerMetric("schema.registry.register.failures", payload::schemaRegistryFailedCount);
+        } catch (RuntimeException ex) {
+            LOG.warn("Не удалось зарегистрировать метрики TopicManager: {}", ex.toString());
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("Трассировка ошибки при регистрации метрик", ex);
+            }
+        }
+    }
     /**
      * Возвращает строку bootstrap‑серверов Kafka из конфигурации или бросает {@link IOException}, если параметр отсутствует.
      * Пустая строка после {@code trim()} считается отсутствующим параметром.
@@ -201,6 +223,8 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
      * Выбирает и настраивает декодер значений по конфигурации.
      * Режимы:
      *  - {@code simple} — простой декодер без схемы (по умолчанию);
+     *  - {@code phoenix-avro} — считывает типы и PK из локальных `.avsc` (атрибуты {@code h2k.phoenixType}, {@code h2k.pk})
+     *    с необязательным фолбэком на {@code schema.json};
      *  - {@code json-phoenix} — декодер на основе Phoenix-схемы из {@code h2k.schema.path}.
      * При ошибке инициализации схемы выполняется безопасный фолбэк на {@link SimpleDecoder#INSTANCE}.
      *
@@ -209,29 +233,33 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
      */
     private Decoder chooseDecoder(Configuration cfg) {
         String mode = cfg.get(Keys.DECODE_MODE, DEFAULT_DECODE_MODE);
+        if (mode != null) {
+            mode = mode.trim();
+        }
+        tableMetadataProvider = PhoenixTableMetadataProvider.NOOP;
         if ("json-phoenix".equalsIgnoreCase(mode)) {
-            return initPhoenixDecoder(cfg.get(Keys.SCHEMA_PATH));
+            return initJsonPhoenixDecoder(cfg);
+        }
+        if ("phoenix-avro".equalsIgnoreCase(mode) || "phoenix".equalsIgnoreCase(mode)) {
+            return initAvroPhoenixDecoder(cfg);
         }
         LOG.debug("Режим декодирования: simple");
         return SimpleDecoder.INSTANCE;
     }
 
-    /**
-     * Инициализирует декодер json-phoenix по пути к схеме.
-     * Выполняет валидацию обязательного параметра и безопасный фолбэк на {@link SimpleDecoder#INSTANCE}.
-     *
-     * @param schemaPath путь к файлу схемы (может быть null)
-     * @return декодер Phoenix или простой декодер при ошибке инициализации
-     */
-    private Decoder initPhoenixDecoder(String schemaPath) {
-        if (schemaPath == null || schemaPath.trim().isEmpty()) {
+    private Decoder initJsonPhoenixDecoder(Configuration cfg) {
+        final String rawPath = cfg.get(Keys.SCHEMA_PATH);
+        if (rawPath == null || rawPath.trim().isEmpty()) {
             throw new IllegalStateException(
                 "Включён режим json-phoenix, но не задан обязательный параметр h2k.schema.path");
         }
-        final String path = schemaPath.trim();
+        final String path = rawPath.trim();
         try {
             SchemaRegistry schema = new JsonSchemaRegistry(path);
             LOG.debug("Режим декодирования: json-phoenix, схема={}", path);
+            if (schema instanceof PhoenixTableMetadataProvider) {
+                tableMetadataProvider = (PhoenixTableMetadataProvider) schema;
+            }
             return new ValueCodecPhoenix(schema);
         } catch (Exception e) {
             LOG.warn("Не удалось инициализировать JsonSchemaRegistry ({}): {} — переключаюсь на простой декодер",
@@ -239,7 +267,58 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
             if (LOG.isDebugEnabled()) {
                 LOG.debug("Трассировка ошибки JsonSchemaRegistry", e);
             }
+            tableMetadataProvider = PhoenixTableMetadataProvider.NOOP;
             return SimpleDecoder.INSTANCE;
+        }
+    }
+
+    private Decoder initAvroPhoenixDecoder(Configuration cfg) {
+        final String configuredDir = cfg.getTrimmed(H2kConfig.Keys.AVRO_SCHEMA_DIR);
+        final String schemaDir = (configuredDir == null || configuredDir.isEmpty())
+                ? H2kConfig.DEFAULT_AVRO_SCHEMA_DIR
+                : configuredDir;
+        final SchemaRegistry legacy = tryInitLegacyJsonRegistry(cfg.get(Keys.SCHEMA_PATH));
+        try {
+            AvroSchemaRegistry avro = new AvroSchemaRegistry(Paths.get(schemaDir));
+            SchemaRegistry registry = new AvroPhoenixSchemaRegistry(avro, legacy);
+            if (legacy == SchemaRegistry.NOOP) {
+                LOG.debug("Режим декодирования: phoenix-avro, каталог={}", schemaDir);
+            } else {
+                LOG.debug("Режим декодирования: phoenix-avro, каталог={}, legacy schema.json=включён", schemaDir);
+            }
+            if (registry instanceof PhoenixTableMetadataProvider) {
+                tableMetadataProvider = (PhoenixTableMetadataProvider) registry;
+            } else {
+                tableMetadataProvider = PhoenixTableMetadataProvider.NOOP;
+            }
+            return new ValueCodecPhoenix(registry);
+        } catch (Exception e) {
+            LOG.warn("Не удалось инициализировать AvroPhoenixSchemaRegistry ({}): {} — переключаюсь на простой декодер",
+                    schemaDir, e.toString());
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("Трассировка ошибки AvroPhoenixSchemaRegistry", e);
+            }
+            tableMetadataProvider = PhoenixTableMetadataProvider.NOOP;
+            return SimpleDecoder.INSTANCE;
+        }
+    }
+
+    private SchemaRegistry tryInitLegacyJsonRegistry(String rawPath) {
+        if (rawPath == null) {
+            return SchemaRegistry.NOOP;
+        }
+        final String path = rawPath.trim();
+        if (path.isEmpty()) {
+            return SchemaRegistry.NOOP;
+        }
+        try {
+            return new JsonSchemaRegistry(path);
+        } catch (Exception e) {
+            LOG.warn("Фолбэк schema.json не инициализирован ({}): {} — будет проигнорирован", path, e.toString());
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("Трассировка ошибки schema.json", e);
+            }
+            return SchemaRegistry.NOOP;
         }
     }
 

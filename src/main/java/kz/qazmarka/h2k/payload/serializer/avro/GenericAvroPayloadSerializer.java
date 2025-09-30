@@ -19,7 +19,7 @@ import org.slf4j.LoggerFactory;
 
 import kz.qazmarka.h2k.config.H2kConfig;
 import kz.qazmarka.h2k.payload.serializer.TableAwarePayloadSerializer;
-import kz.qazmarka.h2k.schema.registry.AvroSchemaRegistry;
+import kz.qazmarka.h2k.schema.registry.local.AvroSchemaRegistry;
 
 /**
  * Сериализатор Avro для режима {@code generic}: читает локальные {@code *.avsc}

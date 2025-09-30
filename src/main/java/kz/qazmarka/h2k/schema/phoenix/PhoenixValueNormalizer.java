@@ -1,5 +1,9 @@
 package kz.qazmarka.h2k.schema.phoenix;
 
+/**
+ * Нормализует значения колонок Phoenix (время, массивы) в привычные типы Java.
+ */
+
 import java.lang.reflect.Array;
 import java.sql.Date;
 import java.sql.SQLException;

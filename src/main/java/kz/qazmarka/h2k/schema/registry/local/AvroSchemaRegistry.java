@@ -1,4 +1,4 @@
-package kz.qazmarka.h2k.schema.registry;
+package kz.qazmarka.h2k.schema.registry.local;
 
 import java.io.BufferedReader;
 import java.io.IOException;

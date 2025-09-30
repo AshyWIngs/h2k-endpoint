@@ -1,5 +1,9 @@
 package kz.qazmarka.h2k.schema.decoder;
 
+/**
+ * Контракт декодеров значений/rowkey из HBase.
+ */
+
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Map;
