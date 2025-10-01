@@ -26,11 +26,25 @@ final class RowPayloadAssembler {
     private final H2kConfig cfg;
     private final QualifierCache qualifierCache = new QualifierCache();
 
+    /**
+     * @param decoder декодер Phoenix-значений, используемый для преобразования ячеек в Java-тип
+     * @param cfg     неизменяемая конфигурация h2k с подсказками по соли, capacity и метаданным
+     */
     RowPayloadAssembler(Decoder decoder, H2kConfig cfg) {
         this.decoder = decoder;
         this.cfg = cfg;
     }
 
+    /**
+     * Собирает основную карту payload для отдельной строки WAL с учётом всех включённых опций.
+     *
+     * @param table        таблица Phoenix (включая namespace)
+     * @param cells        список ячеек строкового ключа (может быть пустым)
+     * @param rowKey       срез байтов rowkey (может быть {@code null})
+     * @param walSeq       номер записи WAL
+     * @param walWriteTime «настенные» часы записи WAL (мс), либо отрицательное значение, если нет данных
+     * @return карта payload, готовая к сериализации
+     */
     Map<String, Object> assemble(TableName table,
                                  List<Cell> cells,
                                  RowKeySlice rowKey,
@@ -66,6 +80,13 @@ final class RowPayloadAssembler {
         return obj;
     }
 
+    /**
+     * Создаёт корневую {@link java.util.LinkedHashMap} с учётом конфигурационной подсказки ёмкости.
+     *
+     * @param table               таблица Phoenix (используется для подсказки ёмкости)
+     * @param estimatedKeysCount  оценка числа ключей в payload до добавления метаданных
+     * @return готовая LinkedHashMap требуемой начальной ёмкости
+     */
     private Map<String, Object> newRootMap(TableName table, int estimatedKeysCount) {
         final int hint = cfg.getCapacityHintFor(table);
         final int target = Math.max(estimatedKeysCount, hint > 0 ? hint : 0);
@@ -73,6 +94,13 @@ final class RowPayloadAssembler {
         return new LinkedHashMap<>(initialCapacity, 0.75f);
     }
 
+    /**
+     * Распаковывает PK из rowkey и добавляет их в выходной payload.
+     *
+     * @param table таблица Phoenix
+     * @param rk    срез rowkey; может быть {@code null}
+     * @param out   карта payload, куда добавляются значения PK
+     */
     private void decodePkFromRowKey(TableName table, RowKeySlice rk, Map<String, Object> out) {
         if (rk == null) {
             return;
@@ -81,6 +109,14 @@ final class RowPayloadAssembler {
         decoder.decodeRowKey(table, rk, saltBytes, out);
     }
 
+    /**
+     * Раскодирует значения ячеек и заполняет карту payload, заодно собирая агрегаты для метаданных.
+     *
+     * @param table таблица Phoenix
+     * @param cells список ячеек строки
+     * @param obj   карта payload, куда помещаются значения
+     * @return статистика по обработанным ячейкам
+     */
     private CellStats decodeCells(TableName table, List<Cell> cells, Map<String, Object> obj) {
         CellStats s = new CellStats();
         if (cells == null || cells.isEmpty()) {
@@ -94,6 +130,15 @@ final class RowPayloadAssembler {
         return s;
     }
 
+    /**
+     * Обрабатывает отдельную ячейку: применяет фильтр delete, декодирует значение и добавляет его в payload.
+     *
+     * @param table          таблица Phoenix
+     * @param cell           ячейка WAL
+     * @param obj            карта payload
+     * @param s              статистика по строке (обновляется на месте)
+     * @param serializeNulls разрешена ли сериализация {@code null}-значений
+     */
     private void processCell(TableName table,
                              Cell cell,
                              Map<String, Object> obj,
@@ -137,6 +182,14 @@ final class RowPayloadAssembler {
         private final ConcurrentHashMap<AbstractKey, String> cache = new ConcurrentHashMap<>(64);
         private final ThreadLocal<LookupKey> lookup = ThreadLocal.withInitial(LookupKey::new);
 
+        /**
+         * Возвращает интернированное строковое представление qualifier без лишних аллокаций.
+         *
+         * @param array  массив с qualifier в UTF-8
+         * @param offset смещение qualifier
+         * @param length длина qualifier
+         * @return строка qualifier (общий экземпляр для повторных обращений)
+         */
         String intern(byte[] array, int offset, int length) {
             if (length == 0) {
                 return "";
@@ -153,7 +206,9 @@ final class RowPayloadAssembler {
                 String race = cache.putIfAbsent(stored, created);
                 return race != null ? race : created;
             } finally {
+                key.clear();
                 lookup.remove();
+                lookup.set(key);
             }
         }
 
@@ -163,11 +218,20 @@ final class RowPayloadAssembler {
             int length;
             int hash;
 
+            /** Сохраняет ссылку на массив и вычисляет хеш. */
             final void reset(byte[] array, int off, int len) {
                 this.bytes = array;
                 this.offset = off;
                 this.length = len;
                 this.hash = Bytes.hashCode(array, off, len);
+            }
+
+            /** Обнуляет ссылки, чтобы не удерживать исходный массив. */
+            final void clear() {
+                this.bytes = null;
+                this.offset = 0;
+                this.length = 0;
+                this.hash = 0;
             }
 
             @Override
@@ -189,16 +253,23 @@ final class RowPayloadAssembler {
         }
 
         private static final class LookupKey extends AbstractKey {
+            /** Подготовить ключ к поиску в кэше. */
             void set(byte[] array, int off, int len) {
                 reset(array, off, len);
             }
 
+            /** Создаёт владеющую копию qualifier для помещения в кэш. */
             OwnedKey toOwned() {
                 return new OwnedKey(bytes, offset, length);
             }
         }
 
         private static final class OwnedKey extends AbstractKey {
+            /**
+             * @param source исходный массив qualifier (копируется, чтобы избежать совместного владения)
+             * @param off    смещение
+             * @param len    длина qualifier
+             */
             OwnedKey(byte[] source, int off, int len) {
                 byte[] copy = new byte[len];
                 System.arraycopy(source, off, copy, 0, len);
@@ -211,6 +282,9 @@ final class RowPayloadAssembler {
     private static final class MetaWriter {
         private MetaWriter() { }
 
+        /**
+         * Добавляет стандартные метаполя (таблица, namespace, qualifier, список CF и счётчик ячеек).
+         */
         static void addMetaIfEnabled(boolean includeMeta,
                                      Map<String, Object> obj,
                                      TableName table,
@@ -226,18 +300,23 @@ final class RowPayloadAssembler {
             obj.put(PayloadFields.CELLS_TOTAL, totalCells);
         }
 
+        /** Добавляет число ячеек после фильтра CF, если включены метаданные. */
         static void addCellsCfIfMeta(Map<String, Object> obj, boolean includeMeta, int cfCells) {
             if (includeMeta) {
                 obj.put(PayloadFields.CELLS_CF, cfCells);
             }
         }
 
+        /** Устанавливает флаг удаления, если в строке присутствовала delete-операция. */
         static void addDeleteFlagIfNeeded(Map<String, Object> obj, boolean hasDelete) {
             if (hasDelete) {
                 obj.put(PayloadFields.DELETE, 1);
             }
         }
 
+        /**
+         * Дополняет payload полями WAL (_wal_seq, _wal_write_time), если они доступны и разрешены конфигурацией.
+         */
         static void addWalMeta(boolean includeWalMeta,
                                Map<String, Object> obj,
                                long walSeq,
@@ -258,6 +337,9 @@ final class RowPayloadAssembler {
     private static final class RowKeyWriter {
         private RowKeyWriter() { }
 
+        /**
+         * Добавляет сериализованный rowkey (HEX/Base64) в payload, учитывая соль.
+         */
         static void addRowKeyIfPresent(boolean includeRowKeyPresent,
                                        Map<String, Object> obj,
                                        RowKeySlice rk,
@@ -280,6 +362,7 @@ final class RowPayloadAssembler {
         }
     }
 
+    /** Аккумулирует статистику по ячейкам строки для последующего формирования метаданных. */
     private static final class CellStats {
         long maxTs;
         boolean hasDelete;

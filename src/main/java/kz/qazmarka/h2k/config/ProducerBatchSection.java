@@ -25,6 +25,9 @@ public final class ProducerBatchSection {
 
     /**
      * Формирует секцию по ключам {@code h2k.producer.*}, гарантируя минимальные значения.
+     *
+     * @param cfg конфигурация Hadoop с параметрами продьюсера
+     * @return секция настроек BatchSender
      */
     static ProducerBatchSection from(Configuration cfg) {
         int awaitEvery = Parsers.readIntMin(cfg, H2kConfig.K_PRODUCER_AWAIT_EVERY, H2kConfig.DEFAULT_AWAIT_EVERY, 1);

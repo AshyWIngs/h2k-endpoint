@@ -1,9 +1,5 @@
 package kz.qazmarka.h2k.config;
 
-/**
- * Конструирует {@link H2kConfig} из HBase-конфигурации.
- */
-
 import java.util.Map;
 
 import org.apache.hadoop.conf.Configuration;
@@ -16,19 +12,21 @@ import kz.qazmarka.h2k.util.Parsers;
  */
 final class H2kConfigLoader {
 
+    /** Загружает конфигурацию h2k без табличного провайдера (используется NOOP). */
     H2kConfig load(Configuration cfg, String bootstrap) {
         return load(cfg, bootstrap, PhoenixTableMetadataProvider.NOOP);
     }
 
+    /**
+     * Формирует основной {@link H2kConfig}, объединяя секции {@code h2k.*} из конфигурации.
+     *
+     * @param cfg              исходная конфигурация HBase/endpoint
+     * @param bootstrap        обязательный список брокеров (host:port)
+     * @param metadataProvider поставщик табличных метаданных Avro (позволяет брать соль/ёмкость из .avsc)
+     * @return иммутабельная конфигурация, готовая к передаче в рабочие компоненты
+     * @throws IllegalArgumentException если bootstrap не задан
+     */
     H2kConfig load(Configuration cfg, String bootstrap, PhoenixTableMetadataProvider metadataProvider) {
-        /**
-         * Формирует основной {@link H2kConfig}, объединяя секции {@code h2k.*} из конфигурации.
-         *
-         * @param cfg исходная конфигурация HBase/endpoint
-         * @param bootstrap обязательный список брокеров (host:port)
-         * @return иммутабельная конфигурация, готовая к передаче в рабочие компоненты
-         * @throws IllegalArgumentException если bootstrap не задан
-         */
         if (bootstrap == null || bootstrap.trim().isEmpty()) {
             throw new IllegalArgumentException("Отсутствует обязательный параметр bootstrap.servers: h2k.kafka.bootstrap.servers пустой или не задан");
         }

@@ -25,6 +25,9 @@ public final class TopicSection {
 
     /**
      * Парсит шаблон имён, ограничение длины и список CF из конфигурации.
+     *
+     * @param cfg конфигурация Hadoop с ключами {@code h2k.topic.*}
+     * @return секция настроек топиков (иммутабельная)
      */
     static TopicSection from(Configuration cfg) {
         String topicPattern = Parsers.readTopicPattern(cfg, H2kConfig.K_TOPIC_PATTERN, H2kConfig.PLACEHOLDER_TABLE);

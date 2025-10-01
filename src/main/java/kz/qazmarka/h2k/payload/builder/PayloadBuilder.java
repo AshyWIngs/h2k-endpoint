@@ -12,8 +12,8 @@ import org.slf4j.LoggerFactory;
 
 import kz.qazmarka.h2k.config.H2kConfig;
 import kz.qazmarka.h2k.payload.serializer.PayloadSerializer;
-import kz.qazmarka.h2k.payload.factory.SerializerResolver;
 import kz.qazmarka.h2k.payload.serializer.TableAwarePayloadSerializer;
+import kz.qazmarka.h2k.payload.serializer.internal.SerializerResolver;
 import kz.qazmarka.h2k.payload.serializer.avro.ConfluentAvroPayloadSerializer;
 import kz.qazmarka.h2k.payload.serializer.avro.SchemaRegistryClientFactory;
 import kz.qazmarka.h2k.schema.decoder.Decoder;
@@ -32,10 +32,19 @@ public final class PayloadBuilder {
     private final RowPayloadAssembler assembler;
     private final SerializerResolver serializerResolver;
 
+    /**
+     * @param decoder декодер Phoenix, предоставляющий значения колонок и PK
+     * @param cfg     неизменяемая конфигурация h2k
+     */
     public PayloadBuilder(Decoder decoder, H2kConfig cfg) {
         this(decoder, cfg, SchemaRegistryClientFactory.cached());
     }
 
+    /**
+     * @param decoder                     декодер Phoenix
+     * @param cfg                         конфигурация h2k
+     * @param schemaRegistryClientFactory фабрика клиентов Schema Registry (для режима Confluent)
+     */
     public PayloadBuilder(Decoder decoder,
                           H2kConfig cfg,
                           SchemaRegistryClientFactory schemaRegistryClientFactory) {
@@ -45,6 +54,9 @@ public final class PayloadBuilder {
         this.assembler = new RowPayloadAssembler(decoder, cfg);
     }
 
+    /**
+     * Собирает payload и сериализует результат в байты, используя сериализатор из конфигурации.
+     */
     public byte[] buildRowPayloadBytes(TableName table,
                                        List<Cell> cells,
                                        RowKeySlice rowKey,
@@ -54,6 +66,9 @@ public final class PayloadBuilder {
         return buildRowPayloadBytes(table, cells, rowKey, walSeq, walWriteTime, ser);
     }
 
+    /**
+     * Формирует payload и сериализует его указанным сериализатором (переопределяет сериализатор из конфига).
+     */
     public byte[] buildRowPayloadBytes(TableName table,
                                        List<Cell> cells,
                                        RowKeySlice rowKey,
@@ -69,6 +84,9 @@ public final class PayloadBuilder {
         return serializer.serialize(obj);
     }
 
+    /**
+     * Формирует карту payload без сериализации — удобно для тестов и альтернативных сериализаторов.
+     */
     public Map<String, Object> buildRowPayload(TableName table,
                                                List<Cell> cells,
                                                RowKeySlice rowKey,
@@ -99,6 +117,9 @@ public final class PayloadBuilder {
         PayloadSerializer create(H2kConfig cfg);
     }
 
+    /**
+     * Возвращает сериализатор, выбранный по текущей конфигурации (с lazy-кэшированием).
+     */
     private PayloadSerializer resolveSerializerFromConfig() {
         PayloadSerializer existing = cachedSerializer.get();
         if (existing != null) {
@@ -111,6 +132,9 @@ public final class PayloadBuilder {
         return cachedSerializer.get();
     }
 
+    /**
+     * Человекочитаемое описание активного сериализатора и ключевых параметров Avro.
+     */
     public String describeSerializer() {
         PayloadSerializer serializer = resolveSerializerFromConfig();
         StringBuilder sb = new StringBuilder(160);

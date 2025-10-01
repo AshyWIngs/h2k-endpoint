@@ -1,5 +1,6 @@
 package kz.qazmarka.h2k.payload.serializer.avro;
 
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -31,7 +32,7 @@ import kz.qazmarka.h2k.payload.builder.PayloadBuilder;
 import kz.qazmarka.h2k.payload.serializer.PayloadSerializer;
 import kz.qazmarka.h2k.payload.serializer.avro.ConfluentAvroPayloadSerializer.SchemaRegistryMetrics;
 import kz.qazmarka.h2k.schema.decoder.Decoder;
-import kz.qazmarka.h2k.schema.registry.local.AvroSchemaRegistry;
+import kz.qazmarka.h2k.schema.registry.avro.local.AvroSchemaRegistry;
 import kz.qazmarka.h2k.util.RowKeySlice;
 
 /**
@@ -277,7 +278,7 @@ class ConfluentAvroPayloadSerializerTest {
     private static java.util.Collection<String> subjects(SchemaRegistryClient client) {
         try {
             return client.getAllSubjects();
-        } catch (Exception e) {
+        } catch (IOException | RestClientException e) {
             throw new IllegalStateException("Не удалось получить список subject'ов из тестового клиента", e);
         }
     }

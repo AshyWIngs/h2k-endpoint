@@ -53,6 +53,9 @@ public final class PayloadSection {
 
     /**
      * Читает ключи {@code h2k.payload.*} и возвращает иммутабельный блочный конфиг.
+     *
+     * @param cfg конфигурация Hadoop, из которой извлекаются настройки payload
+     * @return секция payload, готовая к использованию в {@link H2kConfig}
      */
     static PayloadSection from(Configuration cfg) {
         boolean includeRowKey = cfg.getBoolean(H2kConfig.K_PAYLOAD_INCLUDE_ROWKEY, H2kConfig.DEFAULT_INCLUDE_ROWKEY);

@@ -1,4 +1,4 @@
-package kz.qazmarka.h2k.kafka.ensure;
+package kz.qazmarka.h2k.kafka.ensure.admin;
 
 import java.time.Duration;
 import java.util.Collection;
@@ -20,11 +20,11 @@ import org.apache.kafka.common.config.ConfigResource;
 /**
  * Обёртка над {@link AdminClient}, реализующая {@link KafkaTopicAdmin} без дополнительной логики.
  */
-final class KafkaTopicAdminClient implements KafkaTopicAdmin {
+public final class KafkaTopicAdminClient implements KafkaTopicAdmin {
 
     private final AdminClient delegate;
 
-    KafkaTopicAdminClient(AdminClient delegate) {
+    public KafkaTopicAdminClient(AdminClient delegate) {
         this.delegate = delegate;
     }
 

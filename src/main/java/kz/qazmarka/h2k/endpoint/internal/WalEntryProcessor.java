@@ -2,8 +2,8 @@ package kz.qazmarka.h2k.endpoint.internal;
 
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.List;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
@@ -25,15 +25,13 @@ import kz.qazmarka.h2k.util.RowKeySlice;
 
 /**
  * Обрабатывает записи WAL: группирует по rowkey, фильтрует и отправляет события в Kafka.
- * <p>Контракт использования:
- * <ul>
- *   <li>экземпляр создаётся и используется в одном потоке репликации HBase;</li>
- *   <li>горячий путь повторно использует {@link RowKeySlice.Mutable}, чтобы избегать лишних аллокаций;</li>
- *   <li>передаваемый {@link BatchSender} управляет жизненным циклом фьючерсов KafkaProducer и обязан очищаться
- *       вызывающей стороной после каждого вызова;</li>
- *   <li>счётчики основаны на {@link java.util.concurrent.atomic.LongAdder} и потокобезопасны — их можно опрашивать
- *       из TopicManager/JMX без дополнительной синхронизации.</li>
- * </ul>
+ * Контракт использования:
+ * - экземпляр создаётся и используется в одном потоке репликации HBase;
+ * - горячий путь повторно использует {@link RowKeySlice.Mutable}, чтобы избегать лишних аллокаций;
+ * - передаваемый {@link BatchSender} управляет жизненным циклом фьючерсов KafkaProducer и должен очищаться
+ *   вызывающей стороной после каждого вызова;
+ * - счётчики основаны на {@link java.util.concurrent.atomic.LongAdder} и потокобезопасны, их можно опрашивать
+ *   из TopicManager или через JMX без дополнительной синхронизации.
  */
 public final class WalEntryProcessor {
 
@@ -162,8 +160,7 @@ public final class WalEntryProcessor {
     }
 
     /**
-     * Контекст обработки строки WAL: инкапсулирует настройки фильтрации и сборки payload,
-     * чтобы передавать в helper-методы меньше параметров и снизить когнитивную сложность.
+     * Контекст обработки строки WAL: хранит настройки фильтра/топика/метаданных для передачи в helper-методы.
      */
     private final class RowProcessingContext {
         private final boolean filterEnabled;
@@ -283,6 +280,7 @@ public final class WalEntryProcessor {
         return false;
     }
 
+    /** Кеширует отфильтрованный список CF и их хеши для ускорения повторных проверок. */
     private static final class CfFilterCache {
         private static final CfFilterCache EMPTY = new CfFilterCache(null, null, null);
 
@@ -346,6 +344,8 @@ public final class WalEntryProcessor {
      * Лёгкие счётчики по записи WAL — количество отправленных строк и ячеек.
      * Выделены в отдельный объект, чтобы передавать по ссылке и избегать возврата pair-структур.
      */
+    
+    /** Счётчики по текущей записи WAL (строки/ячейки/фильтр). */
     private static final class ProcessingCounters {
         int rowsSent;
         int cellsSent;
@@ -382,6 +382,9 @@ public final class WalEntryProcessor {
         return rowsFiltered.sum();
     }
 
+    /**
+     * Агрегирует статистику за период и выводит DEBUG-лог с throughput (строки/ячейки/фильтрация).
+     */
     private void logThroughput(ProcessingCounters counters) {
         entriesWindow.increment();
         if (counters.rowsSent > 0) {

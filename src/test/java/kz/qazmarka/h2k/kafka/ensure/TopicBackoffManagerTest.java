@@ -8,6 +8,9 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import kz.qazmarka.h2k.kafka.ensure.metrics.TopicEnsureState;
+import kz.qazmarka.h2k.kafka.ensure.state.TopicBackoffManager;
+
 class TopicBackoffManagerTest {
 
     @Test

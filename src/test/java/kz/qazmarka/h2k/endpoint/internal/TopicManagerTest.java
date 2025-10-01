@@ -21,14 +21,18 @@ class TopicManagerTest {
         manager.registerMetric("custom.metric", () -> 42L);
         Map<String, Long> metrics = manager.getMetrics();
         assertEquals(42L, metrics.get("custom.metric"));
-        assertThrows(UnsupportedOperationException.class, () -> metrics.put("x", 1L));
+        UnsupportedOperationException immutableSnapshot =
+                assertThrows(UnsupportedOperationException.class, () -> metrics.put("x", 1L));
+        assertEquals(UnsupportedOperationException.class, immutableSnapshot.getClass());
     }
 
     @Test
     @DisplayName("registerMetric() отклоняет пустое имя")
     void registerMetricRejectsBlankName() {
         TopicManager manager = topicManager();
-        assertThrows(IllegalArgumentException.class, () -> manager.registerMetric("  ", () -> 1L));
+        IllegalArgumentException invalidName =
+                assertThrows(IllegalArgumentException.class, () -> manager.registerMetric("  ", () -> 1L));
+        assertEquals(IllegalArgumentException.class, invalidName.getClass());
     }
 
     private static TopicManager topicManager() {

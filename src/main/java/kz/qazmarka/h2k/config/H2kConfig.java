@@ -805,7 +805,7 @@ public final class H2kConfig {
      * @throws IllegalArgumentException если bootstrap пустой или не указан
      */
     public static H2kConfig from(Configuration cfg, String bootstrap) {
-        return new H2kConfigLoader().load(cfg, bootstrap, PhoenixTableMetadataProvider.NOOP);
+        return new H2kConfigLoader().load(cfg, bootstrap);
     }
 
     public static H2kConfig from(Configuration cfg,

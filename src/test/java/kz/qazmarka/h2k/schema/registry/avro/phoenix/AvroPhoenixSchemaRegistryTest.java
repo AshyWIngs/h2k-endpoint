@@ -1,4 +1,4 @@
-package kz.qazmarka.h2k.schema.registry.avro;
+package kz.qazmarka.h2k.schema.registry.avro.phoenix;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -15,8 +15,8 @@ import org.junit.jupiter.api.io.TempDir;
 
 import kz.qazmarka.h2k.schema.registry.PhoenixTableMetadataProvider;
 import kz.qazmarka.h2k.schema.registry.SchemaRegistry;
-import kz.qazmarka.h2k.schema.registry.external.JsonSchemaRegistry;
-import kz.qazmarka.h2k.schema.registry.local.AvroSchemaRegistry;
+import kz.qazmarka.h2k.schema.registry.json.JsonSchemaRegistry;
+import kz.qazmarka.h2k.schema.registry.avro.local.AvroSchemaRegistry;
 
 class AvroPhoenixSchemaRegistryTest {
 

@@ -36,10 +36,7 @@ import org.slf4j.LoggerFactory;
 import kz.qazmarka.h2k.schema.registry.SchemaRegistry;
 
 /**
- * Кэш разрешения Phoenix {@link PDataType} по колонкам с нормализацией строковых типов из реестра.
- */
-/**
- * Регистрирует допустимые типы Phoenix и предоставляет проверку/нормализацию для декодера.
+ * Регистрирует допустимые типы Phoenix и предоставляет нормализацию для декодера.
  * В проекте используется {@link kz.qazmarka.h2k.schema.decoder.ValueCodecPhoenix}.
  */
 public final class PhoenixColumnTypeRegistry {

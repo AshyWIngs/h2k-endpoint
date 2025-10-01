@@ -1,7 +1,8 @@
-package kz.qazmarka.h2k.kafka.ensure;
+package kz.qazmarka.h2k.kafka.ensure.state;
 
 import java.util.concurrent.TimeUnit;
 
+import kz.qazmarka.h2k.kafka.ensure.metrics.TopicEnsureState;
 import kz.qazmarka.h2k.kafka.producer.BackoffPolicy;
 
 /**
@@ -9,18 +10,18 @@ import kz.qazmarka.h2k.kafka.producer.BackoffPolicy;
  * рассчитывает задержки через {@link BackoffPolicy} и снимает блокировки после успеха.
  * Предназначен исключительно для внутреннего использования ensure-сервиса.
  */
-final class TopicBackoffManager {
+public final class TopicBackoffManager {
 
     private final TopicEnsureState state;
     private final BackoffPolicy policy;
     private final long baseDelayNs;
 
-    TopicBackoffManager(TopicEnsureState state, long baseDelayMs) {
+    public TopicBackoffManager(TopicEnsureState state, long baseDelayMs) {
         this(state, baseDelayMs,
                 new BackoffPolicy(TimeUnit.MILLISECONDS.toNanos(1), 20));
     }
 
-    TopicBackoffManager(TopicEnsureState state, long baseDelayMs, BackoffPolicy policy) {
+    public TopicBackoffManager(TopicEnsureState state, long baseDelayMs, BackoffPolicy policy) {
         this.state = state;
         this.policy = policy;
         this.baseDelayNs = TimeUnit.MILLISECONDS.toNanos(Math.max(0L, baseDelayMs));
@@ -29,7 +30,7 @@ final class TopicBackoffManager {
     /**
      * @return {@code true}, если повтор стоит отложить из-за активного backoff.
      */
-    boolean shouldSkip(String topic) {
+    public boolean shouldSkip(String topic) {
         Long deadline = state.getUnknownDeadline(topic);
         if (deadline == null) {
             return false;
@@ -43,22 +44,22 @@ final class TopicBackoffManager {
     }
 
     /** Планирует повторную попытку ensure по теме. */
-    void scheduleRetry(String topic) {
+    public void scheduleRetry(String topic) {
         long delayNs = nextDelayNanos();
         state.scheduleUnknown(topic, System.nanoTime() + delayNs);
     }
 
     /** Снимает backoff для темы после успешного ensure. */
-    void markSuccess(String topic) {
+    public void markSuccess(String topic) {
         state.resetUnknownUntil(topic);
     }
 
-    long baseDelayMs() {
+    public long baseDelayMs() {
         return TimeUnit.NANOSECONDS.toMillis(baseDelayNs);
     }
 
     /** Вычисляет очередную задержку с джиттером (миллисекунды). */
-    long computeDelayMillis() {
+    public long computeDelayMillis() {
         return TimeUnit.NANOSECONDS.toMillis(nextDelayNanos());
     }
 

@@ -7,10 +7,12 @@ import io.confluent.kafka.schemaregistry.client.CachedSchemaRegistryClient;
 import io.confluent.kafka.schemaregistry.client.SchemaRegistryClient;
 
 /**
- * Реализация {@link SchemaRegistryClientFactory}, использующая {@link CachedSchemaRegistryClient}.
+ * Реализация {@link SchemaRegistryClientFactory}, создающая {@link CachedSchemaRegistryClient}
+ * с заданным кешем (identity map). Используется для переиспользования соединений SR.
  */
 final class CachedSchemaRegistryClientFactory implements SchemaRegistryClientFactory {
 
+    /** Единственный экземпляр (shared singleton). */
     static final SchemaRegistryClientFactory INSTANCE = new CachedSchemaRegistryClientFactory();
 
     private CachedSchemaRegistryClientFactory() { /* singleton */ }

@@ -19,16 +19,18 @@ import org.slf4j.LoggerFactory;
 
 import kz.qazmarka.h2k.config.H2kConfig;
 import kz.qazmarka.h2k.payload.serializer.TableAwarePayloadSerializer;
-import kz.qazmarka.h2k.schema.registry.local.AvroSchemaRegistry;
+import kz.qazmarka.h2k.schema.registry.avro.local.AvroSchemaRegistry;
 
 import io.confluent.kafka.schemaregistry.client.SchemaRegistryClient;
 import io.confluent.kafka.schemaregistry.client.rest.exceptions.RestClientException;
 import io.confluent.kafka.serializers.AbstractKafkaAvroSerDeConfig;
 
 /**
- * Сериализация Avro через Confluent Schema Registry 5.3.x.
- *
- * Порядок байт: magic byte (0) + int32 schemaId (big-endian) + Avro binary payload.
+ * Сериализатор Avro, использующий Confluent Schema Registry 5.3.x.
+ * Формат вывода полностью совпадает с wire‑форматом Confluent: {@code 0x0} (magic byte)
+ * плюс {@code int32} идентификатора схемы (big-endian) и бинарный Avro‑payload.
+ * Класс читает локальную схему из {@link AvroSchemaRegistry}, при необходимости регистрирует её в Schema Registry
+ * и кеширует {@link Schema#hashCode()} и schemaId для последующих отправок.
  */
 public final class ConfluentAvroPayloadSerializer implements TableAwarePayloadSerializer {
 
@@ -49,6 +51,9 @@ public final class ConfluentAvroPayloadSerializer implements TableAwarePayloadSe
     /** subject -> schema info. */
     private final ConcurrentHashMap<String, SchemaInfo> cache = new ConcurrentHashMap<>();
 
+    /**
+     * @param cfg конфигурация h2k с параметрами Avro/SR и путём к локальным схемам
+     */
     public ConfluentAvroPayloadSerializer(H2kConfig cfg) {
         this(cfg, SchemaRegistryClientFactory.cached(), null);
     }
@@ -57,6 +62,10 @@ public final class ConfluentAvroPayloadSerializer implements TableAwarePayloadSe
         this(cfg, SchemaRegistryClientFactory.cached(), externalClient);
     }
 
+    /**
+     * @param cfg     конфигурация h2k
+     * @param factory фабрика клиентов Schema Registry (используется для создания кэшируемого клиента)
+     */
     public ConfluentAvroPayloadSerializer(H2kConfig cfg, SchemaRegistryClientFactory factory) {
         this(cfg, factory, null);
     }
@@ -64,8 +73,8 @@ public final class ConfluentAvroPayloadSerializer implements TableAwarePayloadSe
     ConfluentAvroPayloadSerializer(H2kConfig cfg,
                                    SchemaRegistryClientFactory factory,
                                    SchemaRegistryClient externalClient) {
-        Objects.requireNonNull(cfg, "cfg");
-        Objects.requireNonNull(factory, "schemaRegistryClientFactory");
+        Objects.requireNonNull(cfg, "cfg == null");
+        Objects.requireNonNull(factory, "schemaRegistryClientFactory == null");
         if (cfg.getAvroMode() != H2kConfig.AvroMode.CONFLUENT) {
             throw new IllegalStateException("Avro: режим '" + cfg.getAvroMode() + "' не является Confluent");
         }
@@ -113,8 +122,8 @@ public final class ConfluentAvroPayloadSerializer implements TableAwarePayloadSe
      * Сериализует payload в формат Confluent (magic byte + schema id + бинарный Avro).
      */
     public byte[] serialize(TableName table, Map<String, ?> obj) {
-        Objects.requireNonNull(table, "table name is null");
-        Objects.requireNonNull(obj, "payload");
+        Objects.requireNonNull(table, "не передано имя таблицы");
+        Objects.requireNonNull(obj, "payload == null");
 
         final String subject = buildSubject(table);
         SchemaInfo info = cache.get(subject);
@@ -210,6 +219,7 @@ public final class ConfluentAvroPayloadSerializer implements TableAwarePayloadSe
         }
     }
 
+    /** Приводит subject к допустимому виду (только латиница/цифры/._-). */
     private static String sanitizeSubject(String raw) {
         if (raw == null || raw.isEmpty()) {
             return "subject";
@@ -226,6 +236,7 @@ public final class ConfluentAvroPayloadSerializer implements TableAwarePayloadSe
         return sb.toString();
     }
 
+    /** Конструирует клиента Schema Registry с учётом basic-auth и кеша схем. */
     private SchemaRegistryClient createClient(SchemaRegistryClientFactory factory,
                                               Map<String, String> auth,
                                               Map<String, String> avroProps) {
@@ -282,6 +293,7 @@ public final class ConfluentAvroPayloadSerializer implements TableAwarePayloadSe
         }
     }
 
+    /** Регистрирует схему в Schema Registry и возвращает присвоенный schemaId. */
     private int registerSchema(String subject, Schema schema) {
         try {
             int id = schemaRegistryClient.register(subject, schema);
@@ -302,10 +314,12 @@ public final class ConfluentAvroPayloadSerializer implements TableAwarePayloadSe
     }
 
     /** Возвращает неизменяемый снимок счётчиков взаимодействия со Schema Registry. */
+    /** @return неизменяемый снимок счётчиков регистрации схем. */
     public SchemaRegistryMetrics metrics() {
         return new SchemaRegistryMetrics(schemaRegisterSuccess.sum(), schemaRegisterFailure.sum());
     }
 
+    /** Снимок метрик взаимодействия со Schema Registry (успех/ошибка регистрации схем). */
     public static final class SchemaRegistryMetrics {
         private final long registered;
         private final long failures;
@@ -315,8 +329,10 @@ public final class ConfluentAvroPayloadSerializer implements TableAwarePayloadSe
             this.failures = failures;
         }
 
+        /** @return количество успешных регистраций схем */
         public long registeredSchemas() { return registered; }
 
+        /** @return количество ошибок регистрации схем */
         public long registrationFailures() { return failures; }
     }
 }

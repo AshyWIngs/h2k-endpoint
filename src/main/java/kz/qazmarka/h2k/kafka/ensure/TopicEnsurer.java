@@ -13,6 +13,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import kz.qazmarka.h2k.config.H2kConfig;
+import kz.qazmarka.h2k.kafka.ensure.admin.KafkaTopicAdmin;
+import kz.qazmarka.h2k.kafka.ensure.admin.KafkaTopicAdminClient;
+import kz.qazmarka.h2k.kafka.ensure.config.TopicEnsureConfig;
+import kz.qazmarka.h2k.kafka.ensure.metrics.TopicEnsureState;
 
 /**
  * Высокоуровневый фасад ensure-логики Kafka-топиков.

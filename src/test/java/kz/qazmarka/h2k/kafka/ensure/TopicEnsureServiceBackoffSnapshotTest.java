@@ -12,6 +12,9 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import kz.qazmarka.h2k.kafka.ensure.config.TopicEnsureConfig;
+import kz.qazmarka.h2k.kafka.ensure.metrics.TopicEnsureState;
+
 /**
  * Проверяет контракт {@link TopicEnsureService#getBackoffSnapshot()} на корректные значения и защиту от модификации.
  */

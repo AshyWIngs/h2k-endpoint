@@ -1,9 +1,5 @@
 package kz.qazmarka.h2k.schema.phoenix;
 
-/**
- * Вспомогательный парсер rowkey Phoenix для выделения значений PK.
- */
-
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Map;
@@ -33,6 +29,10 @@ public final class PhoenixPkParser {
     private static final Set<ColWarnKey> PK_COLUMN_WARNED =
             Collections.newSetFromMap(new ConcurrentHashMap<>());
 
+    /**
+     * @param registry реестр колонок/PK (Avro, JSON и т.п.)
+     * @param types    реестр типов Phoenix с нормализацией
+     */
     public PhoenixPkParser(SchemaRegistry registry, PhoenixColumnTypeRegistry types) {
         this.registry = registry;
         this.types = types;
@@ -40,6 +40,11 @@ public final class PhoenixPkParser {
 
     /**
      * Расшифровывает составной rowkey Phoenix в именованные поля, учитывая соль и разделители.
+     *
+     * @param table     таблица Phoenix (для логов и разрешения типов)
+     * @param rk        исходный rowkey (может быть {@code null})
+     * @param saltBytes длина соли в байтах
+     * @param out       карта, в которую записываются значения PK
      */
     public void decodeRowKey(TableName table,
                              RowKeySlice rk,

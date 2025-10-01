@@ -29,9 +29,9 @@ import kz.qazmarka.h2k.schema.decoder.SimpleDecoder;
 import kz.qazmarka.h2k.schema.decoder.ValueCodecPhoenix;
 import kz.qazmarka.h2k.schema.registry.PhoenixTableMetadataProvider;
 import kz.qazmarka.h2k.schema.registry.SchemaRegistry;
-import kz.qazmarka.h2k.schema.registry.avro.AvroPhoenixSchemaRegistry;
-import kz.qazmarka.h2k.schema.registry.external.JsonSchemaRegistry;
-import kz.qazmarka.h2k.schema.registry.local.AvroSchemaRegistry;
+import kz.qazmarka.h2k.schema.registry.json.JsonSchemaRegistry;
+import kz.qazmarka.h2k.schema.registry.avro.phoenix.AvroPhoenixSchemaRegistry;
+import kz.qazmarka.h2k.schema.registry.avro.local.AvroSchemaRegistry;
 
 /**
  * Репликация изменений из HBase 1.4.13 в Kafka (производитель 2.x).

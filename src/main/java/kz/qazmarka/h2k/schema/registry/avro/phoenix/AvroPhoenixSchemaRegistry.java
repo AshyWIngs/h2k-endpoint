@@ -1,4 +1,4 @@
-package kz.qazmarka.h2k.schema.registry.avro;
+package kz.qazmarka.h2k.schema.registry.avro.phoenix;
 
 import java.util.Collections;
 import java.util.HashMap;
@@ -20,7 +20,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import kz.qazmarka.h2k.schema.registry.PhoenixTableMetadataProvider;
 import kz.qazmarka.h2k.schema.registry.SchemaRegistry;
-import kz.qazmarka.h2k.schema.registry.local.AvroSchemaRegistry;
+import kz.qazmarka.h2k.schema.registry.avro.local.AvroSchemaRegistry;
 
 /**
  * Реестр Phoenix-метаданных, считываемых из Avro-схем.
@@ -41,10 +41,17 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
     private final Set<String> missingSchemaWarned =
             Collections.newSetFromMap(new ConcurrentHashMap<>());
 
+    /**
+     * @param avroRegistry локальный реестр Avro-схем (обязательный)
+     */
     public AvroPhoenixSchemaRegistry(AvroSchemaRegistry avroRegistry) {
         this(avroRegistry, null);
     }
 
+    /**
+     * @param avroRegistry локальный реестр Avro-схем
+     * @param fallback     реестр, к которому выполняется фолбэк (JSON/legacy); может быть {@code null}
+     */
     public AvroPhoenixSchemaRegistry(AvroSchemaRegistry avroRegistry, SchemaRegistry fallback) {
         if (avroRegistry == null) {
             throw new NullPointerException("avroRegistry == null");
@@ -54,31 +61,37 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
     }
 
     @Override
+    /** Возвращает тип Phoenix для указанной таблицы/колонки, считывая его из Avro-схемы. */
     public String columnType(TableName table, String qualifier) {
         TableMetadata meta = metadataFor(table);
         return meta.columnType(qualifier);
     }
 
     @Override
+    /** Возвращает массив имён PK, заданный в Avro-схеме (или во fallback-реестре). */
     public String[] primaryKeyColumns(TableName table) {
         return metadataFor(table).primaryKey();
     }
 
     @Override
+    /** Возвращает количество байт соли rowkey, указанное в Avro-схеме или во fallback. */
     public Integer saltBytes(TableName table) {
         return metadataFor(table).saltBytes();
     }
 
     @Override
+    /** Возвращает подсказку ёмкости JSON, считанную из Avro-схемы или fallback. */
     public Integer capacityHint(TableName table) {
         return metadataFor(table).capacityHint();
     }
 
+    /** Читает и кеширует метаданные таблицы, используя локальный .avsc и fallback. */
     private TableMetadata metadataFor(TableName table) {
         String key = table.getNameAsString().toUpperCase(Locale.ROOT);
         return cache.computeIfAbsent(key, k -> loadMetadataSafely(table, k));
     }
 
+    /** Устойчиво загружает метаданные и выполняет фолбэк при ошибке. */
     private TableMetadata loadMetadataSafely(TableName table, String cacheKey) {
         try {
             return loadMetadata(table);
@@ -103,6 +116,7 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
         }
     }
 
+    /** Загружает Avro-схему и извлекает из неё типы, PK, соль и подсказку ёмкости. */
     private TableMetadata loadMetadata(TableName table) {
         Schema schema = avroRegistry.getByTable(table.getNameAsString());
         Map<String, String> types = new HashMap<>(Math.max(8, schema.getFields().size() * 3));

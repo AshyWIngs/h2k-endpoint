@@ -1,4 +1,4 @@
-package kz.qazmarka.h2k.kafka.ensure;
+package kz.qazmarka.h2k.kafka.ensure.admin;
 
 import java.time.Duration;
 import java.util.Collection;
@@ -20,7 +20,7 @@ import org.apache.kafka.common.config.ConfigResource;
  *
  * Интерфейс преднамеренно лишён зависимостей от конкретной реализации AdminClient, что упрощает unit-тесты.
  */
-interface KafkaTopicAdmin {
+public interface KafkaTopicAdmin {
 
     /** Запрашивает описания тем и возвращает map future'ов по именам. */
     Map<String, KafkaFuture<TopicDescription>> describeTopics(Set<String> names);

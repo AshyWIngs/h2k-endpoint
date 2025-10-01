@@ -19,7 +19,7 @@ import org.slf4j.LoggerFactory;
 
 import kz.qazmarka.h2k.config.H2kConfig;
 import kz.qazmarka.h2k.payload.serializer.TableAwarePayloadSerializer;
-import kz.qazmarka.h2k.schema.registry.local.AvroSchemaRegistry;
+import kz.qazmarka.h2k.schema.registry.avro.local.AvroSchemaRegistry;
 
 /**
  * Сериализатор Avro для режима {@code generic}: читает локальные {@code *.avsc}
@@ -65,11 +65,11 @@ public final class GenericAvroPayloadSerializer implements TableAwarePayloadSeri
         LOG.debug("Avro: режим generic, каталог схем={}, абсолютный путь={}", baseDir, baseDir.toAbsolutePath());
     }
 
-    @Override
     /** Сериализует payload указанной таблицы, используя локальный AvroSchemaRegistry. */
+    @Override
     public byte[] serialize(TableName table, Map<String, ?> obj) {
-        Objects.requireNonNull(table, "table");
-        Objects.requireNonNull(obj, "payload");
+        Objects.requireNonNull(table, "table == null");
+        Objects.requireNonNull(obj, "payload == null");
         final String tableKey = table.getNameAsString();
 
         SerializerHolder holder = serializerByTable.get(tableKey);
@@ -100,6 +100,7 @@ public final class GenericAvroPayloadSerializer implements TableAwarePayloadSeri
         return new SerializerHolder(new AvroSerializer(schema), schema);
     }
 
+    /** Сериализует payload в Avro JSON (используется только для тестовых сценариев/отладки). */
     private byte[] serializeJson(SerializerHolder holder, Map<String, ?> obj) {
         GenericRecord rec = AvroSerializer.buildRecord(holder.schema, obj);
 
@@ -126,6 +127,7 @@ public final class GenericAvroPayloadSerializer implements TableAwarePayloadSeri
         return encoding == Encoding.BINARY ? "application/avro-binary" : "application/json";
     }
 
+    /** Пара «сериализатор + схема» для конкретной таблицы. */
     private static final class SerializerHolder {
         final AvroSerializer serializer;
         final Schema schema;

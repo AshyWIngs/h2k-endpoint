@@ -1,4 +1,4 @@
-package kz.qazmarka.h2k.schema.registry.external;
+package kz.qazmarka.h2k.schema.registry.json;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;

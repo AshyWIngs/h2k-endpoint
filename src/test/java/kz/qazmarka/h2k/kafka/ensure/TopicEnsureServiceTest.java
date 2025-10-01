@@ -26,6 +26,10 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import kz.qazmarka.h2k.kafka.ensure.admin.KafkaTopicAdmin;
+import kz.qazmarka.h2k.kafka.ensure.config.TopicEnsureConfig;
+import kz.qazmarka.h2k.kafka.ensure.metrics.TopicEnsureState;
+
 class TopicEnsureServiceTest {
 
     @Test

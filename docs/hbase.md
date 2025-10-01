@@ -141,4 +141,4 @@ remove_peer 'h2k_balanced'
 - [Профили peer (полная матрица)](peer-profiles.md)
 - [Phoenix и `schema.json`](phoenix.md)
 - [Подсказки ёмкости и метаданные](capacity.md)
-- [Диагностика и типовые ошибки](troubleshooting.md)
+- [Диагностика и типовые ошибки](runbook/troubleshooting.md)

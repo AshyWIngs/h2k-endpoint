@@ -315,7 +315,7 @@ FROM stg.kafka_tbl_jti_trace_cis_history_src;
  - В ClickHouse/продьюсерах использовать список всех SR.
    - Мониторить доступность SR, лаг по `_schemas`, время отклика API.
 
-> Подробнее о эксплуатации и настройке см. в `docs/operations.md` (раздел *Avro и Schema Registry*).
+> Подробнее о эксплуатации и настройке см. в `docs/runbook/operations.md` (раздел *Avro и Schema Registry*).
 
 ### Минимальная проверка в ClickHouse через SR 5.3.8
 
@@ -350,4 +350,4 @@ LIMIT 0;
 
 ---
 
-Дополнительные вопросы и рецепты см. в `docs/operations.md` (раздел *Avro и Schema Registry*).
+Дополнительные вопросы и рецепты см. в `docs/runbook/operations.md` (раздел *Avro и Schema Registry*).

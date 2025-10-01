@@ -23,13 +23,11 @@ import kz.qazmarka.h2k.payload.builder.PayloadFields;
 import kz.qazmarka.h2k.payload.serializer.PayloadSerializer;
 
 /**
- * Сериализация полезной нагрузки в Avro (generic, без Schema Registry).
- *
- * Схема выбирается резолвером на основании содержимого полей
- * (обычно по {@link PayloadFields#TABLE}).
- *
- * Класс потокобезопасен при использовании отдельного экземпляра на поток.
- * Для снижения аллокаций применяются повторно используемые буферы через {@link ThreadLocal}.
+ * Сериализатор Avro для «generic» режима (без Schema Registry).
+ * Схема выбирается резолвером, как правило по полю {@link PayloadFields#TABLE}.
+ * Экземпляр считается потокобезопасным, если каждый поток использует собственный объект.
+ * Для экономии аллокаций применяются {@link ThreadLocal}-буферы (ByteArrayOutputStream + BinaryEncoder
+ * и GenericDatumWriter).
  */
 public final class AvroSerializer implements PayloadSerializer {
 
@@ -56,7 +54,7 @@ public final class AvroSerializer implements PayloadSerializer {
     private static final ConcurrentHashMap<Schema, ThreadLocal<GenericDatumWriter<GenericRecord>>> WRITER_CACHE = new ConcurrentHashMap<>(16);
 
     /**
-     * Фиксированная схема (подходит, если все сообщения одной таблицы/структуры).
+     * @param fixedSchema фиксированная Avro-схема (подходит для одной таблицы/структуры)
      */
     public AvroSerializer(Schema fixedSchema) {
         Objects.requireNonNull(fixedSchema, "schema");
@@ -64,22 +62,21 @@ public final class AvroSerializer implements PayloadSerializer {
     }
 
     /**
-     * Резолвер схемы, предоставляемый извне (например, через локальный AvroSchemaRegistry).
+     * @param resolver пользовательский резолвер схемы (например, из AvroSchemaRegistry)
      */
     public AvroSerializer(SchemaResolver resolver) {
         this.schemaResolver = Objects.requireNonNull(resolver, "schemaResolver");
     }
 
     /**
-     * Удобный конструктор: выбрать схему по имени таблицы из карты.
-     * Ожидается, что в полях присутствует {@link PayloadFields#TABLE}.
+     * @param schemaByTable карта «имя таблицы → схема»; ожидается поле {@link PayloadFields#TABLE}
      */
     public AvroSerializer(final Map<String, Schema> schemaByTable) {
         Objects.requireNonNull(schemaByTable, "schemaByTable");
         this.schemaResolver = fields -> {
             Object t = fields.get(PayloadFields.TABLE);
             if (!(t instanceof String)) {
-                throw new IllegalStateException("Avro: не удалось определить таблицу: отсутствует поле '" + PayloadFields.TABLE + "' или оно не строка");
+                throw new IllegalStateException("Avro: не удалось определить таблицу — отсутствует поле '" + PayloadFields.TABLE + "' или оно не строка");
             }
             final String table = t.toString();
             Schema s = schemaByTable.get(table);
@@ -92,22 +89,15 @@ public final class AvroSerializer implements PayloadSerializer {
 
     // --- PayloadSerializer ---
 
-    /**
-     * Формат для диагностики/логов.
-     */
+    /** Формат, используемый для метрик и логов. */
     @Override
     public String format() { return "avro-binary"; }
 
-    /**
-     * MIME для совместимости с будущими заголовками.
-     */
+    /** MIME-тип сериализованного представления. */
     @Override
     public String contentType() { return "application/avro-binary"; }
 
     @Override
-    /**
-     * Сериализует поля по схеме, выбранной резолвером (без контекста таблицы).
-     */
     public byte[] serialize(Map<String, ?> fields) {
         Objects.requireNonNull(fields, "fields");
         final Schema schema = Objects.requireNonNull(schemaResolver.resolve(fields), "schema");
@@ -141,12 +131,12 @@ public final class AvroSerializer implements PayloadSerializer {
 
     // --- coercion strategies (reduce cognitive complexity of coerceValue) ---
 
-    /** Small strategy interface to coerce a Java value into an Avro-compatible one for a given schema. */
+    /** Стратегия приведения Java-значения к совместимому с Avro типу. */
     private interface Coercer {
         Object apply(Schema schema, Object v, String path);
     }
 
-    /** Registry of coercers per Avro type. */
+    /** Реестр стратегий преобразования по типам Avro. */
     private static final EnumMap<Schema.Type, Coercer> COERCERS = new EnumMap<>(Schema.Type.class);
     static {
         // NULL
@@ -211,7 +201,7 @@ public final class AvroSerializer implements PayloadSerializer {
         // RECORD
         COERCERS.put(Schema.Type.RECORD, AvroSerializer::coerceRecord);
 
-        // UNION (only nullable-union supported here)
+        // UNION (поддерживаем nullable-union: null + конкретный тип)
         COERCERS.put(Schema.Type.UNION, AvroSerializer::coerceUnion);
 
         // ENUM
@@ -221,7 +211,7 @@ public final class AvroSerializer implements PayloadSerializer {
             throw typeError(path, "ENUM", v);
         });
 
-        // FIXED
+        // FIXED (фиксированный размер байтов)
         COERCERS.put(Schema.Type.FIXED, (schema, v, path) -> {
             if (v == null) return null;
             if (v instanceof byte[]) {

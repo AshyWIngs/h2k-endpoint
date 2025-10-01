@@ -1,10 +1,10 @@
-package kz.qazmarka.h2k.kafka.ensure;
+package kz.qazmarka.h2k.kafka.ensure.util;
 
 /**
  * Утилита проверки имён Kafka‑топиков. Выделена из TopicEnsureService, чтобы упростить будущий
  * рефактор и повторное использование правил в тестах/других компонентах.
  */
-final class TopicNameValidator {
+public final class TopicNameValidator {
 
     private TopicNameValidator() {
     }
@@ -12,7 +12,7 @@ final class TopicNameValidator {
     /**
      * Быстрая проверка имени топика: допускаются латиница/цифры/._-, без "."/".." и не длиннее лимита.
      */
-    static boolean isValid(String topic, int maxLength) {
+    public static boolean isValid(String topic, int maxLength) {
         if (topic == null) {
             return false;
         }

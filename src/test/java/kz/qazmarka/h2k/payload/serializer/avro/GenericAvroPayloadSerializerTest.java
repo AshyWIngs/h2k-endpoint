@@ -33,7 +33,7 @@ import org.junit.jupiter.api.Test;
 import kz.qazmarka.h2k.config.H2kConfig;
 import kz.qazmarka.h2k.payload.builder.PayloadBuilder;
 import kz.qazmarka.h2k.schema.decoder.Decoder;
-import kz.qazmarka.h2k.schema.registry.local.AvroSchemaRegistry;
+import kz.qazmarka.h2k.schema.registry.avro.local.AvroSchemaRegistry;
 import kz.qazmarka.h2k.util.RowKeySlice;
 
 /**

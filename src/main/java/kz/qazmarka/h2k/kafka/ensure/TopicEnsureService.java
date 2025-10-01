@@ -25,18 +25,21 @@ import org.apache.kafka.common.errors.TopicExistsException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import kz.qazmarka.h2k.kafka.ensure.admin.KafkaTopicAdmin;
+import kz.qazmarka.h2k.kafka.ensure.config.TopicEnsureConfig;
+import kz.qazmarka.h2k.kafka.ensure.metrics.TopicEnsureState;
+import kz.qazmarka.h2k.kafka.ensure.planner.TopicConfigPlanner;
+import kz.qazmarka.h2k.kafka.ensure.planner.TopicDescribeHandler;
+import kz.qazmarka.h2k.kafka.ensure.planner.TopicParams;
+import kz.qazmarka.h2k.kafka.ensure.state.TopicBackoffManager;
+import kz.qazmarka.h2k.kafka.ensure.util.TopicNameValidator;
+
 /**
  * Внутренняя реализация ensure-логики Kafka-топиков.
  * Публичный API предоставляется обёрткой {@link TopicEnsurer}; данный класс держит бизнес-логику и состояние.
  */
 final class TopicEnsureService implements AutoCloseable {
     static final Logger LOG = LoggerFactory.getLogger(TopicEnsureService.class);
-    /** Ключи часто используемых конфигов темы, выводимых в краткой сводке (TopicConfigPlanner). */
-    static final String CFG_RETENTION_MS       = "retention.ms";
-    static final String CFG_CLEANUP_POLICY     = "cleanup.policy";
-    static final String CFG_COMPRESSION_TYPE   = "compression.type";
-    static final String CFG_MIN_INSYNC_REPLICAS= "min.insync.replicas";
-
     // Сообщение о некорректном имени топика (чтобы не дублировать литерал)
     private static final String WARN_INVALID_TOPIC =
             "Некорректное имя Kafka-топика '{}': допускаются [a-zA-Z0-9._-], длина 1..{}, запрещены '.' и '..'";
@@ -77,9 +80,9 @@ final class TopicEnsureService implements AutoCloseable {
         this.admin = admin;
         this.config = config;
         this.state = state;
-        this.adminTimeoutMs = config.adminTimeoutMs;
-        this.unknownBackoffMs = config.unknownBackoffMs;
-        this.backoffManager = new TopicBackoffManager(state, config.unknownBackoffMs);
+        this.adminTimeoutMs = config.adminTimeoutMs();
+        this.unknownBackoffMs = config.unknownBackoffMs();
+        this.backoffManager = new TopicBackoffManager(state, config.unknownBackoffMs());
         TopicParams params = TopicParams.from(config);
         this.describeHandler = new TopicDescribeHandler(admin, state, backoffManager, adminTimeoutMs);
         this.configPlanner = new TopicConfigPlanner(admin, params, state, backoffManager);
@@ -101,13 +104,13 @@ final class TopicEnsureService implements AutoCloseable {
         state.ensureInvocations.increment();
 
         final String raw = (topic == null) ? "" : topic.trim();
-        final String t = config.topicSanitizer.apply(raw);
+        final String t = config.topicSanitizer().apply(raw);
         if (t.isEmpty()) {
             LOG.warn("Пустое имя Kafka-топика — пропускаю ensure");
             return;
         }
-        if (!TopicNameValidator.isValid(t, config.topicNameMaxLen)) {
-            LOG.warn(WARN_INVALID_TOPIC, t, config.topicNameMaxLen);
+        if (!TopicNameValidator.isValid(t, config.topicNameMaxLen())) {
+            LOG.warn(WARN_INVALID_TOPIC, t, config.topicNameMaxLen());
             return;
         }
         if (fastCacheHit(t)) return;       // уже успешно проверяли
@@ -314,7 +317,7 @@ final class TopicEnsureService implements AutoCloseable {
     public boolean ensureTopicOk(String topic) {
         if (admin == null) return false;               // ensureTopics=false
         final String raw = (topic == null) ? "" : topic.trim();
-        final String t = config.topicSanitizer.apply(raw);
+        final String t = config.topicSanitizer().apply(raw);
         if (t.isEmpty()) return false;
         // Быстрый путь: уже проверяли/создавали ранее — тема точно есть
         if (state.ensured.contains(t)) return true;
@@ -344,11 +347,11 @@ final class TopicEnsureService implements AutoCloseable {
         LinkedHashSet<String> toCheck = new LinkedHashSet<>(topics.size());
         for (String raw : topics) {
             String base = (raw == null) ? "" : raw.trim();
-            String t = config.topicSanitizer.apply(base);
+            String t = config.topicSanitizer().apply(base);
             if (t.isEmpty()) {
                 // пустые имена пропускаем молча
-            } else if (!TopicNameValidator.isValid(t, config.topicNameMaxLen)) {
-                LOG.warn(WARN_INVALID_TOPIC, t, config.topicNameMaxLen);
+            } else if (!TopicNameValidator.isValid(t, config.topicNameMaxLen())) {
+                LOG.warn(WARN_INVALID_TOPIC, t, config.topicNameMaxLen());
             } else if (state.ensured.contains(t)) {
                 state.ensureHitCache.increment();
             } else if (backoffManager.shouldSkip(t)) {
@@ -367,7 +370,7 @@ final class TopicEnsureService implements AutoCloseable {
      * @param toCheck имена тем, прошедших нормализацию
      * @return список отсутствующих тем
      */
-    private ArrayList<String> describeAndCollectMissing(Set<String> toCheck) {
+    private List<String> describeAndCollectMissing(Set<String> toCheck) {
         return describeHandler.describeBatch(toCheck);
     }
 
@@ -377,11 +380,11 @@ final class TopicEnsureService implements AutoCloseable {
      * Быстрый выход, если соответствующие флаги выключены.
      */
     private void maybeEnsureUpgrades(String t) {
-        if ((!config.ensureIncreasePartitions && !config.ensureDiffConfigs) || admin == null) return;
-        if (config.ensureIncreasePartitions) {
+        if ((!config.ensureIncreasePartitions() && !config.ensureDiffConfigs()) || admin == null) return;
+        if (config.ensureIncreasePartitions()) {
             ensurePartitionsIfEnabled(t);
         }
-        if (config.ensureDiffConfigs && !config.topicConfigs.isEmpty()) {
+        if (config.ensureDiffConfigs() && !config.topicConfigs().isEmpty()) {
             ensureConfigsIfEnabled(t);
         }
     }
@@ -424,12 +427,12 @@ final class TopicEnsureService implements AutoCloseable {
 
     private void decideAndMaybeIncreasePartitions(String t, int cur)
             throws InterruptedException, ExecutionException, TimeoutException {
-        if (cur < config.topicPartitions) {
-            LOG.info("Увеличиваю партиции Kafka-топика '{}' {}→{}", t, cur, config.topicPartitions);
-            admin.increasePartitions(t, config.topicPartitions, adminTimeoutMs);
-        } else if (cur > config.topicPartitions) {
+        if (cur < config.topicPartitions()) {
+            LOG.info("Увеличиваю партиции Kafka-топика '{}' {}→{}", t, cur, config.topicPartitions());
+            admin.increasePartitions(t, config.topicPartitions(), adminTimeoutMs);
+        } else if (cur > config.topicPartitions()) {
             LOG.warn("Текущее число партиций Kafka-топика '{}' ({}) больше заданного ({}); уменьшение не поддерживается — оставляю как есть",
-                    t, cur, config.topicPartitions);
+                    t, cur, config.topicPartitions());
         }
     }
 
@@ -441,7 +444,7 @@ final class TopicEnsureService implements AutoCloseable {
                             ConfigResource.Type.TOPIC, t);
             Config cur = fetchCurrentTopicConfig(cr);
 
-            List<AlterConfigOp> ops = diffConfigOps(cur, config.topicConfigs);
+            List<AlterConfigOp> ops = diffConfigOps(cur, config.topicConfigs());
             if (!ops.isEmpty()) {
                 applyConfigChanges(t, cr, ops);
             }
@@ -685,8 +688,8 @@ final class TopicEnsureService implements AutoCloseable {
     public String toString() {
         StringBuilder sb = new StringBuilder(128);
         sb.append("TopicEnsurer{")
-          .append("partitions=").append(config.topicPartitions)
-          .append(", replication=").append(config.topicReplication)
+          .append("partitions=").append(config.topicPartitions())
+          .append(", replication=").append(config.topicReplication())
           .append(", adminTimeoutMs=").append(adminTimeoutMs)
           .append(", unknownBackoffMs=").append(unknownBackoffMs)
           .append(", ensured.size=").append(state.ensured.size())

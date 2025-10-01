@@ -1,4 +1,4 @@
-package kz.qazmarka.h2k.payload.factory;
+package kz.qazmarka.h2k.payload.serializer.internal;
 
 import org.slf4j.Logger;
 
@@ -19,12 +19,20 @@ public final class SerializerResolver {
     private final H2kConfig cfg;
     private final SchemaRegistryClientFactory schemaRegistryClientFactory;
 
+    /**
+     * @param log   логгер, в который будут писаться предупреждения о кастомных сериализаторах
+     * @param cfg   конфигурация h2k
+     * @param schemaRegistryClientFactory фабрика клиентов Schema Registry (для режима confluent)
+     */
     public SerializerResolver(Logger log, H2kConfig cfg, SchemaRegistryClientFactory schemaRegistryClientFactory) {
         this.log = log;
         this.cfg = cfg;
         this.schemaRegistryClientFactory = schemaRegistryClientFactory;
     }
 
+    /**
+     * Подбирает сериализатор на основании конфигурации: сначала кастомная фабрика, затем стандартные режимы.
+     */
     public PayloadSerializer resolve() {
         PayloadSerializer custom = customSerializer();
         if (custom != null) {
@@ -46,6 +54,11 @@ public final class SerializerResolver {
         }
     }
 
+    /**
+     * Пытается создать сериализатор через пользовательский класс (фабрика или прямой сериализатор).
+     *
+     * @return сериализатор или {@code null}, если использовать стандартную конфигурацию
+     */
     private PayloadSerializer customSerializer() {
         String fqcn = cfg.getSerializerFactoryClass();
         if (fqcn == null || fqcn.trim().isEmpty()) {
@@ -85,6 +98,7 @@ public final class SerializerResolver {
         return new GenericAvroPayloadSerializer(cfg, GenericAvroPayloadSerializer.Encoding.BINARY);
     }
 
+    /** Возвращает JSON Avro сериализатор (только для режима generic). */
     private PayloadSerializer avroJsonSerializer() {
         if (cfg.getAvroMode() == H2kConfig.AvroMode.CONFLUENT) {
             throw new IllegalStateException("Avro: режим confluent поддерживает только avro-binary");

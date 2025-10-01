@@ -1,9 +1,5 @@
 package kz.qazmarka.h2k.schema.phoenix;
 
-/**
- * Нормализует значения колонок Phoenix (время, массивы) в привычные типы Java.
- */
-
 import java.lang.reflect.Array;
 import java.sql.Date;
 import java.sql.SQLException;
@@ -29,6 +25,14 @@ public final class PhoenixValueNormalizer {
     private PhoenixValueNormalizer() {
     }
 
+    /**
+     * Приводит значение Phoenix к удобному виду: нормализует время и разворачивает массивы.
+     *
+     * @param value     исходное значение Phoenix
+     * @param table     таблица (для сообщений об ошибках)
+     * @param qualifier имя колонки (для сообщений об ошибках)
+     * @return нормализованное значение (может быть {@code null})
+     */
     public static Object normalizeValue(Object value, TableName table, String qualifier) {
         if (value == null) return null;
         Object temporal = normalizeTemporal(value);
@@ -38,6 +42,7 @@ public final class PhoenixValueNormalizer {
         return temporal;
     }
 
+    /** Преобразует временные типы Phoenix (Timestamp/Date/Time) в epoch millis. */
     static Object normalizeTemporal(Object valueObj) {
         if (valueObj == null) return null;
         UnaryOperator<Object> f = TEMP_NORMALIZERS.get(valueObj.getClass());
@@ -64,6 +69,7 @@ public final class PhoenixValueNormalizer {
     /**
      * Преобразует массив Phoenix (объектный или примитивный) в список Java, минимизируя аллокации.
      */
+    /** Преобразует массив Phoenix (объектный/примитивный) в список без лишних копий. */
     public static List<Object> toListFromRawArray(Object raw) {
         if (raw instanceof Object[]) {
             return Arrays.asList((Object[]) raw);

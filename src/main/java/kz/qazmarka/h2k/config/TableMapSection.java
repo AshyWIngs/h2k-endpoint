@@ -21,6 +21,9 @@ public final class TableMapSection {
 
     /**
      * Читает карты {@code h2k.salt.map} и {@code h2k.capacity.*} из конфигурации.
+     *
+     * @param cfg конфигурация Hadoop с табличными подсказками
+     * @return секция табличных настроек (соль и подсказки ёмкости)
      */
     static TableMapSection from(Configuration cfg) {
         Map<String, Integer> saltMap = Parsers.readSaltMap(cfg, H2kConfig.K_SALT_MAP);
