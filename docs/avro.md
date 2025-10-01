@@ -200,7 +200,11 @@ curl -s http://10.254.3.111:8081/subjects
 Ожидаем: пустой список `[]`.
 
 7. **Работа со схемами**
-   - Регистрация схемы в SR 5.3.8 (subject: TBL_JTI_TRACE_CIS_HISTORY-value)
+  - Регистрация схемы в SR 5.3.8 (subject: TBL_JTI_TRACE_CIS_HISTORY-value)
+
+    > В рабочем контуре сериализатор `ConfluentAvroPayloadSerializer` выполняет регистрацию автоматически при первой отправке события: схема считывается из локальной `conf/avro/*.avsc`, регистрируется в Schema Registry и кешируется (см. `src/main/java/kz/qazmarka/h2k/payload/serializer/avro/ConfluentAvroPayloadSerializer.java`, тесты `ConfluentAvroPayloadSerializerTest`). Инструкция ниже полезна для предварительного прогрева SR вручную либо для отладки.
+
+    > При изменении `.avsc` новая версия автоматически регистрируется при следующей отправке. В случае конфликта с политикой совместимости Schema Registry вернёт ошибку (409/422), а сериализатор выбросит `IllegalStateException` — исправьте схему или настройте совместимость заранее.
 
    На одной из нод (или с рабочего места) поместите файл схемы на диск, например: /opt/hbase-default-current/conf/avro/tbl_jti_trace_cis_history.avsc.
 

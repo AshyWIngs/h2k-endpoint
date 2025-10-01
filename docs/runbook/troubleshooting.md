@@ -7,6 +7,61 @@
 - По умолчанию уровень INFO; DEBUG можно включить для пакета kz.qazmarka.h2k.endpoint.
 - Сообщения исключений и диагностики пишутся на русском языке.
 
+## Отладочное логирование ReplicationEndpoint
+Для детального анализа H2K на RegionServer добавьте в `/opt/hbase-default-current/conf/log4j.properties`
+следующий блок (HBase 1.4.13 использует log4j 1.2.17, синтаксис полностью совместим):
+
+```properties
+# === H2K: отдельная консоль в journald (без вмешательства в root) ===
+log4j.appender.h2k_stdout=org.apache.log4j.ConsoleAppender
+log4j.appender.h2k_stdout.target=System.err
+log4j.appender.h2k_stdout.encoding=UTF-8
+log4j.appender.h2k_stdout.layout=org.apache.log4j.PatternLayout
+log4j.appender.h2k_stdout.layout.ConversionPattern=%d{ISO8601} %-5p %c{1} [%t] %X{table} %X{cf} %X{region} - %m%n
+log4j.appender.h2k_stdout.Threshold=DEBUG
+log4j.appender.h2k_stdout.ImmediateFlush=true
+log4j.throwableRenderer=org.apache.log4j.EnhancedThrowableRenderer
+
+# === Наш пакет целиком — INFO, вывод в отдельный аппендер без дублирования на root ===
+log4j.logger.kz.qazmarka.h2k=INFO,h2k_stdout
+log4j.additivity.kz.qazmarka.h2k=false
+
+# === Точечный DEBUG для ключевых компонентов ===
+log4j.logger.kz.qazmarka.h2k.endpoint.KafkaReplicationEndpoint=DEBUG
+log4j.logger.kz.qazmarka.h2k.endpoint.internal.TopicManager=DEBUG
+log4j.logger.kz.qazmarka.h2k.endpoint.internal.WalEntryProcessor=DEBUG
+log4j.logger.kz.qazmarka.h2k.kafka.producer.BatchSender=DEBUG
+log4j.logger.kz.qazmarka.h2k.kafka.ensure.TopicEnsurer=DEBUG
+log4j.logger.kz.qazmarka.h2k.kafka.ensure.TopicEnsureService=DEBUG
+log4j.logger.kz.qazmarka.h2k.kafka.ensure.planner.TopicConfigPlanner=DEBUG
+log4j.logger.kz.qazmarka.h2k.kafka.ensure.planner.TopicDescribeHandler=DEBUG
+log4j.logger.kz.qazmarka.h2k.payload.builder.PayloadBuilder=DEBUG
+log4j.logger.kz.qazmarka.h2k.payload.serializer.avro.ConfluentAvroPayloadSerializer=DEBUG
+log4j.logger.kz.qazmarka.h2k.payload.serializer.avro.GenericAvroPayloadSerializer=DEBUG
+log4j.logger.kz.qazmarka.h2k.schema.phoenix.PhoenixPkParser=DEBUG
+log4j.logger.kz.qazmarka.h2k.schema.phoenix.PhoenixColumnTypeRegistry=DEBUG
+log4j.logger.kz.qazmarka.h2k.schema.registry.avro.phoenix.AvroPhoenixSchemaRegistry=DEBUG
+log4j.logger.kz.qazmarka.h2k.schema.registry.json.JsonSchemaRegistry=DEBUG
+log4j.logger.kz.qazmarka.h2k.config.EnsureSection=DEBUG
+
+# === Репликация HBase и шумные подсистемы ===
+log4j.logger.org.apache.hadoop.hbase.replication=DEBUG
+log4j.logger.org.apache.kafka=WARN
+log4j.logger.org.apache.zookeeper=WARN
+log4j.logger.org.apache.hadoop=WARN
+log4j.logger.org.apache.hadoop.hbase=WARN
+log4j.logger.org.apache.phoenix=WARN
+```
+
+- `h2k_stdout` — выделенный консольный аппендер с шаблоном, который подхватывает journald; уровень `DEBUG`
+  на аппендере позволяет не терять сообщения от точечных логгеров.
+- Пакет `kz.qazmarka.h2k` остаётся на `INFO`, поэтому рабочие логи не превращаются в «простыню».
+- Включены DEBUG-журналы для компонентов, которые наиболее полезны при отладке: входящий поток WAL,
+  построение payload, ensure Kafka-топиков, сериализаторы Avro и Phoenix-реестры.
+- Репликацию HBase можно вернуть на `INFO`, когда отладка завершена: оставьте строку, заменив `DEBUG → INFO`.
+- После изменения файла перезапустите RegionServer (`service hbase-regionserver restart` или
+  `bin/hbase-daemon.sh restart regionserver`) и проверяйте вывод `journalctl -fu hbase-regionserver`.
+
 ## Проверка конфигурации
 - Убедиться, что задан h2k.kafka.bootstrap.servers.
 - Проверить корректность h2k.topic.pattern и h2k.cf.list (несуществующие CF игнорируются).
