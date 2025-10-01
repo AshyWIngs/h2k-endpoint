@@ -220,7 +220,7 @@ cfg['CONFIG'].select { |k,_| k.start_with?('h2k.') }
    - Kafka-продьюсер: `ProducerMetrics` (`records-send-rate`, `request-latency-avg`, `record-error-rate`).
    - Schema Registry: `curl $SR/subjects` и `journalctl -u schema-registry` — исключаем 409/500 ошибки, следим за latency.
    - `TopicManager.getMetrics()` → `ensure.*`, `unknown.backoff.size`, `wal.entries.total`, `wal.rows.total`, `wal.rows.filtered`, `schema.registry.register.success/failures` — удобно отдавать в JMX.
-   - `WalEntryProcessor.metrics()` для локального контроля и INFO-лог `WAL throughput: ... rows/sec=...` каждые ~5 секунд.
+   - `WalEntryProcessor.metrics()` для локального контроля и INFO-лог `Скорость WAL: ... строк/с=...` каждые ~5 секунд.
 3. **Расширение.** Если в течение 1–2 часов производительность и задержки стабильны, разложите JAR на остальные RS, поочерёдно включайте peer и проверяйте метрики.
 4. **Откат.** При проблемах:
    - `disable_peer 'h2k_balanced'` на всех RS.
@@ -241,6 +241,10 @@ cfg['CONFIG'].select { |k,_| k.start_with?('h2k.') }
         ```
         log4j.logger.kz.qazmarka.h2k.endpoint=DEBUG
         ```
+    - Точечные логгеры:
+        - `kz.qazmarka.h2k.schema.registry.avro.phoenix.AvroPhoenixSchemaRegistry` — путь к `.avsc`, PK, соль, capacity.
+        - `kz.qazmarka.h2k.payload.serializer.avro.ConfluentAvroPayloadSerializer` — сравнение локальной схемы с SR и
+          фиксация первой успешной/неуспешной регистрации.
 
 ## Подсказки по тюнингу
 

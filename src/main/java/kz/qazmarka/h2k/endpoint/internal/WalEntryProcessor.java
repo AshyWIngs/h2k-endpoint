@@ -428,7 +428,7 @@ public final class WalEntryProcessor {
 
         if (LOG.isInfoEnabled()) {
             LOG.info(
-                    "WAL throughput: entries={}, rows={}, rows/sec={}, cells={}, cells/sec={}, filteredRows={}, intervalMs={}",
+                    "Скорость WAL: записей={}, строк={}, строк/с={}, ячеек={}, ячеек/с={}, отфильтровано_строк={}, интервал_мс={}",
                     entries,
                     rows,
                     formatDecimal(rowsPerSec),

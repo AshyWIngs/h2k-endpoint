@@ -66,7 +66,7 @@ public final class AvroSchemaRegistry {
             throw new IllegalArgumentException("Пустое имя таблицы");
         }
         final String cacheKey = tableName.toUpperCase(Locale.ROOT);
-        return cache.computeIfAbsent(cacheKey, k -> load(resolveFileName(k)));
+        return cache.computeIfAbsent(cacheKey, k -> load(resolvePath(k)));
     }
 
     /**
@@ -83,14 +83,25 @@ public final class AvroSchemaRegistry {
         return cache.size();
     }
 
-    // ---------- internal ----------
-
-    private String resolveFileName(String upperTableName) {
-        return upperTableName.toLowerCase(Locale.ROOT) + ".avsc";
+    /**
+     * @param tableName имя таблицы (например, TBL_FOO)
+     * @return путь к Avro-схеме на диске
+     */
+    public Path schemaPath(String tableName) {
+        if (tableName == null || tableName.isEmpty()) {
+            throw new IllegalArgumentException("Пустое имя таблицы");
+        }
+        return resolvePath(tableName.toUpperCase(Locale.ROOT));
     }
 
-    private Schema load(String fileName) {
-        final Path path = baseDir.resolve(fileName);
+    // ---------- internal ----------
+
+    private Path resolvePath(String upperTableName) {
+        String fileName = upperTableName.toLowerCase(Locale.ROOT) + ".avsc";
+        return baseDir.resolve(fileName);
+    }
+
+    private Schema load(Path path) {
         try (BufferedReader r = Files.newBufferedReader(path, StandardCharsets.UTF_8)) {
             final String json = readAll(r);
             // Каждый вызов использует локальный Parser, чтобы избежать гонок за внутреннее состояние парсера.

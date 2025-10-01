@@ -10,9 +10,11 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.LongAdder;
 
 import org.apache.avro.Schema;
+import org.apache.avro.SchemaNormalization;
 import org.apache.hadoop.hbase.TableName;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -21,6 +23,7 @@ import kz.qazmarka.h2k.config.H2kConfig;
 import kz.qazmarka.h2k.payload.serializer.TableAwarePayloadSerializer;
 import kz.qazmarka.h2k.schema.registry.avro.local.AvroSchemaRegistry;
 
+import io.confluent.kafka.schemaregistry.client.SchemaMetadata;
 import io.confluent.kafka.schemaregistry.client.SchemaRegistryClient;
 import io.confluent.kafka.schemaregistry.client.rest.exceptions.RestClientException;
 import io.confluent.kafka.serializers.AbstractKafkaAvroSerDeConfig;
@@ -47,6 +50,9 @@ public final class ConfluentAvroPayloadSerializer implements TableAwarePayloadSe
     private final String subjectStrategy;
     private final String subjectPrefix;
     private final String subjectSuffix;
+
+    private final AtomicBoolean firstSuccessLogged = new AtomicBoolean();
+    private final AtomicBoolean firstFailureLogged = new AtomicBoolean();
 
     /** subject -> schema info. */
     private final ConcurrentHashMap<String, SchemaInfo> cache = new ConcurrentHashMap<>();
@@ -161,8 +167,13 @@ public final class ConfluentAvroPayloadSerializer implements TableAwarePayloadSe
     private SchemaInfo register(TableName table, String subject) {
         String tableKey = table.getNameAsString();
         Schema schema = loadSchema(tableKey);
+        maybeLogSchemaComparison(subject, schema);
         int schemaId = registerSchema(subject, schema);
         LOG.debug("Avro Confluent: схема зарегистрирована: subject={}, id={}.", subject, schemaId);
+        if (firstSuccessLogged.compareAndSet(false, true)) {
+            LOG.debug("Avro Confluent: первая успешная регистрация схемы — subject={}, id={}, urls={}",
+                    subject, schemaId, registryUrls);
+        }
         return new SchemaInfo(schemaId, new AvroSerializer(schema));
     }
 
@@ -301,11 +312,54 @@ public final class ConfluentAvroPayloadSerializer implements TableAwarePayloadSe
             return id;
         } catch (RestClientException ex) {
             schemaRegisterFailure.increment();
+            if (firstFailureLogged.compareAndSet(false, true)) {
+                LOG.debug("Avro Confluent: первая ошибка регистрации схемы — subject={}, urls={}, error={}",
+                        subject, registryUrls, restError(ex));
+            }
             throw new IllegalStateException("Avro: регистрация схемы в Schema Registry не удалась: "
                     + restError(ex) + ", subject=" + subject, ex);
         } catch (java.io.IOException ex) {
             schemaRegisterFailure.increment();
+            if (firstFailureLogged.compareAndSet(false, true)) {
+                LOG.debug("Avro Confluent: первая ошибка регистрации схемы — subject={}, urls={}, error={}",
+                        subject, registryUrls, ex.getMessage());
+            }
             throw new IllegalStateException("Avro: ошибка сетевого взаимодействия с Schema Registry: " + ex.getMessage(), ex);
+        }
+    }
+
+    private void maybeLogSchemaComparison(String subject, Schema localSchema) {
+        if (!LOG.isDebugEnabled()) {
+            return;
+        }
+        try {
+            SchemaMetadata metadata = schemaRegistryClient.getLatestSchemaMetadata(subject);
+            if (metadata == null) {
+                LOG.debug("Avro Confluent: subject={} отсутствует в Schema Registry — будет зарегистрирована новая версия.", subject);
+                return;
+            }
+            Schema remoteSchema = new Schema.Parser().parse(metadata.getSchema());
+            long localFingerprint = SchemaNormalization.parsingFingerprint64(localSchema);
+            long remoteFingerprint = SchemaNormalization.parsingFingerprint64(remoteSchema);
+            if (localFingerprint == remoteFingerprint) {
+                LOG.debug("Avro Confluent: локальная схема совпадает с последней в SR (subject={}, version={}, id={}, fingerprint=0x{}).",
+                        subject, metadata.getVersion(), metadata.getId(), Long.toHexString(localFingerprint));
+            } else {
+                LOG.debug("Avro Confluent: обнаружено расхождение схем (subject={}): локальная fingerprint=0x{}, SR fingerprint=0x{}, version={}, id={}.",
+                        subject,
+                        Long.toHexString(localFingerprint),
+                        Long.toHexString(remoteFingerprint),
+                        metadata.getVersion(),
+                        metadata.getId());
+            }
+        } catch (RestClientException ex) {
+            if (ex.getStatus() == 404) {
+                LOG.debug("Avro Confluent: subject={} ещё не зарегистрирован в Schema Registry (404).", subject);
+            } else {
+                LOG.debug("Avro Confluent: не удалось получить актуальную схему subject={} из SR: {}", subject, restError(ex));
+            }
+        } catch (java.io.IOException ex) {
+            LOG.debug("Avro Confluent: не удалось получить актуальную схему subject={} из SR: {}", subject, ex.getMessage());
         }
     }
 

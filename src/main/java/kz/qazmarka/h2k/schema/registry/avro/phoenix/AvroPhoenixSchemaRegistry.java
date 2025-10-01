@@ -1,5 +1,6 @@
 package kz.qazmarka.h2k.schema.registry.avro.phoenix;
 
+import java.nio.file.Path;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Locale;
@@ -118,6 +119,7 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
 
     /** Загружает Avro-схему и извлекает из неё типы, PK, соль и подсказку ёмкости. */
     private TableMetadata loadMetadata(TableName table) {
+        Path schemaPath = avroRegistry.schemaPath(table.getNameAsString());
         Schema schema = avroRegistry.getByTable(table.getNameAsString());
         Map<String, String> types = new HashMap<>(Math.max(8, schema.getFields().size() * 3));
         for (Field field : schema.getFields()) {
@@ -134,6 +136,19 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
         String[] pk = readPk(schema);
         Integer salt = readSaltBytes(schema, table);
         Integer capacity = readCapacityHint(schema, table);
+        if (LOG.isDebugEnabled()) {
+            String pkText = pk.length == 0 ? "-" : String.join(",", pk);
+            String saltText = salt == null ? "-" : salt.toString();
+            String capacityText = capacity == null ? "-" : capacity.toString();
+            LOG.debug("Avro-схема {} загружена: файл={}, полей={}, pk={}, соль={}, capacity={}, cacheSize={}",
+                    table.getNameAsString(),
+                    schemaPath.toAbsolutePath(),
+                    schema.getFields().size(),
+                    pkText,
+                    saltText,
+                    capacityText,
+                    avroRegistry.cacheSize());
+        }
         return new TableMetadata(table, types, pk, fallback, salt, capacity);
     }
 

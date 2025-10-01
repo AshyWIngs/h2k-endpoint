@@ -10,8 +10,12 @@ import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.util.Bytes;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import kz.qazmarka.h2k.config.H2kConfig;
+import kz.qazmarka.h2k.config.H2kConfig.TableOptionsSnapshot;
+import kz.qazmarka.h2k.config.H2kConfig.ValueSource;
 import kz.qazmarka.h2k.schema.decoder.Decoder;
 import kz.qazmarka.h2k.util.Maps;
 import kz.qazmarka.h2k.util.RowKeySlice;
@@ -22,9 +26,12 @@ import kz.qazmarka.h2k.util.RowKeySlice;
  */
 final class RowPayloadAssembler {
 
+    private static final Logger LOG = LoggerFactory.getLogger(RowPayloadAssembler.class);
+
     private final Decoder decoder;
     private final H2kConfig cfg;
     private final QualifierCache qualifierCache = new QualifierCache();
+    private final ConcurrentHashMap<String, Boolean> tableOptionsLogged = new ConcurrentHashMap<>();
 
     /**
      * @param decoder декодер Phoenix-значений, используемый для преобразования ячеек в Java-тип
@@ -50,6 +57,9 @@ final class RowPayloadAssembler {
                                  RowKeySlice rowKey,
                                  long walSeq,
                                  long walWriteTime) {
+        if (LOG.isDebugEnabled()) {
+            debugTableOptions(table);
+        }
         final boolean includeMeta = cfg.isIncludeMeta();
         final boolean includeWalMeta = includeMeta && cfg.isIncludeMetaWal();
         final boolean includeRowKey = cfg.isIncludeRowKey();
@@ -78,6 +88,26 @@ final class RowPayloadAssembler {
         RowKeyWriter.addRowKeyIfPresent(includeRowKeyPresent, obj, rowKey, rowkeyB64, saltBytes);
         MetaWriter.addWalMeta(includeWalMeta, obj, walSeq, walWriteTime);
         return obj;
+    }
+
+    private void debugTableOptions(TableName table) {
+        String tableName = table.getNameWithNamespaceInclAsString();
+        if (tableOptionsLogged.putIfAbsent(tableName, Boolean.TRUE) != null) {
+            return;
+        }
+        TableOptionsSnapshot snapshot = cfg.describeTableOptions(table);
+        String saltSource = label(snapshot.saltSource());
+        String capacitySource = label(snapshot.capacitySource());
+        LOG.debug("Таблица {}: соль={} ({}), capacityHint={} ({})",
+                tableName,
+                snapshot.saltBytes(),
+                saltSource,
+                snapshot.capacityHint(),
+                capacitySource);
+    }
+
+    private static String label(ValueSource source) {
+        return source == null ? "" : source.label();
     }
 
     /**

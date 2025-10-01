@@ -36,6 +36,7 @@ log4j.logger.kz.qazmarka.h2k.kafka.ensure.TopicEnsureService=DEBUG
 log4j.logger.kz.qazmarka.h2k.kafka.ensure.planner.TopicConfigPlanner=DEBUG
 log4j.logger.kz.qazmarka.h2k.kafka.ensure.planner.TopicDescribeHandler=DEBUG
 log4j.logger.kz.qazmarka.h2k.payload.builder.PayloadBuilder=DEBUG
+log4j.logger.kz.qazmarka.h2k.payload.builder.RowPayloadAssembler=DEBUG
 log4j.logger.kz.qazmarka.h2k.payload.serializer.avro.ConfluentAvroPayloadSerializer=DEBUG
 log4j.logger.kz.qazmarka.h2k.payload.serializer.avro.GenericAvroPayloadSerializer=DEBUG
 log4j.logger.kz.qazmarka.h2k.schema.phoenix.PhoenixPkParser=DEBUG
@@ -82,6 +83,8 @@ log4j.logger.org.apache.phoenix=WARN
 - Если длина не совпадает — выбрасывается IllegalStateException с сообщением «ожидалось N байт».
 - При неизвестном типе смотрите WARN от PhoenixColumnTypeRegistry (тип будет принят как VARCHAR).
 - Для phoenix-avro проверить `.avsc` (атрибуты `h2k.phoenixType`/`h2k.pk`) и, при необходимости, schema.json для фолбэка.
+- Для проверки используемых `.avsc` включите DEBUG логгер `kz.qazmarka.h2k.schema.registry.avro.phoenix.AvroPhoenixSchemaRegistry` —
+  он выводит путь к файлу, PK, соль и `capacityHint`.
 
 ### Ошибки при формировании JSON
 - Null в обязательных параметрах (TableName/qualifier) → NullPointerException.
@@ -109,6 +112,8 @@ log4j.logger.org.apache.phoenix=WARN
 - `status 'replication'` в HBase shell — показывает статус пиров.
 - Graylog/journald — для поиска ошибок по ключевым словам (IllegalStateException, NullPointerException, KafkaException).
 - Логи с префиксом `kz.qazmarka.h2k.endpoint` — основной источник диагностики.
+- DEBUG логгер `kz.qazmarka.h2k.payload.serializer.avro.ConfluentAvroPayloadSerializer` показывает сравнение
+  локальной схемы с актуальной версией в Confluent SR и фиксирует первую успешную/неуспешную регистрацию.
 
 ---
 

@@ -5,6 +5,8 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Properties;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.TableName;
@@ -300,6 +302,8 @@ public final class H2kConfig {
     private final Map<String, Integer> capacityHintByTable;
     /** Внешний поставщик табличных метаданных (например, Avro-схемы). */
     private final PhoenixTableMetadataProvider tableMetadataProvider;
+    /** Кэш вычисленных опций таблиц для повторного использования в горячем пути. */
+    private final ConcurrentMap<String, TableOptionsSnapshot> tableOptionsCache = new ConcurrentHashMap<>(8);
 
     /**
      * Приватный конструктор: вызывается только билдером для инициализации
@@ -1003,21 +1007,7 @@ public final class H2kConfig {
      * @return 0 если соль не используется; {@code >0} — число байт соли
      */
     public int getSaltBytesFor(TableName table) {
-        String full = Parsers.up(table.getNameAsString()); // NS:QUALIFIER
-        Integer v = saltBytesByTable.get(full);
-        if (v != null) return v; // auto-unboxing
-        v = saltBytesByTable.get(Parsers.up(table.getQualifierAsString()));
-        if (v != null) {
-            return v;
-        }
-        Integer meta = tableMetadataProvider.saltBytes(table);
-        if (meta != null) {
-            if (meta < 0) {
-                return 0;
-            }
-            return meta > 8 ? 8 : meta;
-        }
-        return 0;
+        return resolveTableOptions(table).saltBytes();
     }
 
     /** Удобный булев геттер: используется ли соль для таблицы. */
@@ -1038,19 +1028,127 @@ public final class H2kConfig {
      * @return ожидаемое число полей в корневом JSON (0 — если подсказка не задана)
      */
     public int getCapacityHintFor(TableName table) {
-        String full = Parsers.up(table.getNameAsString()); // NS:QUALIFIER
-        Integer v = capacityHintByTable.get(full);
-        if (v != null) return v; // auto-unboxing
-        v = capacityHintByTable.get(Parsers.up(table.getQualifierAsString()));
-        if (v != null) {
-            return v;
-        }
-        Integer meta = tableMetadataProvider.capacityHint(table);
-        if (meta != null && meta > 0) {
-            return meta;
-        }
-        return 0;
+        return resolveTableOptions(table).capacityHint();
     }
+
+    /**
+     * Возвращает снимок табличных опций (соль/ёмкость) вместе с источниками данных.
+     * Удобно для отладочного логирования и диагностических сценариев.
+     */
+    public TableOptionsSnapshot describeTableOptions(TableName table) {
+        return resolveTableOptions(table);
+    }
+
+    private TableOptionsSnapshot resolveTableOptions(TableName table) {
+        if (table == null) {
+            throw new NullPointerException("table == null");
+        }
+        String fullName = Parsers.up(table.getNameAsString());
+        return tableOptionsCache.computeIfAbsent(fullName, key -> computeTableOptions(table));
+    }
+
+    private TableOptionsSnapshot computeTableOptions(TableName table) {
+        String full = Parsers.up(table.getNameAsString());
+        String qualifier = Parsers.up(table.getQualifierAsString());
+
+        int saltBytes = 0;
+        ValueSource saltSource = ValueSource.DEFAULT;
+
+        Integer explicitSalt = saltBytesByTable.get(full);
+        if (explicitSalt == null) {
+            explicitSalt = saltBytesByTable.get(qualifier);
+        }
+        if (explicitSalt != null) {
+            saltBytes = clampSalt(explicitSalt);
+            saltSource = ValueSource.EXPLICIT;
+        } else {
+            Integer metaSalt = tableMetadataProvider.saltBytes(table);
+            if (metaSalt != null) {
+                saltBytes = clampSalt(metaSalt);
+                saltSource = ValueSource.AVRO;
+            }
+        }
+
+        int capacityHint = 0;
+        ValueSource capacitySource = ValueSource.DEFAULT;
+
+        Integer explicitCapacity = capacityHintByTable.get(full);
+        if (explicitCapacity == null) {
+            explicitCapacity = capacityHintByTable.get(qualifier);
+        }
+        if (explicitCapacity != null) {
+            capacityHint = Math.max(0, explicitCapacity);
+            capacitySource = ValueSource.EXPLICIT;
+        } else {
+            Integer metaCapacity = tableMetadataProvider.capacityHint(table);
+            if (metaCapacity != null && metaCapacity > 0) {
+                capacityHint = metaCapacity;
+                capacitySource = ValueSource.AVRO;
+            }
+        }
+
+        return new TableOptionsSnapshot(saltBytes, saltSource, capacityHint, capacitySource);
+    }
+
+    private static int clampSalt(Integer raw) {
+        if (raw == null) {
+            return 0;
+        }
+        int v = raw;
+        if (v < 0) {
+            return 0;
+        }
+        return (v > 8) ? 8 : v;
+    }
+
+    /** Источники табличных параметров (соль/ёмкость). */
+    public enum ValueSource {
+        EXPLICIT("конфигурация h2k.*"),
+        AVRO("Avro-схема"),
+        DEFAULT("значение по умолчанию");
+
+        private final String label;
+
+        ValueSource(String label) {
+            this.label = label;
+        }
+
+        public String label() {
+            return label;
+        }
+    }
+
+    /** Иммутабельный снимок табличных опций. */
+    public static final class TableOptionsSnapshot {
+        private final int saltBytes;
+        private final ValueSource saltSource;
+        private final int capacityHint;
+        private final ValueSource capacitySource;
+
+        TableOptionsSnapshot(int saltBytes, ValueSource saltSource, int capacityHint, ValueSource capacitySource) {
+            this.saltBytes = saltBytes;
+            this.saltSource = saltSource;
+            this.capacityHint = capacityHint;
+            this.capacitySource = capacitySource;
+        }
+
+        public int saltBytes() {
+            return saltBytes;
+        }
+
+        public ValueSource saltSource() {
+            return saltSource;
+        }
+
+        public int capacityHint() {
+            return capacityHint;
+        }
+
+        public ValueSource capacitySource() {
+            return capacitySource;
+        }
+    }
+
     /**
      * Строковое представление конфигурации с маскировкой bootstrap.servers.
      * Используется только для диагностических логов.

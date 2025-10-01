@@ -35,18 +35,19 @@ add_peer 'h2k_balanced',
 
       'h2k.decode.mode'                     => 'phoenix-avro',          # 'simple' | 'phoenix-avro' | 'json-phoenix'
       # TIMESTAMP/DATE/TIME -> epoch millis; любой ARRAY -> JSON‑массив
-      #'h2k.schema.path'                     => '/opt/hbase-default-current/conf/schema.json', # фолбэк на время миграции
+      #'h2k.schema.path'                    => '/opt/hbase-default-current/conf/schema.json', # фолбэк на время миграции
       # формат полезной нагрузки
+
+      # Для Confluent Schema Registry:
       'h2k.payload.format'                  => 'avro-binary',           # дефолт json-eachrow
-      'h2k.avro.mode'                       => 'generic',
+      'h2k.avro.mode'                       => 'confluent',
+      'h2k.avro.sr.urls'                    => 'http://10.254.3.111:8081,http://10.254.3.112:8081,http://10.254.3.113:8081',
+      'h2k.avro.subject.strategy'           => 'table',
+      'h2k.avro.subject.suffix'             => '-value',
       # где лежат *.avsc
       'h2k.avro.schema.dir'                 => '/opt/hbase-default-current/conf/avro',
-      # Для Confluent Schema Registry раскомментируйте и заполните:
-      # 'h2k.avro.mode'                     => 'confluent',
-      # 'h2k.avro.sr.urls'                  => 'http://10.254.3.111:8081,http://10.254.3.112:8081,http://10.254.3.113:8081',
       # 'h2k.avro.sr.auth.basic.username'  => 'svc-hbase',
       # 'h2k.avro.sr.auth.basic.password'  => '***',
-      # 'h2k.avro.subject.strategy'        => 'table',
       'h2k.json.serialize.nulls'            => 'false',
 
       # Метаполя в полезной нагрузке

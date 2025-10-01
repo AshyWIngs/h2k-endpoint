@@ -121,7 +121,7 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
         try {
             final Map<String, Integer> saltMap = h2k.getSaltBytesByTable();
             if (saltMap == null || saltMap.isEmpty()) {
-                LOG.debug("Соль rowkey не задана (h2k.salt.map).");
+                LOG.debug("Соль rowkey не задана в h2k.salt.map; будут использованы значения из Avro-схем (см. DEBUG при обработке таблиц).");
             } else {
                 LOG.debug("Соль rowkey (h2k.salt.map): {} ({} записей)", saltMap, saltMap.size());
             }
@@ -183,7 +183,7 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
             return;
         }
         try {
-            LOG.info("Payload: {}", payload.describeSerializer());
+            LOG.info("Параметры payload: {}", payload.describeSerializer());
         } catch (RuntimeException ex) {
             LOG.warn("Не удалось определить активный сериализатор payload: {}", ex.toString());
             if (LOG.isDebugEnabled()) {
