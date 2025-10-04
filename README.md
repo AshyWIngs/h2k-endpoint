@@ -251,8 +251,27 @@ Endpoint умеет формировать payload в нескольких фо�
   java -jar benchmarks/target/h2k-endpoint-benchmarks-<version>.jar WalEntryProcessorBenchmark.processWideRow
   ```
 
-Бенчмарки моделируют типовые сценарии: небольшие и средние партии для `BatchSender`, а также обработку строк
+Бенчмарки моделируют типовые сценарии: Каждый сценарий можно запускать изолированно через `java -jar benchmarks/target/h2k-endpoint-benchmarks-<version>.jar <BenchmarkName>[.<method>]`. небольшие и средние партии для `BatchSender`, а также обработку строк
 `WalEntryProcessor` с фильтром CF и без него. Результаты удобно сравнивать до/после изменений горячего пути.
+
+**Интерпретация отчёта JMH (режим AverageTime, микросекунды на операцию):**
+- `Score` — среднее время одной операции; `Error` — доверительный интервал 99%.
+- Мы фиксируем baseline на чистом запуске и отслеживаем относительные изменения (рост >10–15% считается регрессией).
+
+**Сценарии:**
+Avro Confluent — основной формат на проде, поэтому отдельные сценарии измеряют PayloadBuilder в режиме Schema Registry.
+- `BatchSenderBenchmark.tryFlushSmall` — фоновые партии ~32 событий, проверяет скорость авто-сброса.
+- `BatchSenderBenchmark.strictFlushMedium` — имитация остановки peer: flush 256 записей, ожидаем {@code < 50 мс}.
+- `BatchSenderBenchmark.tryFlushLarge` — всплеск нагрузки, оценивает стоимость адаптации awaitEvery.
+- `WalEntryProcessorBenchmark.processSmallRow` — базовый горячий путь без фильтрации.
+- `WalEntryProcessorBenchmark.processWideRow` — таблицы с десятками колонок и большим payload.
+- `WalEntryProcessorBenchmark.processWithFilterHit` — успешная фильтрация CF.
+- `WalEntryProcessorBenchmark.processWithFilterMiss` — отрицательное срабатывание фильтра (должно быть дешёвым).
+- `PayloadBuilderConfluentBenchmark.serializeHot` — основной продовый путь: Confluent Avro с прогретым Schema Registry.
+- `PayloadBuilderConfluentBenchmark.serializeWithRegistration` — стоимость первичной регистрации Avro-схемы в Schema Registry.
+- `TopicManagerBenchmark.resolveCached` — проверка кеша имён топиков.
+- `TopicManagerBenchmark.resolveUnique` — нагрузка на кеш при большом числе таблиц.
+- `TopicManagerBenchmark.ensureNoop` — оверхед проверок ensure при отключённом режиме.
 
 ## FAQ
 
@@ -272,10 +291,14 @@ Endpoint умеет формировать payload в нескольких фо�
 
 ## Структура пакетов
 
+- `kz.qazmarka.h2k.endpoint.topic` — менеджмент Kafka-топиков и ensure-метрики.
+- `kz.qazmarka.h2k.endpoint.processing` — горячий путь WAL→Kafka (группировка, фильтрация, метрики).
+- `kz.qazmarka.h2k.kafka.producer.batch` — адаптивный `BatchSender`, метрики и тюнер.
+- `kz.qazmarka.h2k.kafka.support` — общие утилиты Kafka, в т.ч. `BackoffPolicy`.
 - `kz.qazmarka.h2k.kafka.ensure` — фасады `TopicEnsurer`/`TopicEnsureService`; вспомогательные классы распределены по подпакетам `admin`, `planner`, `state`, `metrics`, `config`, `util`.
 - `kz.qazmarka.h2k.payload.serializer` — реализация сериализаторов и внутреннего резолвера (`serializer.internal.SerializerResolver`).
-- Модуль `endpoint` содержит production‑код и тесты, модуль `benchmarks` — JMH‑сценарии.
 - `kz.qazmarka.h2k.schema.registry.json` — JSONEachRow (Schema Registry JSON / внешние JSON‑схемы).
 - `kz.qazmarka.h2k.schema.registry.avro.local` — локальные `.avsc` для `payload.format=avro-*` в режиме `generic`.
 - `kz.qazmarka.h2k.schema.registry.avro.phoenix` — Phoenix‑метаданные из Avro (соль, PK) для Avro режимов.
+- Модуль `endpoint` содержит production‑код и тесты, модуль `benchmarks` — JMH‑сценарии.
 - `docs/runbook` — эксплуатационный runbook и диагностика; ссылки синхронизированы с конфигами в `conf/`.

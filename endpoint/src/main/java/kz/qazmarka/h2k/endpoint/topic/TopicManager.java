@@ -1,4 +1,4 @@
-package kz.qazmarka.h2k.endpoint.internal;
+package kz.qazmarka.h2k.endpoint.topic;
 
 import java.util.Collections;
 import java.util.LinkedHashMap;

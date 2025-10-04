@@ -28,9 +28,9 @@ log4j.additivity.kz.qazmarka.h2k=false
 
 # === Точечный DEBUG для ключевых компонентов ===
 log4j.logger.kz.qazmarka.h2k.endpoint.KafkaReplicationEndpoint=DEBUG
-log4j.logger.kz.qazmarka.h2k.endpoint.internal.TopicManager=DEBUG
-log4j.logger.kz.qazmarka.h2k.endpoint.internal.WalEntryProcessor=DEBUG
-log4j.logger.kz.qazmarka.h2k.kafka.producer.BatchSender=DEBUG
+log4j.logger.kz.qazmarka.h2k.endpoint.topic.TopicManager=DEBUG
+log4j.logger.kz.qazmarka.h2k.endpoint.processing.WalEntryProcessor=DEBUG
+log4j.logger.kz.qazmarka.h2k.kafka.producer.batch.BatchSender=DEBUG
 log4j.logger.kz.qazmarka.h2k.kafka.ensure.TopicEnsurer=DEBUG
 log4j.logger.kz.qazmarka.h2k.kafka.ensure.TopicEnsureService=DEBUG
 log4j.logger.kz.qazmarka.h2k.kafka.ensure.planner.TopicConfigPlanner=DEBUG

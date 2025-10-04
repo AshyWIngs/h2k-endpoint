@@ -1,4 +1,4 @@
-package kz.qazmarka.h2k.kafka.producer;
+package kz.qazmarka.h2k.kafka.producer.batch;
 
 import java.util.Arrays;
 import java.util.Collection;

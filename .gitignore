@@ -11,6 +11,7 @@ logs/**
 .classpath
 .project
 .settings/
+.codacy
 
 # --- Мусор ОС ---
 .DS_Store

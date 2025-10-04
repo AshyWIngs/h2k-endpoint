@@ -1,8 +1,9 @@
-package kz.qazmarka.h2k.endpoint.internal.bench;
+package kz.qazmarka.h2k.endpoint.processing.bench;
 
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
 import org.apache.hadoop.conf.Configuration;
@@ -15,6 +16,9 @@ import org.apache.hadoop.hbase.wal.WALKey;
 import org.apache.kafka.clients.producer.MockProducer;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
 import org.openjdk.jmh.annotations.Benchmark;
+import org.openjdk.jmh.annotations.BenchmarkMode;
+import org.openjdk.jmh.annotations.Mode;
+import org.openjdk.jmh.annotations.OutputTimeUnit;
 import org.openjdk.jmh.annotations.Level;
 import org.openjdk.jmh.annotations.Scope;
 import org.openjdk.jmh.annotations.Setup;
@@ -23,17 +27,26 @@ import org.openjdk.jmh.annotations.TearDown;
 import org.openjdk.jmh.infra.Blackhole;
 
 import kz.qazmarka.h2k.config.H2kConfig;
-import kz.qazmarka.h2k.endpoint.internal.TopicManager;
-import kz.qazmarka.h2k.endpoint.internal.WalEntryProcessor;
+import kz.qazmarka.h2k.endpoint.topic.TopicManager;
+import kz.qazmarka.h2k.endpoint.processing.WalEntryProcessor;
 import kz.qazmarka.h2k.kafka.ensure.TopicEnsurer;
-import kz.qazmarka.h2k.kafka.producer.BatchSender;
+import kz.qazmarka.h2k.kafka.producer.batch.BatchSender;
 import kz.qazmarka.h2k.payload.builder.PayloadBuilder;
 import kz.qazmarka.h2k.schema.decoder.SimpleDecoder;
 
 /**
- * Бенчмарки горячего пути {@link WalEntryProcessor#process}: оцениваем стоимость обработки
- * небольших и «толстых» WAL-записей, а также влияние фильтрации по Column Family.
+ * Бенчмарки горячего пути {@link WalEntryProcessor#process}: измеряем среднюю стоимость обработки
+ * компактных и «толстых» WAL-записей, а также накладные расходы фильтрации по Column Family.
+ *
+ * Формат вывода JMH аналогичен {@link kz.qazmarka.h2k.kafka.producer.batch.bench.BatchSenderBenchmark}:
+ *  - {@code Score} — среднее время одной обработки (микросекунды);
+ *  - {@code Error} — доверительный интервал (99%).
+ *
+ * Фиксируйте baseline на стенде и отслеживайте относительные изменения: рост выше 10–15% — сигнал
+ * к повторной оптимизации горячего пути или пересмотру фильтров.
  */
+@BenchmarkMode(Mode.AverageTime)
+@OutputTimeUnit(TimeUnit.MICROSECONDS)
 public class WalEntryProcessorBenchmark {
 
     @State(Scope.Thread)
@@ -101,6 +114,8 @@ public class WalEntryProcessorBenchmark {
 
     /**
      * Базовый сценарий: запись WAL с одной строкой и минимальным набором ячеек.
+     * Score отражает среднее время конвейера без фильтрации; рост относительно baseline на 10% и более
+     * означает, что горячий путь заметно подорожал.
      */
     @Benchmark
     public void processSmallRow(ProcessorState state, Blackhole bh) {
@@ -110,6 +125,8 @@ public class WalEntryProcessorBenchmark {
 
     /**
      * Толстая запись без фильтрации: имитируем таблицы с большим количеством колонок.
+     * Важно отслеживать изменение Score — сценарий показывает, как обрабатываются «широкие» строки
+     * с десятками ячеек. Резкий рост сигнализирует о деградации в сборке payload или работе буферов.
      */
     @Benchmark
     public void processWideRow(ProcessorState state, Blackhole bh) {
@@ -119,6 +136,8 @@ public class WalEntryProcessorBenchmark {
 
     /**
      * Фильтр CF включён, ячейки проходят (целевой Column Family присутствует).
+     * Score показывает накладные расходы на проверку фильтра при положительном срабатывании.
+     * Рост >15% относительно processSmallRow — повод перепроверить кэш фильтра.
      */
     @Benchmark
     public void processWithFilterHit(ProcessorState state, Blackhole bh) {
@@ -128,6 +147,8 @@ public class WalEntryProcessorBenchmark {
 
     /**
      * Фильтр CF включён, все ячейки отбрасываются (CF отличается). Проверяем расходы на фильтрацию.
+     * Небольшой Score подтверждает, что «пустые» строки быстро отбрасываются; рост указывает
+     * на деградацию хешей/сравнений.
      */
     @Benchmark
     public void processWithFilterMiss(ProcessorState state, Blackhole bh) {

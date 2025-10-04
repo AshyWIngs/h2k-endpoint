@@ -21,11 +21,11 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import kz.qazmarka.h2k.config.H2kConfig;
-import kz.qazmarka.h2k.endpoint.internal.TopicManager;
-import kz.qazmarka.h2k.endpoint.internal.WalEntryProcessor;
-import kz.qazmarka.h2k.endpoint.internal.WalMeta;
-import kz.qazmarka.h2k.endpoint.internal.WalEntryProcessorTestSupport;
-import kz.qazmarka.h2k.kafka.producer.BatchSender;
+import kz.qazmarka.h2k.endpoint.topic.TopicManager;
+import kz.qazmarka.h2k.endpoint.processing.WalEntryProcessor;
+import kz.qazmarka.h2k.endpoint.processing.WalMeta;
+import kz.qazmarka.h2k.endpoint.processing.WalEntryProcessorTestSupport;
+import kz.qazmarka.h2k.kafka.producer.batch.BatchSender;
 import kz.qazmarka.h2k.payload.builder.PayloadBuilder;
 import kz.qazmarka.h2k.schema.decoder.Decoder;
 import kz.qazmarka.h2k.schema.decoder.SimpleDecoder;

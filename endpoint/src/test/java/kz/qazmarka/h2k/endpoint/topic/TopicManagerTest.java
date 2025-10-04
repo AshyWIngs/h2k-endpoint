@@ -1,4 +1,4 @@
-package kz.qazmarka.h2k.endpoint.internal;
+package kz.qazmarka.h2k.endpoint.topic;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;

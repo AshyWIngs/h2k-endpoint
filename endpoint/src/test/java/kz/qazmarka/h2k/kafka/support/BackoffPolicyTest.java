@@ -1,4 +1,4 @@
-package kz.qazmarka.h2k.kafka.producer;
+package kz.qazmarka.h2k.kafka.support;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 

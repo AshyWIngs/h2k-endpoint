@@ -4,7 +4,7 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 
 import kz.qazmarka.h2k.kafka.ensure.metrics.TopicEnsureState;
-import kz.qazmarka.h2k.kafka.producer.BackoffPolicy;
+import kz.qazmarka.h2k.kafka.support.BackoffPolicy;
 
 /**
  * Управляет backoff-циклами при повторных ensure-операциях: хранит дедлайны по темам,

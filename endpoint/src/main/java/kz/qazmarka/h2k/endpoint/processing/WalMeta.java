@@ -1,4 +1,4 @@
-package kz.qazmarka.h2k.endpoint.internal;
+package kz.qazmarka.h2k.endpoint.processing;
 
 /**
  * Контейнер метаданных WAL: sequenceId и время записи. Используется при формировании payload.

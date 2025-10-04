@@ -1,11 +1,11 @@
-package kz.qazmarka.h2k.endpoint.internal;
+package kz.qazmarka.h2k.endpoint.processing;
 
 import java.util.List;
 
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.TableName;
 
-import kz.qazmarka.h2k.kafka.producer.BatchSender;
+import kz.qazmarka.h2k.kafka.producer.batch.BatchSender;
 import kz.qazmarka.h2k.util.RowKeySlice;
 
 /**

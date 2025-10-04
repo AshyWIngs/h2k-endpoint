@@ -1,4 +1,4 @@
-package kz.qazmarka.h2k.endpoint.internal;
+package kz.qazmarka.h2k.endpoint.processing;
 
 import java.io.IOException;
 import java.util.ArrayList;
@@ -19,7 +19,8 @@ import org.apache.kafka.clients.producer.ProducerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import kz.qazmarka.h2k.kafka.producer.BatchSender;
+import kz.qazmarka.h2k.endpoint.topic.TopicManager;
+import kz.qazmarka.h2k.kafka.producer.batch.BatchSender;
 import kz.qazmarka.h2k.payload.builder.PayloadBuilder;
 import kz.qazmarka.h2k.util.RowKeySlice;
 

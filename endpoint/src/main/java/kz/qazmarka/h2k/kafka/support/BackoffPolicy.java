@@ -1,4 +1,4 @@
-package kz.qazmarka.h2k.kafka.producer;
+package kz.qazmarka.h2k.kafka.support;
 
 import java.util.concurrent.ThreadLocalRandom;
 

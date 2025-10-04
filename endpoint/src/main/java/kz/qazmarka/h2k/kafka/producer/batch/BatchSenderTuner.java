@@ -1,4 +1,4 @@
-package kz.qazmarka.h2k.kafka.producer;
+package kz.qazmarka.h2k.kafka.producer.batch;
 
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;

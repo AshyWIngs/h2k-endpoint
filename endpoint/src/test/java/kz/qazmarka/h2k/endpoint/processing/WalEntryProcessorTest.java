@@ -1,4 +1,4 @@
-package kz.qazmarka.h2k.endpoint.internal;
+package kz.qazmarka.h2k.endpoint.processing;
 
 import java.util.Arrays;
 import java.util.Collections;
@@ -22,9 +22,10 @@ import org.apache.kafka.clients.producer.MockProducer;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
 
 import kz.qazmarka.h2k.config.H2kConfig;
-import kz.qazmarka.h2k.endpoint.internal.WalEntryProcessor.WalMetrics;
+import kz.qazmarka.h2k.endpoint.processing.WalEntryProcessor.WalMetrics;
+import kz.qazmarka.h2k.endpoint.topic.TopicManager;
 import kz.qazmarka.h2k.kafka.ensure.TopicEnsurer;
-import kz.qazmarka.h2k.kafka.producer.BatchSender;
+import kz.qazmarka.h2k.kafka.producer.batch.BatchSender;
 import kz.qazmarka.h2k.payload.builder.PayloadBuilder;
 import kz.qazmarka.h2k.schema.decoder.SimpleDecoder;
 

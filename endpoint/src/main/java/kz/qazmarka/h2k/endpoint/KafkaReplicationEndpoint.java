@@ -19,12 +19,12 @@ import org.slf4j.LoggerFactory;
 
 import kz.qazmarka.h2k.config.H2kConfig;
 import kz.qazmarka.h2k.config.H2kConfig.Keys;
-import kz.qazmarka.h2k.endpoint.internal.TopicManager;
-import kz.qazmarka.h2k.endpoint.internal.WalEntryProcessor;
+import kz.qazmarka.h2k.endpoint.topic.TopicManager;
+import kz.qazmarka.h2k.endpoint.processing.WalEntryProcessor;
 import kz.qazmarka.h2k.kafka.ensure.TopicEnsurer;
-import kz.qazmarka.h2k.kafka.producer.BatchSender;
-import kz.qazmarka.h2k.kafka.producer.BatchSenderMetrics;
-import kz.qazmarka.h2k.kafka.producer.BatchSenderTuner;
+import kz.qazmarka.h2k.kafka.producer.batch.BatchSender;
+import kz.qazmarka.h2k.kafka.producer.batch.BatchSenderMetrics;
+import kz.qazmarka.h2k.kafka.producer.batch.BatchSenderTuner;
 import kz.qazmarka.h2k.payload.builder.PayloadBuilder;
 import kz.qazmarka.h2k.schema.decoder.Decoder;
 import kz.qazmarka.h2k.schema.decoder.SimpleDecoder;
