@@ -159,6 +159,95 @@ cfg['CONFIG'].select { |k,_| k.start_with?('h2k.') }
     - `SizeOfLogQueue` — размер очереди; если растёт, значит есть задержки.
     - Ошибки и stacktrace — ищите строки с ERROR.
 
+## Сбор метрик через Prometheus
+
+Ниже приведён проверенный способ снять метрики RegionServer’а вместе с показателями нашего эндпоинта. Все инструменты — бесплатные и open-source.
+
+### 1. Подготовить JMX Exporter
+
+1. Скачайте jar из официального репозитория Prometheus: `https://repo1.maven.org/maven2/io/prometheus/jmx/jmx_prometheus_javaagent/` (для Java 8 подходит актуальная версия 0.17.x).
+2. Скопируйте jar на каждую машину с RegionServer’ом, например в `/opt/jmx-exporter/jmx_prometheus_javaagent.jar`.
+3. Создайте рядом файл конфигурации `hbase.yml` со списком метрик. Минимальный вариант:
+   ```yaml
+   startDelaySeconds: 0
+   lowercaseOutputName: true
+   lowercaseOutputLabelNames: true
+   rules:
+     - pattern: 'Hadoop<service=HBase,name=RegionServer,sub=Replication><>(.*)'
+   ```
+   При необходимости добавьте фильтры или переименования — формат описан в README проекта JMX Exporter.
+
+### 2. Запустить RegionServer с javaagent
+
+1. Откройте `hbase-env.sh` (находится в `${HBASE_HOME}/conf`).
+2. Добавьте параметр к переменной `HBASE_REGIONSERVER_OPTS`:
+   ```bash
+   export HBASE_REGIONSERVER_OPTS="$HBASE_REGIONSERVER_OPTS -javaagent:/opt/jmx-exporter/jmx_prometheus_javaagent.jar=7071:/opt/jmx-exporter/hbase.yml"
+   ```
+   *7071* — порт HTTP-эндпоинта. Выберите свободный порт и, при необходимости, пробросьте его в firewall.
+3. Перезапустите RegionServer (rolling-режим разрешён, зоопарк/peer не страдает).
+
+### 3. Проверка на месте
+
+1. На сервере выполните:
+   ```bash
+   curl http://localhost:7071/metrics
+   ```
+2. В выводе должны появиться строки вида:
+   - `wal_rowbuffer_upsizes` и `wal_rowbuffer_trims`
+   - `producer_batch_flush_latency_max_ms`
+   - стандартные метрики RegionServer’а (`hbase_regionserver_Server_activeHandlerCount` и т.д.).
+
+Если доступ идёт через балансировщик, аналогично проверяем с рабочей станции, заменив `localhost` на реальное имя узла.
+
+### 4. Подключить Prometheus
+
+1. Добавьте job в `prometheus.yml`:
+   ```yaml
+   scrape_configs:
+     - job_name: 'hbase-regionservers'
+       scrape_interval: 15s
+       metrics_path: /
+       static_configs:
+         - targets:
+             - rs1.example.com:7071
+             - rs2.example.com:7071
+   ```
+2. После перезагрузки Prometheus метрики будут доступны в UI и Alertmanager’е. Можно построить графики по латентности батчей, количеству усадок буфера и пр.
+
+### 5. Замечания
+
+- Наши счётчики регистрируются через `TopicManager`, поэтому автоматически попадают в JMX-поток RegionServer’а. Никаких дополнительных адаптеров внутри эндпоинта не требуется.
+- При изменении набора метрик достаточно обновить `hbase.yml` и перезапустить RegionServer (либо использовать hot-reload, если он настроен средствами orchestration).
+- Если нужно ограничить доступ, повесьте на порт 7071 firewall или сделайте reverse-proxy с basic auth — сам exporter работает в режиме read-only.
+
+После подключения Prometheus рекомендуется завести дашборд: latency BatchSender’а, подтверждённые отправки, число расширений/усадок буфера строк, задержки Schema Registry. Это поможет оперативно реагировать на отклонения в нагрузке.
+
+### Какие именно метрики мы публикуем
+
+Метрики появляются в JMX (а через exporter — в Prometheus) под `Hadoop<service=HBase,name=RegionServer,sub=Replication>`. Все значения — `Long`. Ниже список ключей, которые добавляет наш код:
+
+| Имя метрики | Что показывает | Комментарий |
+|-------------|----------------|-------------|
+| `wal.entries.total` | Общее число обработанных записей WAL | Сумма всех вызовов `WalEntryProcessor.process`. |
+| `wal.rows.total` | Количество строк, отправленных в Kafka | Учитывает строки, прошедшие фильтр CF. |
+| `wal.cells.total` | Число ячеек, обработанных и отправленных | Полезно для оценки среднего размера строки. |
+| `wal.rows.filtered` | Строки, отброшенные фильтром CF | Если значение растёт, фильтр настроен слишком агрессивно. |
+| `wal.rowbuffer.upsizes` | Сколько раз внутренний буфер строк расширялся сверх базовой ёмкости | Рост говорит о длинных WAL-записях; можно скорректировать `ROW_BUFFER_BASE_CAPACITY`. |
+| `wal.rowbuffer.trims` | Сколько раз буфер принудительно усаживался после крупных строк | Высокое значение = много «жирных» строк, стоит проверить конфигурацию HBase. |
+| `producer.batch.await.configured` | Текущее базовое значение `awaitEvery` из конфигурации | Полезно сверять с ожиданиями. |
+| `producer.batch.await.current` | Адаптивный порог, к которому пришёл `BatchSender` | Если сильно отходит от базового значения, стоит задуматься о ручной настройке. |
+| `producer.batch.flush.success.total` | Сколько раз `tryFlush`/`flush` завершались успешно | Служит для расчёта средней latency. |
+| `producer.batch.flush.failures.total` | Сколько раз «тихий» сброс фиксировал ошибку | Если растёт — проверить логи продьюсера. |
+| `producer.batch.records.confirmed.total` | Количество сообщений, которые Kafka подтвердила | Полезно для приблизительной оценки throughput. |
+| `producer.batch.flush.latency.last.ms` | Длительность последнего успешного flush (мс) | Добавить на дашборд как instant-величину. |
+| `producer.batch.flush.latency.max.ms` | Максимальная задержка flush со времени последнего reset | Контролируем хвост задержки. |
+| `producer.batch.flush.latency.avg.ms` | Экспоненциальное среднее задержки flush (мс) | Плавный показатель для алертинга. |
+| `schema.registry.register.success` | Сколько раз регистрация схемы прошла успешно | Метрика PayloadBuilder’а, полезна при массовых развертываниях. |
+| `schema.registry.register.failures` | Ошибки регистрации схемы | При росте проверяйте доступность Schema Registry. |
+
+Все значения доступны через JMX (например, в `jconsole`) и автоматически попадают в Prometheus после подключения exporter’а.
+
 ### Диагностика ensure.topics
 
 - `TopicEnsurer#getMetrics()` возвращает неизменяемую карту с метриками ensure: счётчики `ensure.*`, `exists.*`,

@@ -24,6 +24,7 @@
 - `h2k.rowkey.encoding=BASE64`
 - `h2k.ensure.topics=true`, `h2k.topic.partitions=12`, `h2k.topic.replication=3`
 - `h2k.producer.await.every=500`, `h2k.producer.await.timeout.ms=180000` (FAST) / `300000` (BALANCED/RELIABLE)
+- Автоадаптация `awaitEvery` включена по умолчанию; при необходимости отключите `h2k.producer.batch.autotune.enabled=false`
 - `h2k.producer.buffer.memory=268435456`, `h2k.producer.max.request.size=2097152`
 
 ---

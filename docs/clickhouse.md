@@ -1,5 +1,78 @@
 ## Прод‑эталон: создание объектов ClickHouse с нуля (Kafka → RAW)
 
+### Настройка кластера ClickHouse (текущая версия 24.8.14.39)
+
+- В файле `/etc/clickhouse-server/config.d/clickhouse_remote_servers.xml` нужно добавить на всех нодах:
+```
+<remote_servers>
+  <!-- ... Наш существующий shardless оставляем ... -->
+<per_host_allnodes>
+      <shard>
+          <internal_replication>false</internal_replication>
+          <replica>
+              <host>10.254.3.111</host>
+              <port>9000</port>
+          </replica>
+      </shard>
+      <shard>
+          <internal_replication>false</internal_replication>
+          <replica>
+              <host>10.254.3.112</host>
+              <port>9000</port>
+          </replica>
+      </shard>
+      <shard>
+          <internal_replication>false</internal_replication>
+          <replica>
+              <host>10.254.3.113</host>
+              <port>9000</port>
+          </replica>
+      </shard>
+      <shard>
+          <internal_replication>false</internal_replication>
+          <replica>
+              <host>10.254.3.114</host>
+              <port>9000</port>
+          </replica>
+      </shard>
+      <!-- на проде просто добавляешь новые <shard> по мере роста -->
+    </per_host_allnodes>
+</remote_servers>
+```
+- Проверить конфиг на каждой ноде:
+```bash
+clickhouse-client --query="SELECT * FROM system.clusters WHERE cluster='per_host_allnodes'"
+```
+если запрос не падает с ошибкой синтаксиса, значит ClickHouse увидел новый кластер.
+
+- Также можно проверить XML-валидность:
+```bash
+clickhouse-client --query="SELECT * FROM system.clusters" | grep per_host_allnodes
+```
+
+- На каждой ноде — аккуратный рестарт:
+```bash
+# Перезапустить
+systemctl restart clickhouse-server
+# Убедиться, что поднялся
+systemctl is-active clickhouse-server
+# Проверить, что процесс жив
+systemctl status clickhouse-server
+```
+
+- После каждой перезагрузки — проверка в логе:
+```bash
+tail -n 50 /var/log/clickhouse-server/clickhouse-server.log
+```
+
+- Проверяем, что новый кластер работает на всех:
+```sql
+SELECT cluster, shard_num, replica_num, host_name
+FROM system.clusters
+WHERE cluster = 'per_host_allnodes'
+ORDER BY shard_num;
+```
+
 Ниже — **короткая, проверенная инструкция** по созданию трёх объектов для ingest потока `JSONEachRow` из Kafka в ClickHouse **с нуля**:
 - Источник Kafka (`ENGINE = Kafka`) — имена полей **как в JSON**, **без** суффиксов `_ms`.
 - RAW‑таблица (`ReplicatedMergeTree`) — нормализованные типы `DateTime64(3,'UTC')`, алиасы в `Asia/Almaty`.

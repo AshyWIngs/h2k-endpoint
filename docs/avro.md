@@ -26,7 +26,7 @@ h2k.avro.schema.dir=/opt/hbase/conf/avro
    ```
 
 3. **Проверка** — используйте `bin/hbase classpath` для проверки наличия Avro-зависимостей и
-   команду `mvn -q -DskipITs -Dtest=GenericAvroPayloadSerializerTest test` для локальной валидации.
+   команду `mvn -pl endpoint -am -q -DskipITs -Dtest=GenericAvroPayloadSerializerTest test` для локальной валидации.
 
 4. **Phoenix-метаданные** — добавьте к каждому полю Avro атрибут `"h2k.phoenixType"` (строгое имя Phoenix-типа),
    на корневом уровне опишите массив `"h2k.pk"`, а также дополнительные свойства `"h2k.saltBytes"`

@@ -27,8 +27,8 @@
 
 1) **Соберите и разложите JAR** на все RegionServer (JAR уже содержит Avro/Jackson/Confluent 5.3.8):
 ```bash
-mvn -q -DskipTests clean package
-cp target/h2k-endpoint-*.jar /opt/hbase-default-current/lib/
+mvn -pl endpoint -am -DskipTests clean package
+cp endpoint/target/h2k-endpoint-*.jar /opt/hbase-default-current/lib/
 ```
 
 2) **Подготовьте Avro‑схемы** с атрибутами `h2k.phoenixType` и массивом `h2k.pk` в каталоге `conf/avro` (см. docs/avro.md).  
@@ -130,6 +130,16 @@ h2k.topic.pattern=${table}
 
 > Полная справка по ключам и значениям — см. **docs/config.md**.
 
+### Автоадаптация `awaitEvery`
+
+- По умолчанию включена (`h2k.producer.batch.autotune.enabled=true`). Алгоритм анализирует задержку flush и
+  аккуратно сужает/расширяет порог `awaitEvery` между партиями WAL.
+- Ограничения можно задать ключами `h2k.producer.batch.autotune.min`, `...max`, пороги задержки —
+  `...latency.high.ms` и `...latency.low.ms`, интервал между решениями — `...cooldown.ms`.
+- Фактические значения и рекомендации видны в метриках TopicManager: `producer.batch.await.recommended`,
+  `producer.batch.autotune.decisions.total`, `producer.batch.autotune.last.latency.ms` и других. При необходимости
+  автонастройку можно отключить, вернувшись к фиксированному `h2k.producer.await.every`.
+
 ### Матрица продьюсерских профилей (значения синхронизированы с `conf/`)
 
 | Ключ | Единицы | Дефолт (Endpoint) | FAST (`conf/add_peer_shell_fast.txt`) | BALANCED (`conf/add_peer_shell_balanced.txt`) | RELIABLE (`conf/add_peer_shell_reliable.txt`) |
@@ -217,6 +227,33 @@ Endpoint умеет формировать payload в нескольких фо�
 5. **Расширение.** После 1–2 часов без аномалий включайте остальные RS и таблицы; держите предыдущую версию JAR в каталоге `lib/backup` до полного завершения миграции.
 6. **Откат.** При необходимости отключите peer (`disable_peer`), удалите новый JAR, верните предыдущий и перезапустите RS.
 
+## Бенчмарки производительности (JMH)
+
+- Чтобы собрать отдельный JMH‑джар, установите основной модуль в локальный репозиторий (однократно):
+  ```bash
+  mvn -pl endpoint -am install -DskipTests
+  ```
+
+- Затем соберите модуль `benchmarks`:
+  ```bash
+  mvn -pl benchmarks -am -DskipTests clean package
+  ```
+  Готовый архив появится в `benchmarks/target/h2k-endpoint-benchmarks-<version>.jar` (параллельно Maven сохранит `original-*.jar`).
+
+- Запуск всех сценариев:
+  ```bash
+  java -jar benchmarks/target/h2k-endpoint-benchmarks-<version>.jar
+  ```
+
+- Примеры фильтрации:
+  ```bash
+  java -jar benchmarks/target/h2k-endpoint-benchmarks-<version>.jar BatchSenderBenchmark
+  java -jar benchmarks/target/h2k-endpoint-benchmarks-<version>.jar WalEntryProcessorBenchmark.processWideRow
+  ```
+
+Бенчмарки моделируют типовые сценарии: небольшие и средние партии для `BatchSender`, а также обработку строк
+`WalEntryProcessor` с фильтром CF и без него. Результаты удобно сравнивать до/после изменений горячего пути.
+
 ## FAQ
 
 **Нужно ли класть Confluent JAR на RegionServer?**  
@@ -237,6 +274,7 @@ Endpoint умеет формировать payload в нескольких фо�
 
 - `kz.qazmarka.h2k.kafka.ensure` — фасады `TopicEnsurer`/`TopicEnsureService`; вспомогательные классы распределены по подпакетам `admin`, `planner`, `state`, `metrics`, `config`, `util`.
 - `kz.qazmarka.h2k.payload.serializer` — реализация сериализаторов и внутреннего резолвера (`serializer.internal.SerializerResolver`).
+- Модуль `endpoint` содержит production‑код и тесты, модуль `benchmarks` — JMH‑сценарии.
 - `kz.qazmarka.h2k.schema.registry.json` — JSONEachRow (Schema Registry JSON / внешние JSON‑схемы).
 - `kz.qazmarka.h2k.schema.registry.avro.local` — локальные `.avsc` для `payload.format=avro-*` в режиме `generic`.
 - `kz.qazmarka.h2k.schema.registry.avro.phoenix` — Phoenix‑метаданные из Avro (соль, PK) для Avro режимов.

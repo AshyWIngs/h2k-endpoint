@@ -139,6 +139,12 @@
 | **`h2k.producer.await.timeout.ms`** | Таймаут ожидания ACK | Не Kafka‑ключ; внутренняя логика endpoint |
 | **`h2k.producer.batch.counters.enabled`** | Счётчики батчей | Не Kafka‑ключ |
 | **`h2k.producer.batch.debug.on.failure`** | Доп. диагностика при сбоях | Не Kafka‑ключ |
+| **`h2k.producer.batch.autotune.enabled`** | Включить автоподстройку `awaitEvery` по задержке | `true`/`false` (дефолт: `true`) |
+| **`h2k.producer.batch.autotune.min`** | Нижняя граница `awaitEvery` при автонастройке | `int` (0 — вычислить автоматически) |
+| **`h2k.producer.batch.autotune.max`** | Верхняя граница `awaitEvery` при автонастройке | `int` (0 — вычислить автоматически) |
+| **`h2k.producer.batch.autotune.latency.high.ms`** | Порог задержки (мс), при превышении которого порог снижается | `int` (0 — 50% от `await.timeout.ms`) |
+| **`h2k.producer.batch.autotune.latency.low.ms`** | Порог задержки (мс) для увеличения `awaitEvery` | `int` (0 — ~16% от `await.timeout.ms`) |
+| **`h2k.producer.batch.autotune.cooldown.ms`** | Минимальный интервал между решениями автонастройки | `int` (мс; дефолт `30000`) |
 
 > Полную матрицу рекомендованных настроек по профилям см. в README и `docs/peer-profiles.md`.
 
