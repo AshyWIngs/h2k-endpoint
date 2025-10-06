@@ -74,7 +74,7 @@ public class WalEntryProcessorBenchmark {
             TopicManager topicManager = new TopicManager(h2kConfig, TopicEnsurer.disabled());
             MockProducer<byte[], byte[]> producer = new MockProducer<>(true, new ByteArraySerializer(), new ByteArraySerializer());
 
-            processor = new WalEntryProcessor(builder, topicManager, producer);
+            processor = new WalEntryProcessor(builder, topicManager, producer, h2kConfig);
             sender = new BatchSender(256, 1_000, true, false);
 
             smallEntry = walEntry(1);

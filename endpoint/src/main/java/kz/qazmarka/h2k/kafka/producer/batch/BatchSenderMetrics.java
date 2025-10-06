@@ -9,6 +9,7 @@ import java.util.concurrent.atomic.LongAdder;
  */
 public final class BatchSenderMetrics implements BatchSender.Listener {
 
+    /** Количество успешных сбросов (применяется для расчёта средней задержки). */
     private final LongAdder flushSuccess = new LongAdder();
     private final LongAdder flushFailures = new LongAdder();
     private final LongAdder recordsConfirmed = new LongAdder();
@@ -17,12 +18,20 @@ public final class BatchSenderMetrics implements BatchSender.Listener {
     private final AtomicLong maxFlushLatencyMs = new AtomicLong();
     private final AtomicLong currentAwaitEvery = new AtomicLong();
     private final AtomicLong configuredAwaitEvery = new AtomicLong();
+    /** Текущая непрерывная серия «тихих» неуспехов (обнуляется после успешного flush). */
     private final AtomicLong failureStreak = new AtomicLong();
+    /** Максимальная зафиксированная серия неуспехов за время жизни процессора. */
     private final AtomicLong maxFailureStreak = new AtomicLong();
+    /** Время последнего неуспеха (System.currentTimeMillis). */
     private final AtomicLong lastFailureAtMs = new AtomicLong();
+    /** Значение адаптивного порога awaitEvery в момент последнего неуспеха. */
     private final AtomicLong lastFailureAwaitEvery = new AtomicLong();
 
-    /** Обновляет базовый (конфигурационный) awaitEvery для последующего экспорта. */
+    /**
+     * Обновляет базовый (конфигурационный) порог {@code awaitEvery},
+     * который используется при экспорте метрик и в качестве резервного значения,
+     * если адаптивный порог ещё не установлен.
+     */
     public void updateConfiguredAwaitEvery(int awaitEvery) {
         configuredAwaitEvery.set(awaitEvery);
         currentAwaitEvery.compareAndSet(0L, awaitEvery);
@@ -40,6 +49,10 @@ public final class BatchSenderMetrics implements BatchSender.Listener {
     }
 
     @Override
+    /**
+     * Регистрирует неуспешный «тихий» сброс: увеличивает счётчики, фиксирует длину текущей серии
+     * и запоминает момент/значение порога для диагностики.
+     */
     public void onFlushFailure(int adaptiveAwaitEvery) {
         flushFailures.increment();
         long streak = failureStreak.updateAndGet(prev -> prev >= Long.MAX_VALUE ? Long.MAX_VALUE : prev + 1L);
@@ -92,18 +105,22 @@ public final class BatchSenderMetrics implements BatchSender.Listener {
         return configuredAwaitEvery.get();
     }
 
+    /** @return текущая непрерывная серия неуспешных «тихих» сбросов. */
     public long failureStreak() {
         return failureStreak.get();
     }
 
+    /** @return максимальная серия неуспехов, зафиксированная от старта процесса. */
     public long maxFailureStreak() {
         return maxFailureStreak.get();
     }
 
+    /** @return отметка времени последнего неуспеха в миллисекундах с эпохи. */
     public long lastFailureAtMs() {
         return lastFailureAtMs.get();
     }
 
+    /** @return значение адаптивного порога {@code awaitEvery} в момент последнего неуспеха. */
     public long lastFailureAwaitEvery() {
         return lastFailureAwaitEvery.get();
     }

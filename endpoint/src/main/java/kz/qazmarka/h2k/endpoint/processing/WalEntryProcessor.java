@@ -19,6 +19,7 @@ import org.apache.kafka.clients.producer.ProducerRecord;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import kz.qazmarka.h2k.config.H2kConfig;
 import kz.qazmarka.h2k.endpoint.topic.TopicManager;
 import kz.qazmarka.h2k.kafka.producer.batch.BatchSender;
 import kz.qazmarka.h2k.payload.builder.PayloadBuilder;
@@ -55,6 +56,8 @@ public final class WalEntryProcessor {
     private final LongAdder filteredRowsWindow = new LongAdder();
     private final LongAdder rowBufferUpsize = new LongAdder();
     private final LongAdder rowBufferTrim = new LongAdder();
+    private final TableCapacityObserver capacityObserver;
+    private final CfFilterObserver cfFilterObserver;
     private final AtomicLong throughputWindowStart = new AtomicLong(System.nanoTime());
     private final java.util.concurrent.atomic.AtomicReference<CfFilterCache> cfFilterCache =
             new java.util.concurrent.atomic.AtomicReference<>(CfFilterCache.EMPTY);
@@ -62,10 +65,13 @@ public final class WalEntryProcessor {
 
     public WalEntryProcessor(PayloadBuilder payloadBuilder,
                              TopicManager topicManager,
-                             Producer<byte[], byte[]> producer) {
+                             Producer<byte[], byte[]> producer,
+                             H2kConfig config) {
         this.payloadBuilder = payloadBuilder;
         this.topicManager = topicManager;
         this.producer = producer;
+        this.capacityObserver = TableCapacityObserver.create(config);
+        this.cfFilterObserver = CfFilterObserver.create(config);
     }
 
     /**
@@ -81,11 +87,7 @@ public final class WalEntryProcessor {
                         boolean filterEnabled,
                         byte[][] cfFamilies) {
         final List<Cell> cells = entry.getEdit().getCells();
-        if (cells == null || cells.isEmpty()) {
-            if (LOG.isDebugEnabled()) {
-                LOG.debug("Репликация: запись WAL без ячеек — таблица={}, фильтр={}, ensure-включён={}",
-                        entry.getKey().getTablename(), filterEnabled, topicManager.ensureEnabled());
-            }
+        if (skipEmptyEntry(entry, cells, filterEnabled)) {
             return;
         }
 
@@ -97,10 +99,69 @@ public final class WalEntryProcessor {
 
         ProcessingCounters counters = new ProcessingCounters();
         CfFilterCache cfCache = prepareCfCache(filterEnabled ? cfFamilies : null);
+        boolean filterActive = filterEnabled && !cfCache.isEmpty();
 
-        RowProcessingContext context = createRowProcessingContext(filterEnabled, cfCache, topic, table, walMeta, sender, counters);
+        RowProcessingContext context = createRowProcessingContext(filterActive, cfCache, topic, table, walMeta, sender, counters);
 
         final ArrayList<Cell> localRowBuffer = prepareRowBuffer(cells.size());
+        processWalCells(cells, context, localRowBuffer);
+
+        if (LOG.isDebugEnabled()) {
+            LOG.debug("Репликация: запись WAL обработана: таблица={}, топик={}, строк отправлено={}, ячеек отправлено={}, фильтр={}, ensure-включён={}",
+                    table, topic, counters.rowsSent, counters.cellsSent, filterEnabled, topicManager.ensureEnabled());
+        }
+
+        finalizeEntry(table, counters, filterActive);
+        logThroughput(counters);
+    }
+
+    /**
+     * Проверяет, переданы ли в записи ячейки, и логирует отладочную информацию при пустом WAL.
+     *
+     * @param entry          исходная запись WAL
+     * @param cells          коллекция ячеек из WALEdit
+     * @param filterEnabled  флаг включения фильтра CF
+     * @return {@code true}, если запись пустая и обработку нужно завершить
+     */
+    private boolean skipEmptyEntry(WAL.Entry entry, List<Cell> cells, boolean filterEnabled) {
+        if (cells != null && !cells.isEmpty()) {
+            return false;
+        }
+        if (LOG.isDebugEnabled()) {
+            LOG.debug("Репликация: запись WAL без ячеек — таблица={}, фильтр={}, ensure-включён={}",
+                    entry.getKey().getTablename(), filterEnabled, topicManager.ensureEnabled());
+        }
+        return true;
+    }
+
+    /**
+     * Формирует контекст обработки строки с учётом настроек фильтрации и метаданных, уменьшая когнитивную
+     * сложность основного метода {@link #process(WAL.Entry, BatchSender, boolean, boolean, byte[][])}.
+     * Контекст безопасен только в текущем потоке и не должен кэшироваться между вызовами.
+     */
+    private RowProcessingContext createRowProcessingContext(boolean filterActive,
+                                                            CfFilterCache cfCache,
+                                                            String topic,
+                                                            TableName table,
+                                                            WalMeta walMeta,
+                                                            BatchSender sender,
+                                                            ProcessingCounters counters) {
+        return new RowProcessingContext(
+                filterActive,
+                cfCache,
+                topic,
+                table,
+                walMeta,
+                sender,
+                counters);
+    }
+
+    /**
+     * Проходит по ячейкам записи WAL, группируя их по rowkey и отправляя в Kafka через контекст строки.
+     */
+    private void processWalCells(List<Cell> cells,
+                                 RowProcessingContext context,
+                                 ArrayList<Cell> rowBuffer) {
         RowKeySlice.Mutable currentSlice = null;
         byte[] prevArr = null;
         int prevOff = -1;
@@ -112,13 +173,13 @@ public final class WalEntryProcessor {
             final int len = cell.getRowLength();
 
             if (isSameRow(currentSlice, arr, off, len, prevArr, prevOff, prevLen)) {
-                localRowBuffer.add(cell);
+                rowBuffer.add(cell);
                 continue;
             }
 
-            context.flushRow(localRowBuffer, currentSlice);
+            context.flushRow(rowBuffer, currentSlice);
 
-            localRowBuffer.add(cell);
+            rowBuffer.add(cell);
             if (currentSlice == null) {
                 currentSlice = new RowKeySlice.Mutable(arr, off, len);
             } else {
@@ -129,43 +190,7 @@ public final class WalEntryProcessor {
             prevLen = len;
         }
 
-        context.flushRow(localRowBuffer, currentSlice);
-
-        if (LOG.isDebugEnabled()) {
-            LOG.debug("Репликация: запись WAL обработана: таблица={}, топик={}, строк отправлено={}, ячеек отправлено={}, фильтр={}, ensure-включён={}",
-                    table, topic, counters.rowsSent, counters.cellsSent, filterEnabled, topicManager.ensureEnabled());
-        }
-
-        entriesProcessed.increment();
-        rowsProcessed.add((long) counters.rowsSent + (long) counters.rowsFiltered);
-        cellsProcessed.add(counters.cellsSeen);
-        if (counters.rowsFiltered > 0) {
-            rowsFiltered.add(counters.rowsFiltered);
-        }
-        logThroughput(counters);
-    }
-
-    /**
-     * Формирует контекст обработки строки с учётом настроек фильтрации и метаданных, уменьшая когнитивную
-     * сложность основного метода {@link #process(WAL.Entry, BatchSender, boolean, boolean, byte[][])}.
-     * Контекст безопасен только в текущем потоке и не должен кэшироваться между вызовами.
-     */
-    private RowProcessingContext createRowProcessingContext(boolean filterEnabled,
-                                                            CfFilterCache cfCache,
-                                                            String topic,
-                                                            TableName table,
-                                                            WalMeta walMeta,
-                                                            BatchSender sender,
-                                                            ProcessingCounters counters) {
-        boolean effectiveFilter = filterEnabled && !cfCache.isEmpty();
-        return new RowProcessingContext(
-                effectiveFilter,
-                cfCache,
-                topic,
-                table,
-                walMeta,
-                sender,
-                counters);
+        context.flushRow(rowBuffer, currentSlice);
     }
 
     /**
@@ -205,7 +230,7 @@ public final class WalEntryProcessor {
      * Контекст обработки строки WAL: хранит настройки фильтра/топика/метаданных для передачи в helper-методы.
      */
     private final class RowProcessingContext {
-        private final boolean filterEnabled;
+        private final boolean filterActive;
         private final CfFilterCache cfCache;
         private final String topic;
         private final TableName table;
@@ -213,14 +238,14 @@ public final class WalEntryProcessor {
         private final BatchSender sender;
         private final ProcessingCounters counters;
 
-        RowProcessingContext(boolean filterEnabled,
+        RowProcessingContext(boolean filterActive,
                              CfFilterCache cfCache,
                              String topic,
                              TableName table,
                              WalMeta walMeta,
                              BatchSender sender,
                              ProcessingCounters counters) {
-            this.filterEnabled = filterEnabled;
+            this.filterActive = filterActive;
             this.cfCache = cfCache;
             this.topic = topic;
             this.table = table;
@@ -239,7 +264,8 @@ public final class WalEntryProcessor {
             }
             final int processedCells = rowBuffer.size();
             counters.cellsSeen += processedCells;
-            if (filterEnabled && !passCfFilter(rowBuffer, cfCache.families, cfCache.hashes)) {
+            counters.maxRowCellsSeen = Math.max(counters.maxRowCellsSeen, processedCells);
+            if (filterActive && !passCfFilter(rowBuffer, cfCache.families, cfCache.hashes)) {
                 resetRowBuffer(rowBuffer, processedCells);
                 counters.rowsFiltered++;
                 return;
@@ -247,6 +273,7 @@ public final class WalEntryProcessor {
             WalEntryProcessor.this.sendRow(topic, table, walMeta, currentSlice, rowBuffer, sender);
             counters.rowsSent++;
             counters.cellsSent += processedCells;
+            counters.maxRowCellsSent = Math.max(counters.maxRowCellsSent, processedCells);
             resetRowBuffer(rowBuffer, processedCells);
         }
 
@@ -422,6 +449,40 @@ public final class WalEntryProcessor {
         int cellsSent;
         int rowsFiltered;
         int cellsSeen;
+        int maxRowCellsSeen;
+        int maxRowCellsSent;
+    }
+
+    /**
+     * Обновляет глобальные счётчики и диагностические наблюдатели по завершённой записи WAL.
+     */
+    private void finalizeEntry(TableName table,
+                               ProcessingCounters counters,
+                               boolean filterActive) {
+        entriesProcessed.increment();
+        long rowsSeen = (long) counters.rowsSent + (long) counters.rowsFiltered;
+        if (rowsSeen > 0L) {
+            rowsProcessed.add(rowsSeen);
+        }
+        cellsProcessed.add(counters.cellsSeen);
+        if (counters.rowsFiltered > 0) {
+            rowsFiltered.add(counters.rowsFiltered);
+        }
+
+        if (rowsSeen <= 0L) {
+            return;
+        }
+
+        int capacityCandidate = (counters.maxRowCellsSent > 0)
+                ? counters.maxRowCellsSent
+                : counters.maxRowCellsSeen;
+        long rowsForCapacity = (counters.rowsSent > 0)
+                ? counters.rowsSent
+                : rowsSeen;
+        if (capacityCandidate > 0) {
+            capacityObserver.observe(table, capacityCandidate, rowsForCapacity);
+        }
+        cfFilterObserver.observe(table, rowsSeen, counters.rowsFiltered, filterActive);
     }
 
     /** Возвращает агрегированные счётчики обработанных записей WAL. */

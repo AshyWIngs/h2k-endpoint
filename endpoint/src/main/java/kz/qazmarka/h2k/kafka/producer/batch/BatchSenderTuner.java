@@ -93,7 +93,7 @@ public final class BatchSenderTuner {
         lastObservedAwait = observed;
         long latency = Math.max(metrics.avgFlushLatencyMs(), metrics.lastFlushLatencyMs());
         lastObservedLatencyMs = latency;
-        if (!success || latency <= 0L) {
+        if (latency <= 0L) {
             recommendedAwait.compareAndSet(0, observed);
             return;
         }
@@ -186,6 +186,12 @@ public final class BatchSenderTuner {
         return elapsed >= cooldownNs;
     }
 
+    /**
+     * Обработка неуспешного ожидания подтверждений: мгновенно снижает порог до минимального,
+     * увеличивает счётчики решений и фиксирует информацию для дальнейшего анализа.
+     *
+     * @param metrics агрегированные метрики текущего {@link BatchSender}
+     */
     private void handleFailure(BatchSenderMetrics metrics) {
         int observed = clamp((int) metrics.currentAwaitEvery());
         if (observed <= 0) {
@@ -200,6 +206,10 @@ public final class BatchSenderTuner {
         logFailure(metrics.failureStreak(), observed);
     }
 
+    /**
+     * Выводит диагностические WARN‑сообщения, помогая оператору увидеть затяжную серию неуспехов.
+     * Сообщения появляются на первой ошибке и далее на степенях двойки, чтобы не «шуметь» в логах.
+     */
     private void logFailure(long streak, int observed) {
         if (!LOG.isWarnEnabled()) {
             return;

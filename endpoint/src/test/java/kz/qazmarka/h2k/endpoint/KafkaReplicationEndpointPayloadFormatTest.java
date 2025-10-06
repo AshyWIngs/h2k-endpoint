@@ -48,7 +48,7 @@ class KafkaReplicationEndpointPayloadFormatTest {
         PayloadBuilder builder = new PayloadBuilder(SimpleDecoder.INSTANCE, cfg);
         MockProducer<byte[], byte[]> producer = new MockProducer<>(true, new ByteArraySerializer(), new ByteArraySerializer());
         TopicManager topicManager = new TopicManager(cfg, null);
-        WalEntryProcessor processor = new WalEntryProcessor(builder, topicManager, producer);
+        WalEntryProcessor processor = new WalEntryProcessor(builder, topicManager, producer, cfg);
 
         byte[] rowKey = "rk-json".getBytes(StandardCharsets.UTF_8);
         RowKeySlice slice = new RowKeySlice(rowKey, 0, rowKey.length);
@@ -85,7 +85,7 @@ class KafkaReplicationEndpointPayloadFormatTest {
         PayloadBuilder builder = new PayloadBuilder(STRING_DECODER, cfg);
         MockProducer<byte[], byte[]> producer = new MockProducer<>(true, new ByteArraySerializer(), new ByteArraySerializer());
         TopicManager topicManager = new TopicManager(cfg, null);
-        WalEntryProcessor processor = new WalEntryProcessor(builder, topicManager, producer);
+        WalEntryProcessor processor = new WalEntryProcessor(builder, topicManager, producer, cfg);
 
         byte[] rowKey = "rk-avro".getBytes(StandardCharsets.UTF_8);
         RowKeySlice slice = new RowKeySlice(rowKey, 0, rowKey.length);

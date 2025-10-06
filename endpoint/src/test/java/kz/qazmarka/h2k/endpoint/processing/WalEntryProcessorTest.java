@@ -109,7 +109,7 @@ class WalEntryProcessorTest {
         PayloadBuilder builder = new PayloadBuilder(SimpleDecoder.INSTANCE, h2kConfig);
         TopicManager topicManager = new TopicManager(h2kConfig, TopicEnsurer.disabled());
         MockProducer<byte[], byte[]> producer = new MockProducer<>(true, new ByteArraySerializer(), new ByteArraySerializer());
-        WalEntryProcessor processor = new WalEntryProcessor(builder, topicManager, producer);
+        WalEntryProcessor processor = new WalEntryProcessor(builder, topicManager, producer, h2kConfig);
 
         try (BatchSender sender = new BatchSender(10, 1000, false, false)) {
             processor.process(walEntry("row1", "d"), sender, false, false, null);

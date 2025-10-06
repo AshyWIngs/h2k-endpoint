@@ -116,7 +116,7 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
         final PayloadBuilder payload = new PayloadBuilder(decoder, h2k);
         final TopicEnsurer topicEnsurer = TopicEnsurer.createIfEnabled(h2k);
         this.topicManager = new TopicManager(h2k, topicEnsurer);
-        this.walEntryProcessor = new WalEntryProcessor(payload, topicManager, producer);
+        this.walEntryProcessor = new WalEntryProcessor(payload, topicManager, producer, h2k);
         registerMetrics(payload, walEntryProcessor);
         initCfFilter();
         logPayloadSerializer(payload);
@@ -219,6 +219,7 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
         registerMetric("producer.batch.flush.latency.last.ms", batchMetrics::lastFlushLatencyMs);
         registerMetric("producer.batch.flush.latency.max.ms", batchMetrics::maxFlushLatencyMs);
         registerMetric("producer.batch.flush.latency.avg.ms", batchMetrics::avgFlushLatencyMs);
+        // Метрики деградации: помогают увидеть длительные серии «тихих» ошибок ожидания ACK.
         registerMetric("producer.batch.fail.streak.current", batchMetrics::failureStreak);
         registerMetric("producer.batch.fail.streak.max", batchMetrics::maxFailureStreak);
         registerMetric("producer.batch.fail.last.ms", batchMetrics::lastFailureAtMs);
