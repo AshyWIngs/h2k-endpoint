@@ -1,0 +1,43 @@
+{
+  "type": "record",
+  "name": "DOCUMENT_Row",
+  "namespace": "kz.qazmarka.h2k",
+  "doc": "Phoenix DOCUMENT. PK: (did). TIMESTAMP — миллисекунды epoch. Таблица посолена (SALT_BUCKETS=10).",
+  "h2k.saltBytes": 1,
+  "h2k.capacityHint": 28,
+  "fields": [
+    { "name": "did",    "type": "string",             "h2k.phoenixType": "VARCHAR",            "doc": "NOT NULL: VARCHAR (GUID в строковом виде)" },
+
+    { "name": "id",     "type": ["null","string"],    "default": null, "h2k.phoenixType": "VARCHAR",           "doc": "VARCHAR" },
+    { "name": "dt",     "type": ["null","long"],      "default": null, "h2k.phoenixType": "TIMESTAMP",         "doc": "TIMESTAMP (ms)" },
+    { "name": "t",      "type": ["null","int"],       "default": null, "h2k.phoenixType": "SMALLINT",          "doc": "SMALLINT" },
+    { "name": "st",     "type": ["null","int"],       "default": null, "h2k.phoenixType": "UNSIGNED_TINYINT",  "doc": "UNSIGNED_TINYINT" },
+    { "name": "sid",    "type": ["null","string"],    "default": null, "h2k.phoenixType": "VARCHAR",           "doc": "VARCHAR" },
+    { "name": "sinn",   "type": ["null","string"],    "default": null, "h2k.phoenixType": "VARCHAR",           "doc": "VARCHAR" },
+    { "name": "sn",     "type": ["null","string"],    "default": null, "h2k.phoenixType": "VARCHAR",           "doc": "VARCHAR" },
+    { "name": "sa",     "type": ["null","string"],    "default": null, "h2k.phoenixType": "VARCHAR",           "doc": "VARCHAR" },
+    { "name": "said",   "type": ["null","string"],    "default": null, "h2k.phoenixType": "VARCHAR",           "doc": "VARCHAR" },
+    { "name": "rid",    "type": ["null","string"],    "default": null, "h2k.phoenixType": "VARCHAR",           "doc": "VARCHAR" },
+    { "name": "rinn",   "type": ["null","string"],    "default": null, "h2k.phoenixType": "VARCHAR",           "doc": "VARCHAR" },
+    { "name": "rn",     "type": ["null","string"],    "default": null, "h2k.phoenixType": "VARCHAR",           "doc": "VARCHAR" },
+    { "name": "ra",     "type": ["null","string"],    "default": null, "h2k.phoenixType": "VARCHAR",           "doc": "VARCHAR" },
+    { "name": "raid",   "type": ["null","string"],    "default": null, "h2k.phoenixType": "VARCHAR",           "doc": "VARCHAR" },
+    { "name": "invi",   "type": ["null","string"],    "default": null, "h2k.phoenixType": "VARCHAR",           "doc": "VARCHAR" },
+    { "name": "invd",   "type": ["null","long"],      "default": null, "h2k.phoenixType": "TIMESTAMP",         "doc": "TIMESTAMP (ms)" },
+    { "name": "cinvi",  "type": ["null","string"],    "default": null, "h2k.phoenixType": "VARCHAR",           "doc": "VARCHAR" },
+    { "name": "cinvd",  "type": ["null","long"],      "default": null, "h2k.phoenixType": "TIMESTAMP",         "doc": "TIMESTAMP (ms)" },
+    { "name": "fn",     "type": ["null","long"],      "default": null, "h2k.phoenixType": "UNSIGNED_INT",      "doc": "UNSIGNED_INT (0..4294967295) → Avro long" },
+    { "name": "fd",     "type": ["null","long"],      "default": null, "h2k.phoenixType": "TIMESTAMP",         "doc": "TIMESTAMP (ms)" },
+    { "name": "tm",     "type": ["null","long"],      "default": null, "h2k.phoenixType": "TIMESTAMP",         "doc": "TIMESTAMP (ms)" },
+    { "name": "tt",     "type": ["null","long"],      "default": null, "h2k.phoenixType": "BIGINT",            "doc": "BIGINT" },
+    { "name": "vat",    "type": ["null","long"],      "default": null, "h2k.phoenixType": "BIGINT",            "doc": "BIGINT" },
+    { "name": "exc",    "type": ["null","long"],      "default": null, "h2k.phoenixType": "BIGINT",            "doc": "BIGINT" },
+    { "name": "pgm",    "type": ["null","bytes"],     "default": null, "h2k.phoenixType": "VARBINARY",         "doc": "VARBINARY" },
+    { "name": "j",      "type": ["null","string"],    "default": null, "h2k.phoenixType": "VARCHAR",           "doc": "VARCHAR" },
+    { "name": "b",      "type": ["null","string"],    "default": null, "h2k.phoenixType": "VARCHAR",           "doc": "VARCHAR" },
+
+    { "name": "_event_ts", "type": ["null","long"],   "default": null, "doc": "Доп. метаполе: версия события, ms epoch" },
+    { "name": "_delete",   "type": "boolean",         "default": false, "doc": "Доп. метаполе: логическое удаление" }
+  ],
+  "h2k.pk": ["did"]
+}

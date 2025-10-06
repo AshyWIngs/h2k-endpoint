@@ -1,0 +1,39 @@
+{
+  "type": "record",
+  "name": "DOCUMENTS_Row",
+  "namespace": "kz.qazmarka.h2k",
+  "doc": "Phoenix DOCUMENTS. PK: (OWNER_ID, DIRECTION, DOCUMENT_ID). TIMESTAMP/BIGINT — миллисекунды epoch. Таблица без соли.",
+  "h2k.saltBytes": 0,
+  "h2k.capacityHint": 24,
+  "fields": [
+    { "name": "OWNER_ID",          "type": "long",               "h2k.phoenixType": "BIGINT",         "doc": "NOT NULL: BIGINT" },
+    { "name": "DIRECTION",         "type": "int",                "h2k.phoenixType": "TINYINT",        "doc": "NOT NULL: TINYINT" },
+    { "name": "DOCUMENT_ID",       "type": { "type": "fixed", "name": "DocId16", "size": 16 },       "h2k.phoenixType": "BINARY(16)", "doc": "NOT NULL: BINARY(16)" },
+
+    { "name": "IS_DELETED",        "type": ["null","int"],       "default": null, "h2k.phoenixType": "TINYINT",        "doc": "TINYINT (DEFAULT 0 в DDL)" },
+    { "name": "owner_extra_id",    "type": ["null", { "type": "fixed", "name": "OwnerExtraId16", "size": 16 }], "default": null, "h2k.phoenixType": "BINARY(16)", "doc": "BINARY(16)" },
+    { "name": "group_id",          "type": ["null", { "type": "fixed", "name": "GroupId16", "size": 16 }],      "default": null, "h2k.phoenixType": "BINARY(16)", "doc": "BINARY(16)" },
+    { "name": "partner_id",        "type": ["null","long"],      "default": null, "h2k.phoenixType": "BIGINT",         "doc": "BIGINT" },
+    { "name": "partner_extra_id",  "type": ["null", { "type": "fixed", "name": "PartnerExtraId16", "size": 16 }], "default": null, "h2k.phoenixType": "BINARY(16)", "doc": "BINARY(16)" },
+    { "name": "created_at",        "type": ["null","long"],      "default": null, "h2k.phoenixType": "BIGINT",         "doc": "BIGINT (ms)" },
+    { "name": "processed_at",      "type": ["null","long"],      "default": null, "h2k.phoenixType": "BIGINT",         "doc": "BIGINT (ms)" },
+    { "name": "type",              "type": ["null","int"],       "default": null, "h2k.phoenixType": "INTEGER",        "doc": "INTEGER" },
+    { "name": "status",            "type": ["null","int"],       "default": null, "h2k.phoenixType": "TINYINT",        "doc": "TINYINT" },
+    { "name": "folder",            "type": ["null","int"],       "default": null, "h2k.phoenixType": "TINYINT",        "doc": "TINYINT" },
+    { "name": "date",              "type": ["null","long"],      "default": null, "h2k.phoenixType": "BIGINT",         "doc": "BIGINT (ms)" },
+    { "name": "number",            "type": ["null","string"],    "default": null, "h2k.phoenixType": "VARCHAR(1000)",  "doc": "VARCHAR(1000)" },
+    { "name": "filename",          "type": ["null","string"],    "default": null, "h2k.phoenixType": "VARCHAR",        "doc": "VARCHAR" },
+    { "name": "data",              "type": ["null","string"],    "default": null, "h2k.phoenixType": "VARCHAR",        "doc": "VARCHAR" },
+    { "name": "content",           "type": ["null","bytes"],     "default": null, "h2k.phoenixType": "VARBINARY",      "doc": "VARBINARY" },
+    { "name": "signature",         "type": ["null","bytes"],     "default": null, "h2k.phoenixType": "VARBINARY",      "doc": "VARBINARY" },
+    { "name": "outer_partner_id",  "type": ["null","string"],    "default": null, "h2k.phoenixType": "VARCHAR",        "doc": "VARCHAR" },
+    { "name": "created_by",        "type": ["null","int"],       "default": null, "h2k.phoenixType": "INTEGER",        "doc": "INTEGER" },
+    { "name": "changed_by",        "type": ["null","int"],       "default": null, "h2k.phoenixType": "INTEGER",        "doc": "INTEGER" },
+    { "name": "count_at",          "type": ["null","long"],      "default": null, "h2k.phoenixType": "BIGINT",         "doc": "BIGINT (DEFAULT 0 в DDL)" },
+    { "name": "OUTER_ID",          "type": ["null","string"],    "default": null, "h2k.phoenixType": "VARCHAR",        "doc": "VARCHAR" },
+
+    { "name": "_event_ts",         "type": ["null","long"],      "default": null, "doc": "Доп. метаполе: версия события, ms epoch" },
+    { "name": "_delete",           "type": "boolean",            "default": false, "doc": "Доп. метаполе: логическое удаление" }
+  ],
+  "h2k.pk": ["OWNER_ID","DIRECTION","DOCUMENT_ID"]
+}

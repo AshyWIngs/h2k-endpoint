@@ -31,7 +31,7 @@ add_peer 'h2k_balanced',
       'h2k.kafka.bootstrap.servers'         => '10.254.3.111:9092,10.254.3.112:9092,10.254.3.113:9092',
       # client.id не задаём — Endpoint сам сгенерирует уникальный id per-host (hostname/UUID)
       'h2k.topic.pattern'                   => '${table}',              # ${table}|${namespace}|${qualifier}
-      'h2k.cf.list'                         => 'd',                     # можно CSV: 'b,d'; PK из rowkey инъектируются в payload — в CF добавлять не нужно
+      'h2k.cf.list'                         => '0,DOCUMENTS,b,d',       # union по всем таблицам: default CF ('0'), агрегаты, бинарные и основные данные
 
       'h2k.decode.mode'                     => 'phoenix-avro',          # 'simple' | 'phoenix-avro' | 'json-phoenix'
       # TIMESTAMP/DATE/TIME -> epoch millis; любой ARRAY -> JSON‑массив

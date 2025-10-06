@@ -23,7 +23,7 @@
   <parent>
     <groupId>kz.qazmarka</groupId>
     <artifactId>h2k-endpoint-parent</artifactId>
-    <version>0.0.14</version>
+    <version>0.0.15</version>
     <relativePath>../pom.xml</relativePath>
   </parent>
 
@@ -393,8 +393,6 @@
                   <include>com.squareup.okio:*</include>
                 </includes>
               </artifactSet>
-              <shadedArtifactAttached>true</shadedArtifactAttached>
-              <shadedClassifierName>shaded</shadedClassifierName>
               <relocations>
                 <relocation>
                   <pattern>org.apache.avro</pattern>

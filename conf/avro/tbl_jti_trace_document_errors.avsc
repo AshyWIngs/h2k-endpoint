@@ -1,0 +1,23 @@
+{
+  "type": "record",
+  "name": "TBL_JTI_TRACE_DOCUMENT_ERRORS_Row",
+  "namespace": "kz.qazmarka.h2k",
+  "doc": "Phoenix TBL_JTI_TRACE_DOCUMENT_ERRORS. PK: (id). TIMESTAMP — миллисекунды epoch. Таблица без соли.",
+  "h2k.saltBytes": 0,
+  "h2k.capacityHint": 8,
+  "fields": [
+    { "name": "id",    "type": "string",            "h2k.phoenixType": "VARCHAR",    "doc": "NOT NULL: VARCHAR" },
+
+    { "name": "did",   "type": ["null","string"],   "default": null, "h2k.phoenixType": "VARCHAR",   "doc": "VARCHAR" },
+    { "name": "dt",    "type": ["null","long"],     "default": null, "h2k.phoenixType": "TIMESTAMP", "doc": "TIMESTAMP (ms)" },
+    { "name": "oid",   "type": ["null","string"],   "default": null, "h2k.phoenixType": "VARCHAR",   "doc": "VARCHAR" },
+    { "name": "en",    "type": ["null","string"],   "default": null, "h2k.phoenixType": "VARCHAR",   "doc": "VARCHAR" },
+    { "name": "emsg",  "type": ["null","string"],   "default": null, "h2k.phoenixType": "VARCHAR",   "doc": "VARCHAR" },
+    { "name": "inn",   "type": ["null","string"],   "default": null, "h2k.phoenixType": "VARCHAR",   "doc": "VARCHAR" },
+    { "name": "dnum",  "type": ["null","string"],   "default": null, "h2k.phoenixType": "VARCHAR",   "doc": "VARCHAR" },
+
+    { "name": "_event_ts", "type": ["null","long"], "default": null,  "doc": "Доп. метаполе: версия события, ms epoch" },
+    { "name": "_delete",   "type": "boolean",       "default": false, "doc": "Доп. метаполе: логическое удаление" }
+  ],
+  "h2k.pk": ["id"]
+}

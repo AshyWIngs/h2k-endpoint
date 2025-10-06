@@ -1,0 +1,31 @@
+{
+  "type": "record",
+  "name": "RECEIPT_Row",
+  "namespace": "kz.qazmarka.h2k",
+  "doc": "Phoenix RECEIPT. PK: (did). TIMESTAMP — миллисекунды epoch. Таблица посолена (SALT_BUCKETS=30).",
+  "h2k.saltBytes": 1,
+  "h2k.capacityHint": 16,
+  "fields": [
+    { "name": "did",   "type": "string",            "h2k.phoenixType": "VARCHAR",            "doc": "NOT NULL: VARCHAR" },
+
+    { "name": "id",    "type": ["null","string"],   "default": null, "h2k.phoenixType": "VARCHAR",           "doc": "VARCHAR" },
+    { "name": "dt",    "type": ["null","long"],     "default": null, "h2k.phoenixType": "TIMESTAMP",         "doc": "TIMESTAMP (ms)" },
+    { "name": "t",     "type": ["null","int"],      "default": null, "h2k.phoenixType": "SMALLINT",          "doc": "SMALLINT" },
+    { "name": "st",    "type": ["null","int"],      "default": null, "h2k.phoenixType": "UNSIGNED_TINYINT",  "doc": "UNSIGNED_TINYINT" },
+    { "name": "sid",   "type": ["null","string"],   "default": null, "h2k.phoenixType": "VARCHAR",           "doc": "VARCHAR" },
+    { "name": "sinn",  "type": ["null","string"],   "default": null, "h2k.phoenixType": "VARCHAR",           "doc": "VARCHAR" },
+    { "name": "sn",    "type": ["null","string"],   "default": null, "h2k.phoenixType": "VARCHAR",           "doc": "VARCHAR" },
+    { "name": "sa",    "type": ["null","string"],   "default": null, "h2k.phoenixType": "VARCHAR",           "doc": "VARCHAR" },
+    { "name": "said",  "type": ["null","string"],   "default": null, "h2k.phoenixType": "VARCHAR",           "doc": "VARCHAR" },
+    { "name": "tm",    "type": ["null","long"],     "default": null, "h2k.phoenixType": "TIMESTAMP",         "doc": "TIMESTAMP (ms)" },
+    { "name": "tt",    "type": ["null","long"],     "default": null, "h2k.phoenixType": "BIGINT",            "doc": "BIGINT" },
+    { "name": "vat",   "type": ["null","long"],     "default": null, "h2k.phoenixType": "BIGINT",            "doc": "BIGINT" },
+    { "name": "pgm",   "type": ["null","bytes"],    "default": null, "h2k.phoenixType": "VARBINARY",         "doc": "VARBINARY" },
+    { "name": "j",     "type": ["null","string"],   "default": null, "h2k.phoenixType": "VARCHAR",           "doc": "VARCHAR" },
+    { "name": "b",     "type": ["null","string"],   "default": null, "h2k.phoenixType": "VARCHAR",           "doc": "VARCHAR" },
+
+    { "name": "_event_ts", "type": ["null","long"], "default": null,  "doc": "Доп. метаполе: версия события, ms epoch" },
+    { "name": "_delete",   "type": "boolean",       "default": false, "doc": "Доп. метаполе: логическое удаление" }
+  ],
+  "h2k.pk": ["did"]
+}

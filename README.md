@@ -20,6 +20,7 @@
 - [Раскатка и мониторинг](#раскатка-и-мониторинг)
 - [FAQ](#faq)
 - [Структура пакетов](#структура-пакетов)
+- [Обновление версии проекта](#обновление-версии-проекта)
 
 ---
 
@@ -184,13 +185,25 @@ h2k.topic.pattern=${table}
 
 ## Полная документация
 
+- [Сводный навигатор по документации](docs/README.md)
 - [Конфигурация (все ключи)](docs/config.md)
 - [Phoenix и `schema.json`](docs/phoenix.md)
 - [Подсказки ёмкости и метаданные](docs/capacity.md)
-- [HBase shell / ZooKeeper / операции](docs/hbase.md), а также [операции эксплуатации](docs/runbook/operations.md)
+- [HBase shell / ZooKeeper / операции](docs/hbase.md) и runbook: [операции](docs/runbook/operations.md), [troubleshooting](docs/runbook/troubleshooting.md)
+- [Avro (локальные/Confluent)](docs/avro.md) и [интеграция](docs/integration-avro.md)
+- [Roadmap по Avro‑миграции](docs/roadmap-avro.md)
 - [ClickHouse ingest (JSONEachRow)](docs/clickhouse.md)
-- [Avro (локальные схемы / Confluent)](docs/avro.md)
-- [Профильные скрипты и матрица настроек](docs/peer-profiles.md)
+- [Профили peer](docs/peer-profiles.md)
+
+## Обновление версии проекта
+
+- Номер версии задаётся **только** в родительском `pom.xml`; модули `endpoint` и `benchmarks` наследуют его через `<parent>` и `${project.version}`. Ручного редактирования трёх файлов не требуется.
+- Для атомарного обновления используйте Maven Versions Plugin:
+  ```bash
+  mvn versions:set -DnewVersion=0.0.16
+  mvn versions:commit   # зафиксировать изменения, или mvn versions:revert при необходимости отката
+  ```
+- После исполнения команды обновятся все `pom.xml` в дереве. Проверьте diff, запустите `mvn test` и закоммитьте изменения версии вместе с релизными правками.
 
 ## Поддержка форматов сообщений
 
@@ -309,14 +322,16 @@ Avro Confluent — основной формат на проде, поэтому
 
 ## Структура пакетов
 
-- `kz.qazmarka.h2k.endpoint.topic` — менеджмент Kafka-топиков и ensure-метрики.
-- `kz.qazmarka.h2k.endpoint.processing` — горячий путь WAL→Kafka (группировка, фильтрация, метрики).
-- `kz.qazmarka.h2k.kafka.producer.batch` — адаптивный `BatchSender`, метрики и тюнер.
-- `kz.qazmarka.h2k.kafka.support` — общие утилиты Kafka, в т.ч. `BackoffPolicy`.
-- `kz.qazmarka.h2k.kafka.ensure` — фасады `TopicEnsurer`/`TopicEnsureService`; вспомогательные классы распределены по подпакетам `admin`, `planner`, `state`, `metrics`, `config`, `util`.
-- `kz.qazmarka.h2k.payload.serializer` — реализация сериализаторов и внутреннего резолвера (`serializer.internal.SerializerResolver`).
-- `kz.qazmarka.h2k.schema.registry.json` — JSONEachRow (Schema Registry JSON / внешние JSON‑схемы).
-- `kz.qazmarka.h2k.schema.registry.avro.local` — локальные `.avsc` для `payload.format=avro-*` в режиме `generic`.
-- `kz.qazmarka.h2k.schema.registry.avro.phoenix` — Phoenix‑метаданные из Avro (соль, PK) для Avro режимов.
-- Модуль `endpoint` содержит production‑код и тесты, модуль `benchmarks` — JMH‑сценарии.
-- `docs/runbook` — эксплуатационный runbook и диагностика; ссылки синхронизированы с конфигами в `conf/`.
+- `kz.qazmarka.h2k.endpoint` — точка входа `KafkaReplicationEndpoint`, инициализация и публичный API.
+- `kz.qazmarka.h2k.endpoint.internal` — `TopicManager`, метрики, вспомогательные сервисы endpoint’а.
+- `kz.qazmarka.h2k.endpoint.processing` — горячий путь WAL→Kafka: группировка строк, фильтрация CF, построение payload, счётчики.
+- `kz.qazmarka.h2k.kafka.ensure` — автоматическое создание/согласование топиков (подпакеты `admin`, `planner`, `state`, `metrics`, `config`).
+- `kz.qazmarka.h2k.kafka.producer.batch` — адаптивный `BatchSender`, метрики и тюнер отправок.
+- `kz.qazmarka.h2k.kafka.support` — общие Kafka-утилиты (например, `BackoffPolicy`).
+- `kz.qazmarka.h2k.payload.builder` — сборка JSON/Avro payload’ов, расчёт метаполей и ёмкости.
+- `kz.qazmarka.h2k.payload.serializer` — фабрика и реализация сериализаторов; подпаки `avro`, `json`, `table` и др.
+- `kz.qazmarka.h2k.schema.decoder` — декодирование значений Phoenix/Raw; `schema.registry.*` — резолверы схем (JSON, Avro локальный, Avro Phoenix, Confluent SR).
+- `kz.qazmarka.h2k.config` — чтение и валидация конфигурации (`H2kConfig`, секции, builder’ы).
+- `kz.qazmarka.h2k.util` — низкоуровневые утилиты (Bytes, JsonWriter, Parsers, RowKeySlice).
+- Модуль `endpoint` содержит production‑код и тесты; модуль `benchmarks` — JMH-бенчмарки (`benchmarks/src/...`).
+- `docs/` и `conf/` — эксплуатационная документация, профили peer и сопутствующие скрипты.
