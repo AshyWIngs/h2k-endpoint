@@ -30,10 +30,14 @@
   <artifactId>h2k-endpoint</artifactId>
   <name>HBase 1.4.13 -> Kafka 2.3.1 ReplicationEndpoint</name>
 
+
+  <properties>
+    <avro.mode>confluent</avro.mode>
+  </properties>
   <!-- Репозиторий Confluent OSS: обязателен для разрешения зависимостей Schema Registry 5.3.8.
        По нашему роадмапу целевой профиль — Avro Confluent (SR на тех же узлах, что и Kafka/HBase/ClickHouse),
        поэтому репозиторий оставляем включённым всегда. В корпоративной среде его можно заменить зеркалом. -->
-  <!-- Профили сборки: dev (локальный логгер), avro‑generic (Avro без SR), avro‑confluent (wire‑format Confluent). -->
+  <!-- Профили сборки: dev (локальный логгер), avro‑confluent (wire-format Confluent), phoenix-4.15 (альтернативный стек). -->
   <profiles>
     <profile>
       <id>dev</id>
@@ -42,7 +46,6 @@
         <dependency>
           <groupId>org.slf4j</groupId>
           <artifactId>slf4j-simple</artifactId>
-          <version>${slf4j.version}</version>
           <scope>runtime</scope>
         </dependency>
       </dependencies>
@@ -55,28 +58,11 @@
     </profile>
 
     <profile>
-      <id>avro-generic</id>
-      <activation>
-        <property>
-          <name>!skipAvro</name>
-        </property>
-      </activation>
-      <dependencies>
-        <!-- Avro runtime для сериализации GenericRecord (включаем в JAR через shading). -->
-        <dependency>
-          <groupId>org.apache.avro</groupId>
-          <artifactId>avro</artifactId>
-        </dependency>
-      </dependencies>
-    </profile>
-
-    <profile>
       <id>avro-confluent</id>
       <activation>
-        <property>
-          <name>!skipAvroConfluent</name>
-        </property>
+        <activeByDefault>true</activeByDefault>
       </activation>
+      <!-- Активируем Confluent Avro по умолчанию; отключить можно явным '-P !avro-confluent' при сборке. -->
       <dependencies>
         <!-- Проводной формат Confluent (magic byte + schemaId + payload). -->
         <dependency>
@@ -108,11 +94,6 @@
               <groupId>com.fasterxml.jackson.core</groupId>
               <artifactId>jackson-databind</artifactId>
             </exclusion>
-            <!-- Avro исключаем: его поставляет профиль avro‑generic (provided). -->
-            <exclusion>
-              <groupId>org.apache.avro</groupId>
-              <artifactId>avro</artifactId>
-            </exclusion>
           </exclusions>
         </dependency>
       </dependencies>
@@ -129,7 +110,6 @@
     <dependency>
       <groupId>org.apache.hbase</groupId>
       <artifactId>hbase-server</artifactId>
-      <version>${hbase.version}</version>
       <scope>provided</scope>
       <!-- Исключаем log4j 1.x и слои привязки slf4j-log4j12, чтобы не перетирать логирование кластера. -->
       <exclusions>
@@ -145,10 +125,8 @@
     </dependency>
     <!-- HBase Client: типы TableName/Cell и т.д. -->
     <dependency>
-      <groupId>org.apache.hbase</groupId>
-      <artifactId>hbase-client</artifactId>
-      <version>${hbase.version}</version>
-      <scope>provided</scope>
+      <groupId>org.apache.avro</groupId>
+      <artifactId>avro</artifactId>
     </dependency>
     <!-- Hadoop базовые libs (классы конфигурации/безопасности). provided: берём из окружения кластера. -->
     <dependency>
@@ -385,6 +363,8 @@
                     <exclude>META-INF/NOTICE.txt</exclude>
                     <exclude>META-INF/ASL2.0</exclude>
                     <exclude>META-INF/MANIFEST.MF</exclude>
+                    <exclude>META-INF/DEPENDENCIES</exclude>
+                    <exclude>META-INF/maven/**</exclude>
                   </excludes>
                 </filter>
                 <filter>
@@ -413,6 +393,8 @@
                   <include>com.squareup.okio:*</include>
                 </includes>
               </artifactSet>
+              <shadedArtifactAttached>true</shadedArtifactAttached>
+              <shadedClassifierName>shaded</shadedClassifierName>
               <relocations>
                 <relocation>
                   <pattern>org.apache.avro</pattern>

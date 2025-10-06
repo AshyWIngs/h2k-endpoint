@@ -79,13 +79,17 @@ public final class BatchSender implements AutoCloseable {
          */
         void onFlushSuccess(int processed, long latencyMs, int adaptiveAwaitEvery);
 
-        /** Уведомление о неуспешном «тихом» сбросе. */
-        void onFlushFailure();
+        /**
+         * Уведомление о неуспешном «тихом» сбросе.
+         *
+         * @param adaptiveAwaitEvery текущий адаптивный порог перед авто‑сбросом
+         */
+        void onFlushFailure(int adaptiveAwaitEvery);
     }
 
     private static final Listener NOOP_LISTENER = new Listener() {
         @Override public void onFlushSuccess(int processed, long latencyMs, int adaptiveAwaitEvery) { /* noop */ }
-        @Override public void onFlushFailure() { /* noop */ }
+        @Override public void onFlushFailure(int adaptiveAwaitEvery) { /* noop */ }
     };
 
     /** Базовое количество отправок перед ожиданием подтверждений. */
@@ -505,7 +509,7 @@ public final class BatchSender implements AutoCloseable {
         if (enableCounters) {
             failedFlushes++;
         }
-        listener.onFlushFailure();
+        listener.onFlushFailure(adaptiveAwaitEvery);
     }
 
     private void adjustAwaitEvery(long latencyMs) {

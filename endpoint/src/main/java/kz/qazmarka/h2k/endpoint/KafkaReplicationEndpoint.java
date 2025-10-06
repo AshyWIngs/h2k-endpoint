@@ -219,6 +219,10 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
         registerMetric("producer.batch.flush.latency.last.ms", batchMetrics::lastFlushLatencyMs);
         registerMetric("producer.batch.flush.latency.max.ms", batchMetrics::maxFlushLatencyMs);
         registerMetric("producer.batch.flush.latency.avg.ms", batchMetrics::avgFlushLatencyMs);
+        registerMetric("producer.batch.fail.streak.current", batchMetrics::failureStreak);
+        registerMetric("producer.batch.fail.streak.max", batchMetrics::maxFailureStreak);
+        registerMetric("producer.batch.fail.last.ms", batchMetrics::lastFailureAtMs);
+        registerMetric("producer.batch.fail.last.await", batchMetrics::lastFailureAwaitEvery);
         registerAutotuneMetrics();
         registerMetric("wal.rowbuffer.upsizes", walProcessor::rowBufferUpsizeCount);
         registerMetric("wal.rowbuffer.trims", walProcessor::rowBufferTrimCount);

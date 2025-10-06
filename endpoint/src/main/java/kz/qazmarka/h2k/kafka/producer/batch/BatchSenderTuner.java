@@ -82,6 +82,10 @@ public final class BatchSenderTuner {
         if (!enabled) {
             return;
         }
+        if (!success) {
+            handleFailure(metrics);
+            return;
+        }
         int observed = clamp((int) metrics.currentAwaitEvery());
         if (observed <= 0) {
             observed = clamp((int) metrics.configuredAwaitEvery());
@@ -180,6 +184,37 @@ public final class BatchSenderTuner {
         }
         long elapsed = System.nanoTime() - last;
         return elapsed >= cooldownNs;
+    }
+
+    private void handleFailure(BatchSenderMetrics metrics) {
+        int observed = clamp((int) metrics.currentAwaitEvery());
+        if (observed <= 0) {
+            observed = clamp((int) metrics.configuredAwaitEvery());
+        }
+        lastObservedAwait = observed;
+        lastObservedLatencyMs = metrics.lastFlushLatencyMs();
+        recommendedAwait.set(minAwaitEvery);
+        lastDecisionAtNs.set(System.nanoTime());
+        decisionsTotal.incrementAndGet();
+        lastDecisionIncrease = false;
+        logFailure(metrics.failureStreak(), observed);
+    }
+
+    private void logFailure(long streak, int observed) {
+        if (!LOG.isWarnEnabled()) {
+            return;
+        }
+        if (streak <= 0) {
+            LOG.warn("BatchSenderAutoTune: ошибка ожидания подтверждений Kafka, awaitEvery удерживается на минимуме {}", minAwaitEvery);
+            return;
+        }
+        if (streak == 1) {
+            LOG.warn("BatchSenderAutoTune: ошибка ожидания подтверждений Kafka, понижаю awaitEvery {} → {}", observed, minAwaitEvery);
+            return;
+        }
+        if ((streak & (streak - 1)) == 0) { // log на степенях двойки
+            LOG.warn("BatchSenderAutoTune: продолжаются ошибки ожидания (streak={}), awaitEvery={} (min)", streak, minAwaitEvery);
+        }
     }
 
     private int clamp(int value) {

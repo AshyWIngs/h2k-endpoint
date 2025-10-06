@@ -5,6 +5,8 @@ logs/**
 
 # --- IDE/редакторы ---
 .vscode/
+!.vscode/
+!.vscode/settings.json
 .idea/
 *.iml
 *.code-workspace

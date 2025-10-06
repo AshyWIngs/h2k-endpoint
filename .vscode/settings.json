@@ -1,0 +1,20 @@
+{
+  "java.import.exclusions": [
+    "**/target/**"
+  ],
+  "java.project.sourcePaths": [
+    "endpoint/src/main/java",
+    "endpoint/src/test/java",
+    "benchmarks/src/main/java"
+  ],
+  "files.exclude": {
+    "**/target/**": true
+  },
+  "files.watcherExclude": {
+    "**/target/**": true
+  },
+  "search.exclude": {
+    "**/target/**": true
+  },
+  "java.compile.nullAnalysis.mode": "automatic"
+}

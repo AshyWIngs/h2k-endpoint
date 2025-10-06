@@ -17,6 +17,10 @@ public final class BatchSenderMetrics implements BatchSender.Listener {
     private final AtomicLong maxFlushLatencyMs = new AtomicLong();
     private final AtomicLong currentAwaitEvery = new AtomicLong();
     private final AtomicLong configuredAwaitEvery = new AtomicLong();
+    private final AtomicLong failureStreak = new AtomicLong();
+    private final AtomicLong maxFailureStreak = new AtomicLong();
+    private final AtomicLong lastFailureAtMs = new AtomicLong();
+    private final AtomicLong lastFailureAwaitEvery = new AtomicLong();
 
     /** Обновляет базовый (конфигурационный) awaitEvery для последующего экспорта. */
     public void updateConfiguredAwaitEvery(int awaitEvery) {
@@ -32,11 +36,16 @@ public final class BatchSenderMetrics implements BatchSender.Listener {
         lastFlushLatencyMs.set(latencyMs);
         maxFlushLatencyMs.accumulateAndGet(latencyMs, Math::max);
         currentAwaitEvery.set(adaptiveAwaitEvery);
+        failureStreak.set(0L);
     }
 
     @Override
-    public void onFlushFailure() {
+    public void onFlushFailure(int adaptiveAwaitEvery) {
         flushFailures.increment();
+        long streak = failureStreak.updateAndGet(prev -> prev >= Long.MAX_VALUE ? Long.MAX_VALUE : prev + 1L);
+        maxFailureStreak.accumulateAndGet(streak, Math::max);
+        lastFailureAtMs.set(System.currentTimeMillis());
+        lastFailureAwaitEvery.set(adaptiveAwaitEvery);
     }
 
     public long flushSuccessTotal() {
@@ -82,5 +91,20 @@ public final class BatchSenderMetrics implements BatchSender.Listener {
     public long configuredAwaitEvery() {
         return configuredAwaitEvery.get();
     }
-}
 
+    public long failureStreak() {
+        return failureStreak.get();
+    }
+
+    public long maxFailureStreak() {
+        return maxFailureStreak.get();
+    }
+
+    public long lastFailureAtMs() {
+        return lastFailureAtMs.get();
+    }
+
+    public long lastFailureAwaitEvery() {
+        return lastFailureAwaitEvery.get();
+    }
+}

@@ -7,6 +7,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
@@ -26,7 +27,8 @@ import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.annotations.TearDown;
 import org.openjdk.jmh.infra.Blackhole;
 
-import kz.qazmarka.shaded.confluent.kafka.schemaregistry.client.MockSchemaRegistryClient;
+import io.confluent.kafka.schemaregistry.client.MockSchemaRegistryClient;
+import io.confluent.kafka.schemaregistry.client.SchemaRegistryClient;
 import kz.qazmarka.h2k.config.H2kConfig;
 import kz.qazmarka.h2k.payload.builder.PayloadBuilder;
 import kz.qazmarka.h2k.payload.serializer.avro.SchemaRegistryClientFactory;
@@ -47,7 +49,7 @@ import kz.qazmarka.h2k.util.RowKeySlice;
 @OutputTimeUnit(TimeUnit.MICROSECONDS)
 public class PayloadBuilderConfluentBenchmark {
 
-    private static final String SCHEMA_FILE_NAME = "orders.avsc";
+    private static final String SCHEMA_FILE_NAME = "bench_orders.avsc";
     private static final String SCHEMA_JSON = "{" +
             "\"type\":\"record\"," +
             "\"name\":\"BenchOrder\"," +
@@ -58,11 +60,13 @@ public class PayloadBuilderConfluentBenchmark {
             "{\"name\":\"amount\",\"type\":[\"null\",\"bytes\"],\"default\":null}" +
             "]" +
             "}";
-    private static final TableName TABLE = TableName.valueOf("bench", "orders");
+    private static final TableName TABLE = TableName.valueOf("BENCH_ORDERS");
     private static final byte[] ROW_KEY = Bytes.toBytes("row-1");
     private static final long WAL_SEQ = 42L;
     private static final long WAL_WRITE_TIME = 1_690_000_000_000L;
-    private static final byte[] CF = Bytes.toBytes("d");
+    private static final byte[] CF = Bytes.toBytes("D");
+
+    private static final String BENCH_BOOTSTRAP = "bench:9092";
 
     /** Состояние для «горячего» сценария: Schema Registry уже прогрет. */
     @State(Scope.Thread)
@@ -78,8 +82,8 @@ public class PayloadBuilderConfluentBenchmark {
                 schemaDir = Files.createTempDirectory("avro-bench-hot");
                 writeSchema(schemaDir.resolve(SCHEMA_FILE_NAME));
                 Configuration cfg = baseConfig(schemaDir);
-                H2kConfig h2kConfig = H2kConfig.from(cfg, "bench:9092");
-                MockSchemaRegistryClient client = new MockSchemaRegistryClient();
+                H2kConfig h2kConfig = H2kConfig.from(cfg, BENCH_BOOTSTRAP);
+                SchemaRegistryClient client = new MockSchemaRegistryClient();
                 SchemaRegistryClientFactory factory = (urls, clientConfig, capacity) -> client;
                 builder = new PayloadBuilder(SimpleDecoder.INSTANCE, h2kConfig, factory);
                 cells = Collections.unmodifiableList(sampleCells());
@@ -112,7 +116,7 @@ public class PayloadBuilderConfluentBenchmark {
                 schemaDir = Files.createTempDirectory("avro-bench-cold");
                 writeSchema(schemaDir.resolve(SCHEMA_FILE_NAME));
                 Configuration cfg = baseConfig(schemaDir);
-                config = H2kConfig.from(cfg, "bench:9092");
+                config = H2kConfig.from(cfg, BENCH_BOOTSTRAP);
                 cells = Collections.unmodifiableList(sampleCells());
                 rowKey = new RowKeySlice.Mutable(ROW_KEY, 0, ROW_KEY.length);
             } catch (IOException e) {
@@ -122,7 +126,7 @@ public class PayloadBuilderConfluentBenchmark {
 
         @Setup(Level.Invocation)
         public void setUpInvocation() {
-            MockSchemaRegistryClient client = new MockSchemaRegistryClient();
+            SchemaRegistryClient client = new MockSchemaRegistryClient();
             SchemaRegistryClientFactory factory = (urls, clientConfig, capacity) -> client;
             builder = new PayloadBuilder(SimpleDecoder.INSTANCE, config, factory);
         }
@@ -149,8 +153,8 @@ public class PayloadBuilderConfluentBenchmark {
 
     private static Configuration baseConfig(Path schemaDir) {
         Configuration cfg = new Configuration(false);
-        cfg.set("h2k.kafka.bootstrap.servers", "bench:9092");
-        cfg.set("h2k.topic.pattern", "${namespace}.${qualifier}");
+        cfg.set("h2k.kafka.bootstrap.servers", BENCH_BOOTSTRAP);
+        cfg.set("h2k.topic.pattern", "${table}");
         cfg.set("h2k.payload.format", "avro_binary");
         cfg.set("h2k.avro.mode", "confluent");
         cfg.set("h2k.avro.sr.urls", "mock://schema-registry");
@@ -169,15 +173,15 @@ public class PayloadBuilderConfluentBenchmark {
     private static void writeSchema(Path schemaPath) throws IOException {
         Files.createDirectories(schemaPath.getParent());
         Files.write(schemaPath, SCHEMA_JSON.getBytes(StandardCharsets.UTF_8));
+        // Для таблиц с namespace создаём копию с именем "bench:orders.avsc", чтобы совпало с ожиданием AvroSchemaRegistry
     }
 
     private static void deleteDirectoryQuietly(Path dir) {
         if (dir == null) {
             return;
         }
-        try {
-            Files.walk(dir)
-                    .sorted((a, b) -> b.compareTo(a))
+        try (java.util.stream.Stream<Path> paths = Files.walk(dir)) {
+            paths.sorted(Comparator.reverseOrder())
                     .forEach(path -> {
                         try {
                             Files.deleteIfExists(path);
