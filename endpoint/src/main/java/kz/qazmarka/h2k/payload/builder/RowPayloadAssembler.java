@@ -33,6 +33,8 @@ final class RowPayloadAssembler {
     private final H2kConfig cfg;
     private final QualifierCache qualifierCache = new QualifierCache();
     private final Set<String> tableOptionsLogged = ConcurrentHashMap.newKeySet();
+    private final TableMetaCache tableMetaCache;
+    private final boolean jsonPayloadFormat;
 
     /**
      * @param decoder декодер Phoenix-значений, используемый для преобразования ячеек в Java-тип
@@ -41,6 +43,9 @@ final class RowPayloadAssembler {
     RowPayloadAssembler(Decoder decoder, H2kConfig cfg) {
         this.decoder = decoder;
         this.cfg = cfg;
+        this.tableMetaCache = new TableMetaCache(cfg);
+        H2kConfig.PayloadFormat format = cfg.getPayloadFormat();
+        this.jsonPayloadFormat = format == null || format == H2kConfig.PayloadFormat.JSON_EACH_ROW;
     }
 
     /**
@@ -74,11 +79,10 @@ final class RowPayloadAssembler {
                 + (includeRowKeyPresent ? 1 : 0)
                 + (includeWalMeta ? 2 : 0);
 
-        final Map<String, Object> obj = newRootMap(table, cap);
-        H2kConfig.CfFilterSnapshot cfSnapshot = cfg.describeCfFilter(table);
-        final String cfCsv = cfSnapshot.enabled() ? cfSnapshot.csv() : "";
-        MetaWriter.addMetaIfEnabled(includeMeta, obj, table, cellsCount, cfCsv);
-        decodePkFromRowKey(table, rowKey, obj);
+        TableMeta meta = tableMetaCache.metaFor(table);
+        final Map<String, Object> obj = newRootMap(meta, cap);
+        MetaWriter.addMetaIfEnabled(includeMeta, obj, meta, meta.cfCsv, cellsCount);
+        decodePkFromRowKey(table, meta.saltBytes, rowKey, obj);
 
         CellStats stats = decodeCells(table, cells, obj);
         MetaWriter.addCellsCfIfMeta(obj, includeMeta, stats.cfCells);
@@ -87,8 +91,7 @@ final class RowPayloadAssembler {
         }
         MetaWriter.addDeleteFlagIfNeeded(obj, stats.hasDelete);
 
-        final int saltBytes = cfg.getSaltBytesFor(table);
-        RowKeyWriter.addRowKeyIfPresent(includeRowKeyPresent, obj, rowKey, rowkeyB64, saltBytes);
+        RowKeyWriter.addRowKeyIfPresent(includeRowKeyPresent, obj, rowKey, rowkeyB64, meta.saltBytes);
         MetaWriter.addWalMeta(includeWalMeta, obj, walSeq, walWriteTime);
         return obj;
     }
@@ -127,12 +130,12 @@ final class RowPayloadAssembler {
     /**
      * Создаёт корневую {@link java.util.LinkedHashMap} с учётом конфигурационной подсказки ёмкости.
      *
-     * @param table               таблица Phoenix (используется для подсказки ёмкости)
+     * @param meta                кэшированная мета-информация по таблице
      * @param estimatedKeysCount  оценка числа ключей в payload до добавления метаданных
      * @return готовая LinkedHashMap требуемой начальной ёмкости
      */
-    private Map<String, Object> newRootMap(TableName table, int estimatedKeysCount) {
-        final int hint = cfg.getCapacityHintFor(table);
+    private Map<String, Object> newRootMap(TableMeta meta, int estimatedKeysCount) {
+        final int hint = meta.capacityHint;
         final int target = Math.max(estimatedKeysCount, hint > 0 ? hint : 0);
         final int initialCapacity = Maps.initialCapacity(target);
         return new LinkedHashMap<>(initialCapacity, 0.75f);
@@ -145,11 +148,10 @@ final class RowPayloadAssembler {
      * @param rk    срез rowkey; может быть {@code null}
      * @param out   карта payload, куда добавляются значения PK
      */
-    private void decodePkFromRowKey(TableName table, RowKeySlice rk, Map<String, Object> out) {
+    private void decodePkFromRowKey(TableName table, int saltBytes, RowKeySlice rk, Map<String, Object> out) {
         if (rk == null) {
             return;
         }
-        final int saltBytes = cfg.getSaltBytesFor(table);
         decoder.decodeRowKey(table, rk, saltBytes, out);
     }
 
@@ -212,12 +214,75 @@ final class RowPayloadAssembler {
         }
 
         if (va != null && vl > 0) {
-            obj.put(columnName, new String(va, vo, vl, StandardCharsets.UTF_8));
+            if (jsonPayloadFormat) {
+                obj.put(columnName, new String(va, vo, vl, StandardCharsets.UTF_8));
+            } else {
+                obj.put(columnName, BinarySlice.of(va, vo, vl));
+            }
             return;
         }
 
         if (serializeNulls && (!obj.containsKey(columnName) || obj.get(columnName) == null)) {
             obj.put(columnName, null);
+        }
+    }
+
+    /** Кеш строковых представлений имени таблицы, чтобы избегать повторных аллокаций на горячем пути. */
+    private static final class TableMetaCache {
+        private final H2kConfig cfg;
+        private final ConcurrentHashMap<String, TableMeta> cache = new ConcurrentHashMap<>(16);
+
+        TableMetaCache(H2kConfig cfg) {
+            this.cfg = cfg;
+        }
+
+        /**
+         * Возвращает кэшированное строковое представление имени таблицы.
+         *
+         * @param table {@link TableName}, для которого требуется метаданные
+         * @return объект с готовыми строками (table/namespace/qualifier)
+         */
+        TableMeta metaFor(TableName table) {
+            String key = table.getNameWithNamespaceInclAsString();
+            TableMeta cached = cache.get(key);
+            if (cached != null) {
+                return cached;
+            }
+            TableOptionsSnapshot options = cfg.describeTableOptions(table);
+            H2kConfig.CfFilterSnapshot cfSnapshot = options.cfFilter();
+            TableMeta created = new TableMeta(
+                    table.getNameAsString(),
+                    table.getNamespaceAsString(),
+                    table.getQualifierAsString(),
+                    cfSnapshot.enabled() ? cfSnapshot.csv() : "",
+                    options.saltBytes(),
+                    options.capacityHint());
+            TableMeta race = cache.putIfAbsent(key, created);
+            return race != null ? race : created;
+        }
+    }
+
+    /** Иммутабельный набор строковых представлений имени таблицы, используемый для метаданных. */
+    private static final class TableMeta {
+        final String table;
+        final String namespace;
+        final String qualifier;
+        final String cfCsv;
+        final int saltBytes;
+        final int capacityHint;
+
+        TableMeta(String table,
+                  String namespace,
+                  String qualifier,
+                  String cfCsv,
+                  int saltBytes,
+                  int capacityHint) {
+            this.table = table;
+            this.namespace = namespace;
+            this.qualifier = qualifier;
+            this.cfCsv = cfCsv;
+            this.saltBytes = saltBytes;
+            this.capacityHint = capacityHint;
         }
     }
 
@@ -251,7 +316,7 @@ final class RowPayloadAssembler {
                 return race != null ? race : created;
             } finally {
                 key.clear();
-                lookup.remove();
+                lookup.remove(); // гарантируем очистку ThreadLocal на окончание потока
                 lookup.set(key);
             }
         }
@@ -331,15 +396,15 @@ final class RowPayloadAssembler {
          */
         static void addMetaIfEnabled(boolean includeMeta,
                                      Map<String, Object> obj,
-                                     TableName table,
-                                     int totalCells,
-                                     String cfList) {
+                                     TableMeta meta,
+                                     String cfList,
+                                     int totalCells) {
             if (!includeMeta) {
                 return;
             }
-            obj.put(PayloadFields.TABLE, table.getNameAsString());
-            obj.put(PayloadFields.NAMESPACE, table.getNamespaceAsString());
-            obj.put(PayloadFields.QUALIFIER, table.getQualifierAsString());
+            obj.put(PayloadFields.TABLE, meta.table);
+            obj.put(PayloadFields.NAMESPACE, meta.namespace);
+            obj.put(PayloadFields.QUALIFIER, meta.qualifier);
             obj.put(PayloadFields.CF, cfList);
             obj.put(PayloadFields.CELLS_TOTAL, totalCells);
         }

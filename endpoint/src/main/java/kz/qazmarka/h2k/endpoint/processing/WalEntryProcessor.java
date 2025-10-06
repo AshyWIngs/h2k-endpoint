@@ -63,6 +63,7 @@ public final class WalEntryProcessor {
     private final java.util.concurrent.atomic.AtomicReference<CfFilterCache> cfFilterCache =
             new java.util.concurrent.atomic.AtomicReference<>(CfFilterCache.EMPTY);
     private int rowBufferCapacity = ROW_BUFFER_BASE_CAPACITY;
+    private final RowProcessingContext rowContext = new RowProcessingContext();
 
     public WalEntryProcessor(PayloadBuilder payloadBuilder,
                              TopicManager topicManager,
@@ -140,7 +141,8 @@ public final class WalEntryProcessor {
     /**
      * Формирует контекст обработки строки с учётом настроек фильтрации и метаданных, уменьшая когнитивную
      * сложность основного метода {@link #process(WAL.Entry, BatchSender, boolean)}.
-     * Контекст безопасен только в текущем потоке и не должен кэшироваться между вызовами.
+     * Контекст переиспользуется как поле класса: WalEntryProcessor работает в одном потоке репликации,
+     * поэтому повторная конфигурация безопасна и устраняет лишние аллокации.
      */
     private RowProcessingContext createRowProcessingContext(boolean filterActive,
                                                             CfFilterCache cfCache,
@@ -149,14 +151,7 @@ public final class WalEntryProcessor {
                                                             WalMeta walMeta,
                                                             BatchSender sender,
                                                             ProcessingCounters counters) {
-        return new RowProcessingContext(
-                filterActive,
-                cfCache,
-                topic,
-                table,
-                walMeta,
-                sender,
-                counters);
+        return rowContext.configure(filterActive, cfCache, topic, table, walMeta, sender, counters);
     }
 
     /**
@@ -233,21 +228,21 @@ public final class WalEntryProcessor {
      * Контекст обработки строки WAL: хранит настройки фильтра/топика/метаданных для передачи в helper-методы.
      */
     private final class RowProcessingContext {
-        private final boolean filterActive;
-        private final CfFilterCache cfCache;
-        private final String topic;
-        private final TableName table;
-        private final WalMeta walMeta;
-        private final BatchSender sender;
-        private final ProcessingCounters counters;
+        private boolean filterActive;
+        private CfFilterCache cfCache;
+        private String topic;
+        private TableName table;
+        private WalMeta walMeta;
+        private BatchSender sender;
+        private ProcessingCounters counters;
 
-        RowProcessingContext(boolean filterActive,
-                             CfFilterCache cfCache,
-                             String topic,
-                             TableName table,
-                             WalMeta walMeta,
-                             BatchSender sender,
-                             ProcessingCounters counters) {
+        RowProcessingContext configure(boolean filterActive,
+                                       CfFilterCache cfCache,
+                                       String topic,
+                                       TableName table,
+                                       WalMeta walMeta,
+                                       BatchSender sender,
+                                       ProcessingCounters counters) {
             this.filterActive = filterActive;
             this.cfCache = cfCache;
             this.topic = topic;
@@ -255,6 +250,7 @@ public final class WalEntryProcessor {
             this.walMeta = walMeta;
             this.sender = sender;
             this.counters = counters;
+            return this;
         }
 
         /**

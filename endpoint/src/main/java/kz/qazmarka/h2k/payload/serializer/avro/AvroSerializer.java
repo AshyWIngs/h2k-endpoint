@@ -14,11 +14,12 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.apache.avro.AvroRuntimeException;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericData;
-import org.apache.avro.generic.GenericDatumWriter;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.avro.io.BinaryEncoder;
+import org.apache.avro.io.Encoder;
 import org.apache.avro.io.EncoderFactory;
 
+import kz.qazmarka.h2k.payload.builder.BinarySlice;
 import kz.qazmarka.h2k.payload.builder.PayloadFields;
 import kz.qazmarka.h2k.payload.serializer.PayloadSerializer;
 
@@ -51,7 +52,7 @@ public final class AvroSerializer implements PayloadSerializer {
     // Небольшой внутренний кэш объектов на поток (Avro-энкодер не является потокобезопасным)
     private final ThreadLocal<ByteArrayOutputStream> localBaos = ThreadLocal.withInitial(() -> new ByteArrayOutputStream(512));
     private final ThreadLocal<BinaryEncoder> localEncoder = new ThreadLocal<>();
-    private static final ConcurrentHashMap<Schema, ThreadLocal<GenericDatumWriter<GenericRecord>>> WRITER_CACHE = new ConcurrentHashMap<>(16);
+    private static final ConcurrentHashMap<Schema, ThreadLocal<ByteOptimizedDatumWriter>> WRITER_CACHE = new ConcurrentHashMap<>(16);
 
     /**
      * @param fixedSchema фиксированная Avro-схема (подходит для одной таблицы/структуры)
@@ -110,7 +111,7 @@ public final class AvroSerializer implements PayloadSerializer {
         enc = EncoderFactory.get().directBinaryEncoder(baos, enc);
         localEncoder.set(enc);
 
-        final GenericDatumWriter<GenericRecord> writer = writerFor(schema);
+        final ByteOptimizedDatumWriter writer = writerFor(schema);
         try {
             writer.write(avroRecord, enc);
             enc.flush();
@@ -121,10 +122,10 @@ public final class AvroSerializer implements PayloadSerializer {
         return baos.toByteArray();
     }
 
-    private static GenericDatumWriter<GenericRecord> writerFor(Schema schema) {
-        ThreadLocal<GenericDatumWriter<GenericRecord>> tl = WRITER_CACHE.computeIfAbsent(schema,
-                s -> ThreadLocal.withInitial(() -> new GenericDatumWriter<>(s)));
-        GenericDatumWriter<GenericRecord> writer = tl.get();
+    private static ByteOptimizedDatumWriter writerFor(Schema schema) {
+        ThreadLocal<ByteOptimizedDatumWriter> tl = WRITER_CACHE.computeIfAbsent(schema,
+                s -> ThreadLocal.withInitial(() -> new ByteOptimizedDatumWriter(s)));
+        ByteOptimizedDatumWriter writer = tl.get();
         writer.setSchema(schema);
         return writer;
     }
@@ -186,9 +187,27 @@ public final class AvroSerializer implements PayloadSerializer {
 
         // BYTES
         COERCERS.put(Schema.Type.BYTES, (schema, v, path) -> {
-            if (v == null) return null;
-            if (v instanceof byte[]) return ByteBuffer.wrap((byte[]) v);
-            if (v instanceof ByteBuffer) return v;
+            if (v == null) {
+                return null;
+            }
+            if (v instanceof BinarySlice) {
+                return v;
+            }
+            if (v instanceof byte[]) {
+                byte[] arr = (byte[]) v;
+                return BinarySlice.of(arr, 0, arr.length);
+            }
+            if (v instanceof ByteBuffer) {
+                ByteBuffer buffer = (ByteBuffer) v;
+                if (buffer.hasArray()) {
+                    int offset = buffer.arrayOffset() + buffer.position();
+                    int length = buffer.remaining();
+                    return BinarySlice.of(buffer.array(), offset, length);
+                }
+                byte[] copy = new byte[buffer.remaining()];
+                buffer.duplicate().get(copy);
+                return BinarySlice.of(copy, 0, copy.length);
+            }
             throw typeError(path, "BYTES", v);
         });
 
@@ -386,5 +405,30 @@ public final class AvroSerializer implements PayloadSerializer {
     public void clearThreadLocals() {
         localBaos.remove();
         localEncoder.remove();
+    }
+
+    /**
+     * DatumWriter c оптимизированной поддержкой бинарных полей: избегает создания {@link ByteBuffer}
+     * и напрямую пишет срезы в {@link Encoder}.
+     */
+    private static final class ByteOptimizedDatumWriter extends org.apache.avro.generic.GenericDatumWriter<GenericRecord> {
+        ByteOptimizedDatumWriter(Schema schema) {
+            super(schema);
+        }
+
+        @Override
+        protected void writeBytes(Object datum, Encoder out) throws IOException {
+            if (datum instanceof BinarySlice) {
+                BinarySlice slice = (BinarySlice) datum;
+                out.writeBytes(slice.array(), slice.offset(), slice.length());
+                return;
+            }
+            if (datum instanceof byte[]) {
+                byte[] arr = (byte[]) datum;
+                out.writeBytes(arr, 0, arr.length);
+                return;
+            }
+            super.writeBytes(datum, out);
+        }
     }
 }

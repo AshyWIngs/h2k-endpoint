@@ -30,7 +30,7 @@ public final class TopicManager {
      * Кеш разрешённых имён топиков. Потокобезопасный {@link ConcurrentMap}, чтобы несколько потоков
      * ReplicationEndpoint не гонялись за одним и тем же TableName.
      */
-    private final ConcurrentMap<TableName, String> topicCache = new ConcurrentHashMap<>(8);
+    private final ConcurrentMap<String, String> topicCache = new ConcurrentHashMap<>(8);
     private final ConcurrentMap<String, LongSupplier> extraMetrics = new ConcurrentHashMap<>(8);
     public TopicManager(H2kConfig cfg, TopicEnsurer topicEnsurer) {
         this.cfg = Objects.requireNonNull(cfg, "конфигурация h2k");
@@ -39,9 +39,18 @@ public final class TopicManager {
 
     /**
      * Возвращает имя Kafka-топика для таблицы, используя кеш и шаблон из {@link H2kConfig}.
+     * Значение кешируется по строковому представлению имени таблицы, что исключает удержание
+     * временных экземпляров {@link TableName}, которые создаёт HBase на горячем пути.
      */
     public String resolveTopic(TableName table) {
-        return topicCache.computeIfAbsent(table, cfg::topicFor);
+        String cacheKey = table.getNameWithNamespaceInclAsString();
+        String cached = topicCache.get(cacheKey);
+        if (cached != null) {
+            return cached;
+        }
+        String resolved = cfg.topicFor(table);
+        String race = topicCache.putIfAbsent(cacheKey, resolved);
+        return race != null ? race : resolved;
     }
 
     /**
