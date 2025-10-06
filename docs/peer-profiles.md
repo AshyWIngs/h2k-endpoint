@@ -17,7 +17,6 @@
 
 - `h2k.kafka.bootstrap.servers=10.254.3.111:9092,10.254.3.112:9092,10.254.3.113:9092`
 - `h2k.topic.pattern=${table}`
-- `h2k.cf.list=d`
 - `h2k.decode.mode=phoenix-avro`
 - `h2k.schema.path=/opt/hbase-default-current/conf/schema.json`
 - `h2k.json.serialize.nulls=false`

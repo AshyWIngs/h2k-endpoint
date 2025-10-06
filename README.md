@@ -94,10 +94,9 @@ hbase classpath | tr ':' '\n' | egrep -i 'kafka-clients|lz4|snappy'
 - системный `hbase-site.xml` (дефолты),  
 - *и/или* карта `CONFIG` у peer (имеет приоритет).
 
-**Минимально для запуска** (пример для `TBL_JTI_TRACE_CIS_HISTORY`, CF `d`):
+**Минимально для запуска** (пример для `TBL_JTI_TRACE_CIS_HISTORY`):
 ```properties
 h2k.kafka.bootstrap.servers=10.254.3.111:9092,10.254.3.112:9092,10.254.3.113:9092
-h2k.cf.list=d
 h2k.payload.format=avro-binary
 # Декодирование:
 h2k.decode.mode=phoenix-avro
@@ -114,7 +113,6 @@ h2k.topic.pattern=${table}
 |---|---|---|
 | `h2k.payload.format` | Формат сериализации payload | `avro-binary` (рекомендуется) \| `json-each-row` |
 | `h2k.kafka.bootstrap.servers` | Список брокеров Kafka | `host:port[,host2:port2]` |
-| `h2k.cf.list` | Список CF для экспорта | CSV; пробелы обрезаются, регистр сохраняется |
 | `h2k.decode.mode` | `simple` \| `phoenix-avro` \| `json-phoenix` (legacy) | `phoenix-avro` считывает типы/PK из `.avsc`, `schema.json` нужен только для фолбэка |
 | `h2k.schema.path` | Путь к `schema.json` | Необязательный фолбэк для `phoenix-avro`, обязателен для `json-phoenix` |
 | `h2k.salt.map` | Карта соли rowkey | Опциональный фолбэк; основной источник — `.avsc` (`h2k.saltBytes`) |
@@ -126,9 +124,8 @@ h2k.topic.pattern=${table}
 | `h2k.payload.include.rowkey` | Включать `_rowkey` | `BASE64`/`HEX` управляется `h2k.rowkey.encoding` |
 
 
-> Endpoint фильтрует WAL только по указанным CF и не меняет регистр имён. Если ключ `h2k.cf.list`
-> не задан — реплицируются все CF. При явном списке, но ошибке в регистре, записи соответствующего
-> семейства будут отброшены.
+> Фильтрация по CF задаётся на уровне Avro-схемы: укажите `"h2k.cf.list": "cf1,cf2"` в `conf/avro/<TABLE>.avsc`.
+> Если свойство отсутствует, реплицируются все column family.
 
 > Режим `phoenix-avro` ожидает, что локальные `.avsc` содержат атрибуты `h2k.phoenixType` для колонок и массив `h2k.pk`.
 > При наличии `h2k.schema.path` эти данные используются как фолбэк на период миграции.

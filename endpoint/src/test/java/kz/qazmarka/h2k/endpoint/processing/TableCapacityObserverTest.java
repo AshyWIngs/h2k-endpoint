@@ -28,7 +28,6 @@ class TableCapacityObserverTest {
         Configuration configuration = new Configuration(false);
         configuration.set("h2k.kafka.bootstrap.servers", "mock:9092");
         configuration.set("h2k.topic.pattern", "${namespace}.${qualifier}");
-        configuration.set("h2k.cf.list", "d");
         configuration.set("h2k.capacity.hints", "ns:cap=2");
 
         H2kConfig h2kConfig = H2kConfig.from(configuration, "mock:9092");

@@ -27,7 +27,6 @@ import org.openjdk.jmh.annotations.State;
 import org.openjdk.jmh.annotations.TearDown;
 import org.openjdk.jmh.infra.Blackhole;
 
-import io.confluent.kafka.schemaregistry.client.MockSchemaRegistryClient;
 import io.confluent.kafka.schemaregistry.client.SchemaRegistryClient;
 import kz.qazmarka.h2k.config.H2kConfig;
 import kz.qazmarka.h2k.payload.builder.PayloadBuilder;
@@ -68,6 +67,41 @@ public class PayloadBuilderConfluentBenchmark {
 
     private static final String BENCH_BOOTSTRAP = "bench:9092";
 
+    /**
+     * Создаёт фабрику Schema Registry, выдающую новый {@code MockSchemaRegistryClient} на каждый вызов.
+     * Метод устойчив к shading: сначала пробует оригинальный класс Confluent, затем релокированный.
+     */
+    private static SchemaRegistryClientFactory mockFactory() {
+        return new SchemaRegistryClientFactory() {
+            @Override
+            public SchemaRegistryClient create(List<String> urls,
+                                               java.util.Map<String, Object> clientConfig,
+                                               int identityMapCapacity) {
+                return instantiateMock();
+            }
+
+            private SchemaRegistryClient instantiateMock() {
+                String[] candidates = {
+                        "io.confluent.kafka.schemaregistry.client.MockSchemaRegistryClient",
+                        "kz.qazmarka.shaded.confluent.kafka.schemaregistry.client.MockSchemaRegistryClient"
+                };
+                for (String className : candidates) {
+                    try {
+                        Class<?> clazz = Class.forName(className);
+                        if (!SchemaRegistryClient.class.isAssignableFrom(clazz)) {
+                            continue;
+                        }
+                        Object instance = clazz.getDeclaredConstructor().newInstance();
+                        return SchemaRegistryClient.class.cast(instance);
+                    } catch (ReflectiveOperationException ignore) {
+                        // пробуем следующий кандидат
+                    }
+                }
+                throw new IllegalStateException("Не удалось создать MockSchemaRegistryClient (original/shaded)");
+            }
+        };
+    }
+
     /** Состояние для «горячего» сценария: Schema Registry уже прогрет. */
     @State(Scope.Thread)
     public static class HotState {
@@ -83,9 +117,7 @@ public class PayloadBuilderConfluentBenchmark {
                 writeSchema(schemaDir.resolve(SCHEMA_FILE_NAME));
                 Configuration cfg = baseConfig(schemaDir);
                 H2kConfig h2kConfig = H2kConfig.from(cfg, BENCH_BOOTSTRAP);
-                SchemaRegistryClient client = new MockSchemaRegistryClient();
-                SchemaRegistryClientFactory factory = (urls, clientConfig, capacity) -> client;
-                builder = new PayloadBuilder(SimpleDecoder.INSTANCE, h2kConfig, factory);
+                builder = new PayloadBuilder(SimpleDecoder.INSTANCE, h2kConfig, mockFactory());
                 cells = Collections.unmodifiableList(sampleCells());
                 rowKey = new RowKeySlice.Mutable(ROW_KEY, 0, ROW_KEY.length);
                 // Прогрев: первая сериализация зарегистрирует схему в Mock SR.
@@ -126,9 +158,7 @@ public class PayloadBuilderConfluentBenchmark {
 
         @Setup(Level.Invocation)
         public void setUpInvocation() {
-            SchemaRegistryClient client = new MockSchemaRegistryClient();
-            SchemaRegistryClientFactory factory = (urls, clientConfig, capacity) -> client;
-            builder = new PayloadBuilder(SimpleDecoder.INSTANCE, config, factory);
+            builder = new PayloadBuilder(SimpleDecoder.INSTANCE, config, mockFactory());
         }
 
         @TearDown(Level.Trial)

@@ -5,6 +5,7 @@
   "doc": "Событие из Phoenix TBL_JTI_TRACE_CIS_HISTORY. Все TIMESTAMP представлены как long epoch-millis. Доп. метаполя: _event_ts (ms) и _delete (логическое удаление). PK: (c, t, opd).",
   "h2k.saltBytes": 1,
   "h2k.capacityHint": 32,
+  "h2k.cf.list": "d",
   "fields": [
     {
       "name": "c",

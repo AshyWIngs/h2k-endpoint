@@ -5,6 +5,7 @@
   "doc": "Phoenix DOCUMENTS. PK: (OWNER_ID, DIRECTION, DOCUMENT_ID). TIMESTAMP/BIGINT — миллисекунды epoch. Таблица без соли.",
   "h2k.saltBytes": 0,
   "h2k.capacityHint": 24,
+  "h2k.cf.list": "0,DOCUMENTS,b,d",
   "fields": [
     { "name": "OWNER_ID",          "type": "long",               "h2k.phoenixType": "BIGINT",         "doc": "NOT NULL: BIGINT" },
     { "name": "DIRECTION",         "type": "int",                "h2k.phoenixType": "TINYINT",        "doc": "NOT NULL: TINYINT" },

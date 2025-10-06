@@ -25,14 +25,12 @@ final class CfFilterObserver {
 
     private final ConcurrentHashMap<TableName, Stats> statsByTable = new ConcurrentHashMap<>();
     private final Set<TableName> ineffectiveWarned = ConcurrentHashMap.newKeySet();
-    private final H2kConfig config;
 
-    private CfFilterObserver(H2kConfig config) {
-        this.config = config;
+    private CfFilterObserver() {
     }
 
-    static CfFilterObserver create(H2kConfig config) {
-        return new CfFilterObserver(config);
+    static CfFilterObserver create() {
+        return new CfFilterObserver();
     }
 
     /**
@@ -43,9 +41,14 @@ final class CfFilterObserver {
      * @param rowsTotal    сколько строк было рассмотрено (включая отфильтрованные)
      * @param rowsFiltered сколько строк фильтр исключил из отправки
      * @param filterActive фактически ли активна фильтрация (наличие заданных CF)
+     * @param cfSnapshot   снимок настроек CF для таблицы
      */
-    void observe(TableName table, long rowsTotal, long rowsFiltered, boolean filterActive) {
-        if (!filterActive || table == null) {
+    void observe(TableName table,
+                 long rowsTotal,
+                 long rowsFiltered,
+                 boolean filterActive,
+                 H2kConfig.CfFilterSnapshot cfSnapshot) {
+        if (!filterActive || table == null || cfSnapshot == null) {
             return;
         }
         if (rowsTotal <= 0L) {
@@ -57,16 +60,17 @@ final class CfFilterObserver {
         long total = stats.rowsTotal.sum();
         long filtered = stats.rowsFiltered.sum();
         if (total >= MIN_ROWS_TO_LOG) {
-            logEffectiveness(table, stats, total, filtered);
+            logEffectiveness(table, stats, total, filtered, cfSnapshot);
             double ratio = filtered == 0L ? 0.0d : (double) filtered / (double) total;
             if (ratio < MIN_RATIO && ineffectiveWarned.add(table) && LOG.isWarnEnabled()) {
+                String cfCsv = safeCsv(cfSnapshot);
                 LOG.warn(
-                        "CF-фильтр для таблицы {} почти неэффективен: обработано {} строк, отфильтровано {} ({}%). Рассмотрите отключение h2k.cf.list='{}'",
+                        "CF-фильтр для таблицы {} почти неэффективен: обработано {} строк, отфильтровано {} ({}%). Рассмотрите корректировку списка CF '{}'.",
                         table,
                         total,
                         filtered,
                         formatPercent(ratio),
-                        config.getCfNamesCsv());
+                        cfCsv.isEmpty() ? "-" : cfCsv);
             }
         }
     }
@@ -92,7 +96,11 @@ final class CfFilterObserver {
      * Логирует текущее отношение отфильтрованных строк к общему числу, не чаще одного раза
      * на заданный объём входных данных, чтобы не засорять журналы.
      */
-    private void logEffectiveness(TableName table, Stats stats, long total, long filtered) {
+    private void logEffectiveness(TableName table,
+                                  Stats stats,
+                                  long total,
+                                  long filtered,
+                                  H2kConfig.CfFilterSnapshot cfSnapshot) {
         long lastLogged = stats.lastLoggedRows.get();
         if (lastLogged != 0L && total - lastLogged < MIN_ROWS_TO_LOG) {
             return;
@@ -102,14 +110,15 @@ final class CfFilterObserver {
         }
         if (LOG.isInfoEnabled()) {
             double ratio = filtered == 0L ? 0.0d : (double) filtered / (double) total;
-            String scope = config.isCfFilterExplicit() ? "явный" : "унаследованный";
+            String csv = safeCsv(cfSnapshot);
+            String scope = cfSnapshot.source().label();
             LOG.info(
                     "CF-фильтр таблицы {}: эффективность {}% (строк={}, отфильтровано={}, список={} — {})",
                     table,
                     formatPercent(ratio),
                     total,
                     filtered,
-                    config.getCfNamesCsv(),
+                    csv.isEmpty() ? "-" : csv,
                     scope);
         }
     }
@@ -119,5 +128,13 @@ final class CfFilterObserver {
      */
     private static String formatPercent(double ratio) {
         return String.format(Locale.ROOT, "%.2f", ratio * 100.0d);
+    }
+
+    private static String safeCsv(H2kConfig.CfFilterSnapshot snapshot) {
+        if (snapshot == null) {
+            return "";
+        }
+        String csv = snapshot.csv();
+        return csv == null ? "" : csv;
     }
 }

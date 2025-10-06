@@ -12,7 +12,7 @@
 ## 2. Подготовка таблиц
 
 1. Убедитесь, что нужные CF реплицируются (`REPLICATION_SCOPE=1`).
-2. Если нужно, скорректируйте фильтр `h2k.cf.list` (его эффективность контролируется автоматически, см. [`troubleshooting.md`](troubleshooting.md)).
+2. Если нужно, скорректируйте свойства `"h2k.cf.list"` в `.avsc` (эффективность фильтра контролируется автоматически, см. [`troubleshooting.md`](troubleshooting.md)).
 3. Проверка: `describe 'TABLE'` и `status 'replication'`.
 
 Подробные команды HBase shell — в [`docs/hbase.md`](../hbase.md).

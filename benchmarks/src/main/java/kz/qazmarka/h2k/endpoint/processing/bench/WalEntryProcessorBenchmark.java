@@ -33,6 +33,7 @@ import kz.qazmarka.h2k.kafka.ensure.TopicEnsurer;
 import kz.qazmarka.h2k.kafka.producer.batch.BatchSender;
 import kz.qazmarka.h2k.payload.builder.PayloadBuilder;
 import kz.qazmarka.h2k.schema.decoder.SimpleDecoder;
+import kz.qazmarka.h2k.schema.registry.PhoenixTableMetadataProvider;
 
 /**
  * Бенчмарки горячего пути {@link WalEntryProcessor#process}: измеряем среднюю стоимость обработки
@@ -55,58 +56,79 @@ public class WalEntryProcessorBenchmark {
         private static final byte[] CF_ACTIVE = Bytes.toBytes("d");
         private static final byte[] CF_SKIP = Bytes.toBytes("x");
 
-        WalEntryProcessor processor;
-        BatchSender sender;
-        Entry smallEntry;
+        WalEntryProcessor processorNoFilter;
+        WalEntryProcessor processorWithFilter;
+        BatchSender senderNoFilter;
+        BatchSender senderWithFilter;
+        Entry smallEntryNoFilter;
+        Entry smallEntryHit;
+        Entry smallEntryMiss;
         Entry wideEntry;
-        byte[][] cfAllowed;
-        byte[][] cfForbidden;
 
         @Setup(Level.Trial)
         public void setUp() {
-            Configuration configuration = new Configuration(false);
-            configuration.set("h2k.kafka.bootstrap.servers", "bench:9092");
-            configuration.set("h2k.topic.pattern", "${namespace}.${qualifier}");
-            configuration.set("h2k.cf.list", "d");
+            Configuration baseConfig = new Configuration(false);
+            baseConfig.set("h2k.kafka.bootstrap.servers", "bench:9092");
+            baseConfig.set("h2k.topic.pattern", "${namespace}.${qualifier}");
 
-            H2kConfig h2kConfig = H2kConfig.from(configuration, "bench:9092");
-            PayloadBuilder builder = new PayloadBuilder(SimpleDecoder.INSTANCE, h2kConfig);
-            TopicManager topicManager = new TopicManager(h2kConfig, TopicEnsurer.disabled());
-            MockProducer<byte[], byte[]> producer = new MockProducer<>(true, new ByteArraySerializer(), new ByteArraySerializer());
+            H2kConfig configNoFilter = H2kConfig.from(new Configuration(baseConfig), "bench:9092", PhoenixTableMetadataProvider.NOOP);
+            PayloadBuilder builderNoFilter = new PayloadBuilder(SimpleDecoder.INSTANCE, configNoFilter);
+            TopicManager topicManagerNoFilter = new TopicManager(configNoFilter, TopicEnsurer.disabled());
+            MockProducer<byte[], byte[]> producerNoFilter = new MockProducer<>(true, new ByteArraySerializer(), new ByteArraySerializer());
+            processorNoFilter = new WalEntryProcessor(builderNoFilter, topicManagerNoFilter, producerNoFilter, configNoFilter);
+            senderNoFilter = new BatchSender(256, 1_000, true, false);
 
-            processor = new WalEntryProcessor(builder, topicManager, producer, h2kConfig);
-            sender = new BatchSender(256, 1_000, true, false);
+            PhoenixTableMetadataProvider filterProvider = new PhoenixTableMetadataProvider() {
+                @Override
+                public Integer saltBytes(TableName table) { return null; }
 
-            smallEntry = walEntry(1);
-            wideEntry = walEntry(64);
-            cfAllowed = new byte[][]{CF_ACTIVE};
-            cfForbidden = new byte[][]{CF_SKIP};
+                @Override
+                public Integer capacityHint(TableName table) { return null; }
+
+                @Override
+                public String[] columnFamilies(TableName table) { return new String[]{Bytes.toString(CF_ACTIVE)}; }
+            };
+
+            H2kConfig configWithFilter = H2kConfig.from(new Configuration(baseConfig), "bench:9092", filterProvider);
+            PayloadBuilder builderWithFilter = new PayloadBuilder(SimpleDecoder.INSTANCE, configWithFilter);
+            TopicManager topicManagerWithFilter = new TopicManager(configWithFilter, TopicEnsurer.disabled());
+            MockProducer<byte[], byte[]> producerWithFilter = new MockProducer<>(true, new ByteArraySerializer(), new ByteArraySerializer());
+            processorWithFilter = new WalEntryProcessor(builderWithFilter, topicManagerWithFilter, producerWithFilter, configWithFilter);
+            senderWithFilter = new BatchSender(256, 1_000, true, false);
+
+            smallEntryNoFilter = walEntry(1, CF_ACTIVE);
+            smallEntryHit = walEntry(1, CF_ACTIVE);
+            smallEntryMiss = walEntry(1, CF_SKIP);
+            wideEntry = walEntry(64, CF_ACTIVE);
         }
 
         @Setup(Level.Invocation)
         public void resetSender() {
-            sender.resetCounters();
-            sender.resumeAutoFlush();
+            senderNoFilter.resetCounters();
+            senderNoFilter.resumeAutoFlush();
+            senderWithFilter.resetCounters();
+            senderWithFilter.resumeAutoFlush();
         }
 
         @TearDown(Level.Trial)
         public void tearDown() throws ExecutionException, TimeoutException {
             try {
-                sender.flush();
+                senderNoFilter.flush();
+                senderWithFilter.flush();
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 throw new IllegalStateException("Benchmark teardown interrupted", e);
             }
         }
 
-        private static Entry walEntry(int cells) {
+        private static Entry walEntry(int cells, byte[] cf) {
             byte[] row = Bytes.toBytes("row" + cells);
             WALKey key = new WALKey(row, TABLE, ThreadLocalRandom.current().nextLong(1, Long.MAX_VALUE));
             WALEdit edit = new WALEdit();
             for (int i = 0; i < cells; i++) {
                 byte[] qualifier = Bytes.toBytes("q" + i);
                 byte[] value = ("value-" + i).getBytes(StandardCharsets.UTF_8);
-                edit.add(new KeyValue(row, CF_ACTIVE, qualifier, System.currentTimeMillis(), value));
+                edit.add(new KeyValue(row, cf, qualifier, System.currentTimeMillis(), value));
             }
             return new Entry(key, edit);
         }
@@ -119,8 +141,8 @@ public class WalEntryProcessorBenchmark {
      */
     @Benchmark
     public void processSmallRow(ProcessorState state, Blackhole bh) {
-        state.processor.process(state.smallEntry, state.sender, false, false, null);
-        bh.consume(state.sender.tryFlush());
+        state.processorNoFilter.process(state.smallEntryNoFilter, state.senderNoFilter, false);
+        bh.consume(state.senderNoFilter.tryFlush());
     }
 
     /**
@@ -130,8 +152,8 @@ public class WalEntryProcessorBenchmark {
      */
     @Benchmark
     public void processWideRow(ProcessorState state, Blackhole bh) {
-        state.processor.process(state.wideEntry, state.sender, false, false, null);
-        bh.consume(state.sender.tryFlush());
+        state.processorNoFilter.process(state.wideEntry, state.senderNoFilter, false);
+        bh.consume(state.senderNoFilter.tryFlush());
     }
 
     /**
@@ -141,8 +163,8 @@ public class WalEntryProcessorBenchmark {
      */
     @Benchmark
     public void processWithFilterHit(ProcessorState state, Blackhole bh) {
-        state.processor.process(state.smallEntry, state.sender, false, true, state.cfAllowed);
-        bh.consume(state.sender.tryFlush());
+        state.processorWithFilter.process(state.smallEntryHit, state.senderWithFilter, false);
+        bh.consume(state.senderWithFilter.tryFlush());
     }
 
     /**
@@ -152,7 +174,7 @@ public class WalEntryProcessorBenchmark {
      */
     @Benchmark
     public void processWithFilterMiss(ProcessorState state, Blackhole bh) {
-        state.processor.process(state.smallEntry, state.sender, false, true, state.cfForbidden);
-        bh.consume(state.sender.tryFlush());
+        state.processorWithFilter.process(state.smallEntryMiss, state.senderWithFilter, false);
+        bh.consume(state.senderWithFilter.tryFlush());
     }
 }

@@ -75,7 +75,9 @@ final class RowPayloadAssembler {
                 + (includeWalMeta ? 2 : 0);
 
         final Map<String, Object> obj = newRootMap(table, cap);
-        MetaWriter.addMetaIfEnabled(includeMeta, obj, table, cellsCount, cfg.getCfNamesCsv());
+        H2kConfig.CfFilterSnapshot cfSnapshot = cfg.describeCfFilter(table);
+        final String cfCsv = cfSnapshot.enabled() ? cfSnapshot.csv() : "";
+        MetaWriter.addMetaIfEnabled(includeMeta, obj, table, cellsCount, cfCsv);
         decodePkFromRowKey(table, rowKey, obj);
 
         CellStats stats = decodeCells(table, cells, obj);
@@ -99,12 +101,23 @@ final class RowPayloadAssembler {
         TableOptionsSnapshot snapshot = cfg.describeTableOptions(table);
         String saltSource = label(snapshot.saltSource());
         String capacitySource = label(snapshot.capacitySource());
-        LOG.debug("Таблица {}: соль={} ({}), capacityHint={} ({})",
+        H2kConfig.CfFilterSnapshot cfSnapshot = snapshot.cfFilter();
+        String cfLabel;
+        if (cfSnapshot.enabled()) {
+            String csv = cfSnapshot.csv();
+            cfLabel = (csv == null || csv.isEmpty()) ? "-" : csv;
+        } else {
+            cfLabel = "-";
+        }
+        String cfSource = label(cfSnapshot.source());
+        LOG.debug("Таблица {}: соль={} ({}), capacityHint={} ({}), cf={} ({})",
                 tableName,
                 snapshot.saltBytes(),
                 saltSource,
                 snapshot.capacityHint(),
-                capacitySource);
+                capacitySource,
+                cfLabel,
+                cfSource);
     }
 
     private static String label(ValueSource source) {

@@ -28,6 +28,8 @@ import kz.qazmarka.h2k.kafka.ensure.TopicEnsurer;
 import kz.qazmarka.h2k.kafka.producer.batch.BatchSender;
 import kz.qazmarka.h2k.payload.builder.PayloadBuilder;
 import kz.qazmarka.h2k.schema.decoder.SimpleDecoder;
+import kz.qazmarka.h2k.schema.registry.PhoenixTableMetadataProvider;
+import kz.qazmarka.h2k.schema.registry.SchemaRegistry;
 
 /**
  * Юнит‑тесты для внутренних помощников {@link WalEntryProcessor} (initialCapacity и фильтры WAL).
@@ -102,9 +104,22 @@ class WalEntryProcessorTest {
     @DisplayName("WalMetrics агрегирует строки и фильтрацию")
     void metricsAccumulates() throws Exception {
         Configuration cfg = new Configuration(false);
-        cfg.set("h2k.cf.list", "d");
         cfg.set("h2k.kafka.bootstrap.servers", "mock:9092");
-        H2kConfig h2kConfig = H2kConfig.from(cfg, "mock:9092");
+
+        PhoenixTableMetadataProvider provider = new PhoenixTableMetadataProvider() {
+            @Override
+            public Integer saltBytes(TableName table) { return null; }
+
+            @Override
+            public Integer capacityHint(TableName table) { return null; }
+
+            @Override
+            public String[] columnFamilies(TableName table) {
+                return "t".equals(table.getNameAsString()) ? new String[]{"d"} : SchemaRegistry.EMPTY;
+            }
+        };
+
+        H2kConfig h2kConfig = H2kConfig.from(cfg, "mock:9092", provider);
 
         PayloadBuilder builder = new PayloadBuilder(SimpleDecoder.INSTANCE, h2kConfig);
         TopicManager topicManager = new TopicManager(h2kConfig, TopicEnsurer.disabled());
@@ -112,7 +127,7 @@ class WalEntryProcessorTest {
         WalEntryProcessor processor = new WalEntryProcessor(builder, topicManager, producer, h2kConfig);
 
         try (BatchSender sender = new BatchSender(10, 1000, false, false)) {
-            processor.process(walEntry("row1", "d"), sender, false, false, null);
+            processor.process(walEntry("row1", "d"), sender, false);
         }
 
         WalMetrics metrics = processor.metrics();
@@ -122,7 +137,7 @@ class WalEntryProcessorTest {
         assertEquals(0, metrics.filteredRows());
 
         try (BatchSender sender = new BatchSender(10, 1000, false, false)) {
-            processor.process(walEntry("row2", "d"), sender, false, true, new byte[][]{bytes("x")});
+            processor.process(walEntry("row2", "x"), sender, false);
         }
 
         WalMetrics after = processor.metrics();

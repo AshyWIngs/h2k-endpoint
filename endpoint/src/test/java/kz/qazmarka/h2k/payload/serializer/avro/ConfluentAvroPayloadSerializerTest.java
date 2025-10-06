@@ -244,7 +244,6 @@ class ConfluentAvroPayloadSerializerTest {
 
     private static Configuration baseConfigurationWithFactory(String format) {
         Configuration c = new Configuration(false);
-        c.set("h2k.cf.list", "d");
         c.set("h2k.payload.format", format);
         c.set("h2k.avro.mode", "confluent");
         c.set("h2k.avro.schema.dir", Paths.get("src", "test", "resources", "avro").toAbsolutePath().toString());
@@ -259,7 +258,6 @@ class ConfluentAvroPayloadSerializerTest {
 
     private static H2kConfig buildConfigWithoutFactory(String format) {
         Configuration c = new Configuration(false);
-        c.set("h2k.cf.list", "d");
         c.set("h2k.payload.format", format);
         c.set("h2k.avro.mode", "confluent");
         c.set("h2k.avro.schema.dir", Paths.get("src", "test", "resources", "avro").toAbsolutePath().toString());

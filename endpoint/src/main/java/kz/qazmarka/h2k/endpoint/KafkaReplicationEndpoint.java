@@ -77,9 +77,6 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
     private WalEntryProcessor walEntryProcessor;
     private final BatchSenderMetrics batchMetrics = new BatchSenderMetrics();
     private BatchSenderTuner batchTuner;
-    // CF-фильтр
-    private boolean doFilter;
-    private byte[][] cfFamilies;
     private PhoenixTableMetadataProvider tableMetadataProvider = PhoenixTableMetadataProvider.NOOP;
 
     /**
@@ -118,7 +115,6 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
         this.topicManager = new TopicManager(h2k, topicEnsurer);
         this.walEntryProcessor = new WalEntryProcessor(payload, topicManager, producer, h2k);
         registerMetrics(payload, walEntryProcessor);
-        initCfFilter();
         logPayloadSerializer(payload);
         logInitSummary();
     }
@@ -143,45 +139,18 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
     }
 
     /**
-     * Инициализирует фильтрацию по CF из конфигурации h2k.cf.list. Выполняется один раз.
-     */
-    private void initCfFilter() {
-        if (!h2k.isCfFilterExplicit()) {
-            this.cfFamilies = null;
-            this.doFilter = false;
-            logCfFilterState();
-            return;
-        }
-
-        final byte[][] families = h2k.getCfFamiliesBytes();
-        if (families.length == 0) {
-            this.cfFamilies = null;
-            this.doFilter = false;
-        } else {
-            this.cfFamilies = families;
-            this.doFilter = true;
-        }
-        logCfFilterState();
-    }
-
-    private void logCfFilterState() {
-        if (!LOG.isDebugEnabled()) {
-            return;
-        }
-        final int count = (cfFamilies == null) ? 0 : cfFamilies.length;
-        LOG.debug("CF-фильтр: enabled={}, cf.count={}, cf.list={}", doFilter, count, h2k.getCfNamesCsv());
-    }
-
-    /**
      * Итоговая сводка параметров инициализации в DEBUG.
      */
     private void logInitSummary() {
         if (!LOG.isDebugEnabled()) {
             return;
         }
-        LOG.debug("Инициализация завершена: шаблон_топика={}, cf_список={}, проверять_топики={}, включать_rowkey={}, кодировка_rowkey={}, включать_meta={}, включать_meta_WAL={}, счетчики_батчей={}, debug_батчей_при_ошибке={}",
+        final String cfSource = (tableMetadataProvider == PhoenixTableMetadataProvider.NOOP)
+                ? "disabled"
+                : "per-table";
+        LOG.debug("Инициализация завершена: шаблон_топика={}, cf_источник={}, проверять_топики={}, включать_rowkey={}, кодировка_rowkey={}, включать_meta={}, включать_meta_WAL={}, счетчики_батчей={}, debug_батчей_при_ошибке={}",
                 h2k.getTopicPattern(),
-                h2k.getCfNamesCsv(),
+                cfSource,
                 h2k.isEnsureTopics(), h2k.isIncludeRowKey(), h2k.getRowkeyEncoding(), h2k.isIncludeMeta(), h2k.isIncludeMetaWal(),
                 h2k.isProducerBatchCountersEnabled(), h2k.isProducerBatchDebugOnFailure());
     }
@@ -460,7 +429,7 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
                 h2k.isProducerBatchDebugOnFailure(),
                 batchMetrics)) {
             for (WAL.Entry entry : entries) {
-                processEntry(entry, sender, includeWalMeta, this.doFilter, this.cfFamilies);
+                processEntry(entry, sender, includeWalMeta);
             }
         }
     }
@@ -472,15 +441,11 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
      * @param entry         запись WAL
      * @param sender        батч‑отправитель для ожидания ack по порогам
      * @param includeWalMeta включать ли метаданные WAL в payload
-     * @param doFilter      включена ли фильтрация по WAL‑timestamp
-     * @param cfFamilies    список целевых CF (в байтах) для фильтра; {@code null}, если фильтр выключен
      */
     private void processEntry(WAL.Entry entry,
                               BatchSender sender,
-                              boolean includeWalMeta,
-                              boolean doFilter,
-                              byte[][] cfFamilies) {
-        walEntryProcessor.process(entry, sender, includeWalMeta, doFilter, cfFamilies);
+                              boolean includeWalMeta) {
+        walEntryProcessor.process(entry, sender, includeWalMeta);
     }
 
     /** В HBase 1.4 {@code Context} не предоставляет getPeerUUID(); сигнатура метода требуется API базового класса.

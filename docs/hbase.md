@@ -54,7 +54,6 @@ add_peer 'h2k_balanced',
     'CONFIG' => {
       'h2k.kafka.bootstrap.servers'   => '10.254.3.111:9092,10.254.3.112:9092,10.254.3.113:9092',
       'h2k.topic.pattern'             => '${table}',
-      'h2k.cf.list'                   => '0,DOCUMENTS,b,d',
       'h2k.decode.mode'               => 'phoenix-avro',
       'h2k.schema.path'               => '/opt/hbase-default-current/conf/schema.json',
       'h2k.json.serialize.nulls'      => 'false',
@@ -87,7 +86,7 @@ add_peer 'h2k_balanced',
 
 ### Column Family и фильтрация
 
-- Ключ `h2k.cf.list` задаёт список column family, которые endpoint будет реплицировать. Пустое значение → реплицируются все CF.
+- Фильтрация по column family задаётся в Avro-схемах (`conf/avro/<TABLE>.avsc`) через свойство `"h2k.cf.list"`. Отсутствие свойства означает репликацию всех CF.
 - Имена указываем через запятую без пробелов, в том же регистре, что возвращает Phoenix/HBase.
 - Чтобы посмотреть фактические CF таблицы, используйте запрос к Phoenix `SYSTEM.CATALOG`:
   ```sql
@@ -101,7 +100,7 @@ add_peer 'h2k_balanced',
     AND COLUMN_NAME IS NOT NULL
   ORDER BY CF, ORDINAL_POSITION;
   ```
-  Значение `CF='0'` соответствует колонкам, лежащим в «нулевом» family (часто совпадает с PK). Остальные строки — реальные CF, их и перечисляем в `h2k.cf.list` (например, для DOCUMENTS получаем `0,DOCUMENTS,b,d`).
+- Значение `CF='0'` соответствует колонкам, лежащим в «нулевом» family (часто совпадает с PK). Остальные строки — реальные CF, их и перечисляем в `h2k.cf.list` внутри `.avsc` (например, для DOCUMENTS: `0,DOCUMENTS,b,d`).
 - Эффективность фильтра endpoint контролирует автоматически: при доле отфильтрованных строк <1 % появится WARNING с рекомендацией пересмотреть список CF (см. `docs/runbook/troubleshooting.md`).
 
 ### Редактирование существующего peer

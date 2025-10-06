@@ -6,11 +6,9 @@ package kz.qazmarka.h2k.util;
 
 import java.net.InetAddress;
 import java.net.UnknownHostException;
-import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -116,50 +114,6 @@ public final class Parsers {
     public static String readTopicPattern(Configuration cfg, String key, String defaultPattern) {
         final String v = cfg.getTrimmed(key, defaultPattern);
         return (v == null || v.isEmpty()) ? defaultPattern : v;
-    }
-
-    /**
-     * Читает список CF как CSV, обрезая пробелы и игнорируя пустые элементы.
-     *
-     * @param cfg       конфигурация Hadoop
-     * @param key       ключ CSV
-     * @param defaultCf имя CF по умолчанию, если список пуст
-     * @return массив непустых имён CF; гарантирует хотя бы одно значение {@code defaultCf}
-     */
-    public static String[] readCfNames(Configuration cfg, String key, String defaultCf) {
-        String raw = cfg.get(key);
-        if (raw == null) {
-            return new String[]{ defaultCf };
-        }
-        String[] parts = raw.split(",");
-        LinkedHashSet<String> unique = new LinkedHashSet<>(parts.length);
-        for (String part : parts) {
-            if (part == null) {
-                continue;
-            }
-            String trimmed = part.trim();
-            if (!trimmed.isEmpty()) {
-                unique.add(trimmed);
-            }
-        }
-        if (unique.isEmpty()) {
-            unique.add(defaultCf);
-        }
-        return unique.toArray(new String[0]);
-    }
-
-    /**
-     * Быстро кодирует массив строк в UTF‑8 байтовые массивы.
-     *
-     * @param names массив строк
-     * @return массив байтовых представлений в UTF‑8 той же длины
-     */
-    public static byte[][] toUtf8Bytes(String[] names) {
-        byte[][] res = new byte[names.length][];
-        for (int i = 0; i < names.length; i++) {
-            res[i] = names[i].getBytes(StandardCharsets.UTF_8);
-        }
-        return res;
     }
 
     /**

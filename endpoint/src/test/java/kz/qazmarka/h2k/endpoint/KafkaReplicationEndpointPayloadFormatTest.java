@@ -41,7 +41,6 @@ class KafkaReplicationEndpointPayloadFormatTest {
     @DisplayName("json_each_row формирует значение через PayloadSerializer")
     void jsonEachRowFormatUsesPayloadSerializer() throws Exception {
         Configuration conf = new Configuration(false);
-        conf.set("h2k.cf.list", "d");
         conf.set("h2k.payload.format", "json_each_row");
         H2kConfig cfg = H2kConfig.from(conf, "dummy:9092");
 
@@ -76,7 +75,6 @@ class KafkaReplicationEndpointPayloadFormatTest {
     @DisplayName("Avro форматы используют PayloadSerializer и корректную схему")
     void avroFormatsUsePayloadSerializer(String format) throws Exception {
         Configuration conf = new Configuration(false);
-        conf.set("h2k.cf.list", "d");
         conf.set("h2k.payload.format", format);
         conf.set("h2k.avro.mode", "generic");
         conf.set("h2k.avro.schema.dir", Paths.get("src", "test", "resources", "avro").toAbsolutePath().toString());

@@ -54,7 +54,7 @@ WHERE TABLE_SCHEM IS NULL            -- или = '<namespace>'
 
 - Храните `.avsc` и `schema.json` в git, синхронно с изменениями Phoenix.
 - Проверяйте соответствие типов: fixed-size (например, `UNSIGNED_INT`) должны иметь корректную длину, иначе `ValueCodecPhoenix` выбросит `IllegalStateException`.
-- PK автоматически добавляются в JSON/Avro payload; не надо повторно перечислять их в `h2k.cf.list`.
+- PK автоматически добавляются в JSON/Avro payload; не нужно повторно перечислять их в `"h2k.cf.list"`.
 - При отладке включайте DEBUG для `kz.qazmarka.h2k.schema` (см. runbook).
 
 ## 6. Связанные документы

@@ -2,16 +2,15 @@ package kz.qazmarka.h2k.config;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.TableName;
-import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertIterableEquals;
-import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import kz.qazmarka.h2k.schema.registry.PhoenixTableMetadataProvider;
+import kz.qazmarka.h2k.schema.registry.SchemaRegistry;
 
 /**
  * Набор юнит‑тестов для конфигурации {@link H2kConfig}.
@@ -25,7 +24,6 @@ import kz.qazmarka.h2k.schema.registry.PhoenixTableMetadataProvider;
  * - генерация имён Kafka‑топиков: плейсхолдеры ({@code ${namespace}}, {@code ${qualifier}}),
  *   санитайзинг недопустимых символов и жёсткое усечение по {@code h2k.topic.max.length};
  * - нормализация кодировки {@code rowkey} ({@code HEX} / {@code BASE64});
- * - разбор CSV‑списка колонко‑семейств: {@code h2k.cf.list} (пробелы, пустые элементы, порядок).
  *
  * Нефункциональные требования:
  * - используется только in‑memory {@link org.apache.hadoop.conf.Configuration}; без I/O;
@@ -174,35 +172,63 @@ class H2kConfigTest {
         assertFalse(hc.isRowkeyBase64());
     }
 
-    /**
-     * GIVEN: CSV со смешанными пробелами и пустыми элементами.
-     * WHEN:  парсим {@code h2k.cf.list}.
-     * THEN:  пустые элементы отбрасываются, порядок сохраняется; байтовые имена CF выдаются для каждого.
-     */
     @Test
-    @DisplayName("cf.list: CSV с пропусками и пробелами")
-    void cfList_csv() {
-        Configuration c = new Configuration(false);
-        c.set("h2k.cf.list", " d , ,b,0 ");
-        H2kConfig hc = fromCfg(c);
-        assertArrayEquals(new String[]{"d","b","0"}, hc.getCfNames());
-        assertEquals("d,b,0", hc.getCfNamesCsv());
-        assertEquals(3, hc.getCfFamiliesBytes().length);
-        assertTrue(hc.isCfFilterExplicit());
+    @DisplayName("cfFilter: список CF берётся из провайдера метаданных")
+    void cfFilter_fromMetadataProvider() {
+        Configuration cfg = new Configuration(false);
+        TableName table = TableName.valueOf("ns", "tbl");
 
-        byte[][] families = hc.getCfFamiliesBytes();
-        families[0][0] = (byte) 'X';
-        assertNotEquals((byte) 'X', hc.getCfFamiliesBytes()[0][0], "Возвращается копия CF-байтов");
+        PhoenixTableMetadataProvider provider = new PhoenixTableMetadataProvider() {
+            @Override
+            public Integer saltBytes(TableName table) {
+                return null;
+            }
+
+            @Override
+            public Integer capacityHint(TableName table) {
+                return null;
+            }
+
+            @Override
+            public String[] columnFamilies(TableName table) {
+                return new String[]{"d", "b"};
+            }
+        };
+
+        H2kConfig hc = fromCfg(cfg, provider);
+        H2kConfig.CfFilterSnapshot snapshot = hc.describeCfFilter(table);
+        assertTrue(snapshot.enabled());
+        assertEquals("d,b", snapshot.csv());
+        byte[][] families = snapshot.families();
+        assertEquals(2, families.length);
+        assertEquals("d", new String(families[0], java.nio.charset.StandardCharsets.UTF_8));
+        assertEquals("b", new String(families[1], java.nio.charset.StandardCharsets.UTF_8));
+        assertEquals(H2kConfig.ValueSource.AVRO, snapshot.source());
     }
 
     @Test
-    @DisplayName("cf.list: ключ не задан → фильтр не считается явным")
-    void cfList_notSet() {
-        Configuration c = new Configuration(false);
-        H2kConfig hc = fromCfg(c);
-        assertArrayEquals(new String[]{"0"}, hc.getCfNames());
-        assertFalse(hc.isCfFilterExplicit());
-        assertEquals(1, hc.getCfFamiliesBytes().length);
+    @DisplayName("cfFilter: отсутствие списка CF отключает фильтр")
+    void cfFilter_disabledWhenEmpty() {
+        Configuration cfg = new Configuration(false);
+        TableName table = TableName.valueOf("ns", "tbl");
+
+        PhoenixTableMetadataProvider provider = new PhoenixTableMetadataProvider() {
+            @Override
+            public Integer saltBytes(TableName table) { return null; }
+
+            @Override
+            public Integer capacityHint(TableName table) { return null; }
+
+            @Override
+            public String[] columnFamilies(TableName table) { return SchemaRegistry.EMPTY; }
+        };
+
+        H2kConfig hc = fromCfg(cfg, provider);
+        H2kConfig.CfFilterSnapshot snapshot = hc.describeCfFilter(table);
+        assertFalse(snapshot.enabled());
+        assertEquals("", snapshot.csv());
+        assertEquals(0, snapshot.families().length);
+        assertEquals(H2kConfig.ValueSource.DEFAULT, snapshot.source());
     }
 
     @Test
@@ -346,21 +372,6 @@ class H2kConfigTest {
         assertTrue(b >= 0 && b <= 8);
         assertTrue(d >= 0 && d <= 8);
         assertEquals(2, ok);
-    }
-
-    /**
-     * Дополнительная проверка CSV: пустые/пробельные элементы отбрасываются,
-     * порядок элементов и представление CSV сохраняются.
-     */
-    @Test
-    @DisplayName("cf.list: пустые/пробельные элементы отбрасываются; порядок сохраняется")
-    void cfList_emptyItemsSkipped() {
-        Configuration c = new Configuration(false);
-        c.set("h2k.cf.list", " , d , , b ,,0, ");
-        H2kConfig hc = fromCfg(c);
-
-        assertArrayEquals(new String[]{"d","b","0"}, hc.getCfNames());
-        assertEquals("d,b,0", hc.getCfNamesCsv());
     }
 
     /**

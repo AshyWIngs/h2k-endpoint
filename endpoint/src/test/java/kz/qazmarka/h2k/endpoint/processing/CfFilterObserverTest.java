@@ -9,6 +9,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import kz.qazmarka.h2k.config.H2kConfig;
+import kz.qazmarka.h2k.schema.registry.PhoenixTableMetadataProvider;
 
 /**
  * Тесты для CfFilterObserver: убеждаемся, что счётчики копятся и выявляется неэффективный фильтр.
@@ -25,14 +26,24 @@ class CfFilterObserverTest {
         Configuration configuration = new Configuration(false);
         configuration.set("h2k.kafka.bootstrap.servers", "mock:9092");
         configuration.set("h2k.topic.pattern", "${namespace}.${qualifier}");
-        configuration.set("h2k.cf.list", "cf1,cf2");
+        PhoenixTableMetadataProvider provider = new PhoenixTableMetadataProvider() {
+            @Override
+            public Integer saltBytes(TableName table) { return null; }
 
-        H2kConfig h2kConfig = H2kConfig.from(configuration, "mock:9092");
-        CfFilterObserver observer = CfFilterObserver.create(h2kConfig);
+            @Override
+            public Integer capacityHint(TableName table) { return null; }
+
+            @Override
+            public String[] columnFamilies(TableName table) { return new String[]{"cf1", "cf2"}; }
+        };
+
+        H2kConfig h2kConfig = H2kConfig.from(configuration, "mock:9092", provider);
+        CfFilterObserver observer = CfFilterObserver.create();
 
         TableName effective = TableName.valueOf("ns", "effective");
+        H2kConfig.CfFilterSnapshot effectiveSnapshot = h2kConfig.describeCfFilter(effective);
         for (int i = 0; i < 3; i++) {
-            observer.observe(effective, 200, 100, true);
+            observer.observe(effective, 200, 100, true, effectiveSnapshot);
         }
         assertEquals(0, observer.ineffectiveTables(), "При хорошем соотношении предупреждений быть не должно");
         CfFilterObserver.Stats effectiveStats = observer.snapshot().get(effective);
@@ -40,8 +51,9 @@ class CfFilterObserverTest {
         assertEquals(600L, effectiveStats.rowsTotal.sum(), "Накопленное количество строк должно совпадать");
 
         TableName ineffective = TableName.valueOf("ns", "ineffective");
+        H2kConfig.CfFilterSnapshot ineffectiveSnapshot = h2kConfig.describeCfFilter(ineffective);
         for (int i = 0; i < 5; i++) {
-            observer.observe(ineffective, 120, 0, true);
+            observer.observe(ineffective, 120, 0, true, ineffectiveSnapshot);
         }
         assertEquals(1, observer.ineffectiveTables(), "Должно появиться предупреждение о неэффективном фильтре");
         CfFilterObserver.Stats ineffectiveStats = observer.snapshot().get(ineffective);

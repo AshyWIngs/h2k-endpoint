@@ -18,7 +18,7 @@ import kz.qazmarka.h2k.util.Parsers;
  * Иммутабельная конфигурация эндпоинта, прочитанная один раз из HBase {@link Configuration}.
  *
  * Содержит:
- *  - Базовые параметры Kafka/CF и ограничение длины имени топика
+ *  - Базовые параметры Kafka и ограничение длины имени топика
  *  - Флаги формирования payload (rowkey/meta) и JSON (serializeNulls)
  *  - Параметры ожидания подтверждений отправок (awaitEvery/awaitTimeoutMs)
  *  - Параметры автосоздания топиков (партиции/репликация/таймаут/backoff), client.id для AdminClient и произвольные topic-level конфиги
@@ -84,8 +84,6 @@ public final class H2kConfig {
     static final String K_TOPIC_PATTERN = "h2k.topic.pattern";
     /** Максимально допустимая длина имени Kafka‑топика. */
     static final String K_TOPIC_MAX_LENGTH = "h2k.topic.max.length";
-    /** CSV‑список имён CF, подлежащих экспорту. */
-    static final String K_CF_LIST = "h2k.cf.list";
     /** Флаг включения rowkey в JSON‑payload. */
     static final String K_PAYLOAD_INCLUDE_ROWKEY = "h2k.payload.include.rowkey";
     /** Способ кодирования rowkey: "hex" (по умолчанию) или "base64". */
@@ -127,7 +125,6 @@ public final class H2kConfig {
          * Список CF для экспорта в Kafka (CSV).
          * Пример: "d,b,0". Используется для фильтрации целевых семейств столбцов.
          */
-        public static final String CF_LIST = "h2k.cf.list";
         /**
          * Адреса Kafka bootstrap.servers (обязательный параметр).
          * Формат: host:port[,host2:port2].
@@ -213,7 +210,6 @@ public final class H2kConfig {
 
     // ==== Значения по умолчанию (в одном месте) ====
     /** Имя CF по умолчанию, если в конфигурации не задано явно. */
-    static final String DEFAULT_CF_NAME = "0";
     /** Базовое значение client.id для AdminClient (к нему добавляется hostname, если доступен). */
     public static final String DEFAULT_ADMIN_CLIENT_ID = "h2k";
     /** По умолчанию rowkey в payload отключён. */
@@ -271,14 +267,6 @@ public final class H2kConfig {
     private final String bootstrap;
     private final String topicPattern;
     private final int topicMaxLength;
-    /** Полный список имён CF, указанных в h2k.cf.list (в порядке конфигурации). */
-    private final String[] cfNames;
-    /** Те же CF в виде UTF‑8 байтов (для быстрого сравнения в горячем пути). */
-    private final byte[][] cfBytes;
-    /** CSV-представление cfNames (для логов и отладочной информации). */
-    private final String cfNamesCsv;
-    /** Ключ h2k.cf.list был задан явно (а не подставлен дефолт). */
-    private final boolean cfFilterExplicit;
 
     // ==== Payload/метаданные/rowkey ====
     private final boolean includeRowKey;
@@ -352,21 +340,6 @@ public final class H2kConfig {
         this.bootstrap = b.bootstrap;
         this.topicPattern = b.topicPattern;
         this.topicMaxLength = b.topicMaxLength;
-        this.cfNames = b.cfNames == null ? new String[]{DEFAULT_CF_NAME} : b.cfNames.clone();
-        if (b.cfBytes != null) {
-            // копируем внешний массив и каждую внутреннюю ссылку
-            this.cfBytes = new byte[b.cfBytes.length][];
-            for (int i = 0; i < b.cfBytes.length; i++) {
-                byte[] src = b.cfBytes[i];
-                byte[] dst = new byte[src.length];
-                System.arraycopy(src, 0, dst, 0, src.length);
-                this.cfBytes[i] = dst;
-            }
-        } else {
-            this.cfBytes = new byte[][]{ DEFAULT_CF_NAME.getBytes(StandardCharsets.UTF_8) };
-        }
-        this.cfNamesCsv = String.join(",", this.cfNames);
-        this.cfFilterExplicit = b.cfFilterExplicit;
         this.includeRowKey = b.includeRowKey;
         this.rowkeyEncoding = b.rowkeyEncoding;
         this.rowkeyBase64 = b.rowkeyBase64;
@@ -437,13 +410,6 @@ public final class H2kConfig {
         private String topicPattern = PLACEHOLDER_TABLE;
         /** Ограничение длины имени топика (символов). */
         private int topicMaxLength = DEFAULT_TOPIC_MAX_LENGTH;
-        /** Список имён CF, указанных в конфигурации (оригинальный порядок). */
-        private String[] cfNames = new String[]{DEFAULT_CF_NAME};
-        /** Байтовые представления имён CF (UTF‑8) для быстрого сравнения. */
-        private byte[][] cfBytes = new byte[][]{ DEFAULT_CF_NAME.getBytes(StandardCharsets.UTF_8) };
-        /** Флаг: ключ h2k.cf.list задан явно. */
-        private boolean cfFilterExplicit;
-
         /** Включать ли rowkey в payload. */
         private boolean includeRowKey = DEFAULT_INCLUDE_ROWKEY;
         /** Способ кодирования rowkey: "hex" или "base64". */
@@ -559,55 +525,6 @@ public final class H2kConfig {
          * @return this
          */
         public Builder topicMaxLength(int v) { this.topicMaxLength = v; return this; }
-        /**
-         * Устанавливает список имён CF, указанных через h2k.cf.list (CSV).
-         * @param v массив имён CF
-         * @return this
-         */
-        public Builder cfNames(String[] v) {
-            String[] names;
-            if (v == null || v.length == 0) {
-                names = new String[]{DEFAULT_CF_NAME};
-            } else {
-                names = v.clone();
-            }
-            this.cfNames = names;
-            this.cfBytes = Parsers.toUtf8Bytes(names);
-            return this;
-        }
-
-        /**
-         * Устанавливает байтовые представления имён CF (UTF‑8).
-         * @param v массив байтовых имён CF
-         * @return this
-         */
-        public Builder cfBytes(byte[][] v) {
-            if (v == null || v.length == 0) {
-                this.cfBytes = new byte[][]{ DEFAULT_CF_NAME.getBytes(StandardCharsets.UTF_8) };
-                return this;
-            }
-            byte[][] copy = new byte[v.length][];
-            for (int i = 0; i < v.length; i++) {
-                byte[] src = v[i];
-                if (src == null) {
-                    copy[i] = new byte[0];
-                } else {
-                    byte[] dst = new byte[src.length];
-                    System.arraycopy(src, 0, dst, 0, src.length);
-                    copy[i] = dst;
-                }
-            }
-            this.cfBytes = copy;
-            return this;
-        }
-
-        /**
-         * Отмечает, что h2k.cf.list был задан явно в конфигурации.
-         * @param v true, если значение пришло из конфигурации; false — использован дефолт
-         * @return this
-         */
-        public Builder cfFilterExplicit(boolean v) { this.cfFilterExplicit = v; return this; }
-
         /**
          * Включать ли rowkey в формируемый payload.
          * @param v true — включать; false — нет
@@ -829,13 +746,10 @@ public final class H2kConfig {
          */
         public H2kConfig build() { return new H2kConfig(this); }
 
-        /** Опции, относящиеся к шаблону топика и CF. */
+        /** Опции, относящиеся к шаблону топика. */
         public final class TopicOptions {
             public TopicOptions pattern(String v) { Builder.this.topicPattern(v); return this; }
             public TopicOptions maxLength(int v) { Builder.this.topicMaxLength(v); return this; }
-            public TopicOptions cfNames(String[] v) { Builder.this.cfNames(v); return this; }
-            public TopicOptions cfBytes(byte[][] v) { Builder.this.cfBytes(v); return this; }
-            public TopicOptions filterExplicit(boolean v) { Builder.this.cfFilterExplicit(v); return this; }
             public TopicOptions configs(Map<String, String> v) { Builder.this.topicConfigs(v); return this; }
             public Builder done() { return Builder.this; }
         }
@@ -982,30 +896,6 @@ public final class H2kConfig {
     public String getTopicPattern() { return topicPattern; }
     /** @return максимальная допустимая длина имени топика */
     public int getTopicMaxLength() { return topicMaxLength; }
-    /** @return имена CF в порядке, заданном конфигурацией (копия массива) */
-    public String[] getCfNames() { return cfNames.clone(); }
-
-    /**
-     * Возвращает CF-имена в виде массива {@code byte[]} (UTF-8), пригодного для фильтров HBase.
-     * Возвращается копия, чтобы сохранить иммутабельность {@link H2kConfig}.
-     */
-    public byte[][] getCfFamiliesBytes() {
-        byte[][] copy = new byte[cfBytes.length][];
-        for (int i = 0; i < cfBytes.length; i++) {
-            byte[] src = cfBytes[i];
-            byte[] dst = new byte[src.length];
-            System.arraycopy(src, 0, dst, 0, src.length);
-            copy[i] = dst;
-        }
-        return copy;
-    }
-
-    /** @return CSV с именами CF — удобно для логов */
-    public String getCfNamesCsv() { return cfNamesCsv; }
-
-    /** @return true, если ключ h2k.cf.list присутствовал в конфигурации явно. */
-    public boolean isCfFilterExplicit() { return cfFilterExplicit; }
-
     /** @return флаг включения rowkey в payload */
     public boolean isIncludeRowKey() { return includeRowKey; }
     /** @return способ кодирования rowkey: "hex" или "base64" */
@@ -1150,6 +1040,16 @@ public final class H2kConfig {
         return resolveTableOptions(table);
     }
 
+    /**
+     * Возвращает снимок конфигурации CF-фильтра для указанной таблицы.
+     *
+     * @param table таблица HBase/Phoenix
+     * @return неизменяемый снимок фильтра CF
+     */
+    public CfFilterSnapshot describeCfFilter(TableName table) {
+        return resolveTableOptions(table).cfFilter();
+    }
+
     private TableOptionsSnapshot resolveTableOptions(TableName table) {
         if (table == null) {
             throw new NullPointerException("table == null");
@@ -1198,7 +1098,15 @@ public final class H2kConfig {
             }
         }
 
-        return new TableOptionsSnapshot(saltBytes, saltSource, capacityHint, capacitySource);
+        String[] cfNames = tableMetadataProvider.columnFamilies(table);
+        CfFilterSnapshot cfSnapshot;
+        if (cfNames != null && cfNames.length > 0) {
+            cfSnapshot = CfFilterSnapshot.from(cfNames, ValueSource.AVRO);
+        } else {
+            cfSnapshot = CfFilterSnapshot.disabled();
+        }
+
+        return new TableOptionsSnapshot(saltBytes, saltSource, capacityHint, capacitySource, cfSnapshot);
     }
 
     private static int clampSalt(Integer raw) {
@@ -1235,12 +1143,18 @@ public final class H2kConfig {
         private final ValueSource saltSource;
         private final int capacityHint;
         private final ValueSource capacitySource;
+        private final CfFilterSnapshot cfFilter;
 
-        TableOptionsSnapshot(int saltBytes, ValueSource saltSource, int capacityHint, ValueSource capacitySource) {
+        TableOptionsSnapshot(int saltBytes,
+                             ValueSource saltSource,
+                             int capacityHint,
+                             ValueSource capacitySource,
+                             CfFilterSnapshot cfFilter) {
             this.saltBytes = saltBytes;
             this.saltSource = saltSource;
             this.capacityHint = capacityHint;
             this.capacitySource = capacitySource;
+            this.cfFilter = cfFilter == null ? CfFilterSnapshot.disabled() : cfFilter;
         }
 
         public int saltBytes() {
@@ -1258,6 +1172,80 @@ public final class H2kConfig {
         public ValueSource capacitySource() {
             return capacitySource;
         }
+
+        public CfFilterSnapshot cfFilter() {
+            return cfFilter;
+        }
+    }
+
+    /**
+     * Иммутабельный снимок конфигурации фильтра CF для конкретной таблицы.
+     * Снимок хранит актуальный список column family в виде CSV и UTF-8 байтов, а также источник данных
+     * (Avro-схема или значения по умолчанию). Объект безопасен для публикации между потоками.
+     */
+    public static final class CfFilterSnapshot {
+        private static final byte[][] EMPTY_FAMILIES = new byte[0][];
+        private static final CfFilterSnapshot DISABLED = new CfFilterSnapshot(false, EMPTY_FAMILIES, "", ValueSource.DEFAULT);
+
+        private final boolean enabled;
+        private final byte[][] families;
+        private final String csv;
+        private final ValueSource source;
+
+        private CfFilterSnapshot(boolean enabled, byte[][] families, String csv, ValueSource source) {
+            this.enabled = enabled;
+            this.families = families;
+            this.csv = csv;
+            this.source = source;
+        }
+
+        static CfFilterSnapshot disabled() {
+            return DISABLED;
+        }
+
+        static CfFilterSnapshot from(String[] names, ValueSource source) {
+            if (names == null || names.length == 0) {
+                return DISABLED;
+            }
+            int len = names.length;
+            byte[][] immutableFamilies = new byte[len][];
+            for (int i = 0; i < len; i++) {
+                String name = names[i];
+                immutableFamilies[i] = name == null
+                        ? new byte[0]
+                        : name.getBytes(StandardCharsets.UTF_8);
+            }
+            String csv = String.join(",", names);
+            return new CfFilterSnapshot(true, immutableFamilies, csv, source == null ? ValueSource.AVRO : source);
+        }
+
+        /**
+         * @return {@code true}, если для таблицы настроена явная фильтрация по column family
+         */
+        public boolean enabled() {
+            return enabled;
+        }
+
+        /**
+         * @return массив UTF-8 байтов имен column family; не {@code null}
+         */
+        public byte[][] families() {
+            return families;
+        }
+
+        /**
+         * @return CSV-представление списка column family; пустая строка, если фильтр отключён
+         */
+        public String csv() {
+            return csv;
+        }
+
+        /**
+         * @return источник данных (Avro, конфигурация или значение по умолчанию)
+         */
+        public ValueSource source() {
+            return source;
+        }
     }
 
     /**
@@ -1267,13 +1255,11 @@ public final class H2kConfig {
     @Override
     public String toString() {
         final String maskedBootstrap = maskBootstrap(bootstrap);
-        final String cfCsv = String.join(",", cfNames);
         return new StringBuilder(256)
                 .append("H2kConfig{")
                 .append("bootstrap=").append(maskedBootstrap)
                 .append(", topicPattern='").append(topicPattern).append('\'')
                 .append(", topicMaxLength=").append(topicMaxLength)
-                .append(", cf=").append(cfCsv)
                 .append(", includeRowKey=").append(includeRowKey)
                 .append(", rowkeyEncoding='").append(rowkeyEncoding).append('\'')
                 .append(", includeMeta=").append(includeMeta)

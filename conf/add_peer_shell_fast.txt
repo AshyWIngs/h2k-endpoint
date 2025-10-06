@@ -30,9 +30,7 @@ add_peer 'h2k_fast',
       'h2k.kafka.bootstrap.servers'         => '10.254.3.111:9092,10.254.3.112:9092,10.254.3.113:9092',
       # client.id не задаём — Endpoint сам сгенерирует уникальный id per-host (hostname/UUID)
       'h2k.topic.pattern'                   => '${table}',              # ${table}|${namespace}|${qualifier}
-      'h2k.cf.list'                         => '0,DOCUMENTS,b,d',       # union CF: '0' (default), 'DOCUMENTS', 'b', 'd'
-# PK-колонки из rowkey автоматически инъектируются в payload (c,t,opd и пр.);
-# включать их в h2k.cf.list не требуется, но в подсказке ёмкости учитываются как обычные поля.
+# Фильтрация CF задаётся в conf/avro/*.avsc через свойство h2k.cf.list (CSV без пробелов)
 
       # Формат payload (json-each-row | avro-binary | avro-json)
       'h2k.payload.format'                  => 'json-each-row',

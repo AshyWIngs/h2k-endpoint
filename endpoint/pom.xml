@@ -23,7 +23,7 @@
   <parent>
     <groupId>kz.qazmarka</groupId>
     <artifactId>h2k-endpoint-parent</artifactId>
-    <version>0.0.15</version>
+    <version>0.0.16</version>
     <relativePath>../pom.xml</relativePath>
   </parent>
 
@@ -349,6 +349,8 @@
               <createDependencyReducedPom>false</createDependencyReducedPom>
               <!-- Минимизацию отключаем: Avro/Jackson/Confluent активно используют рефлексию. -->
               <minimizeJar>false</minimizeJar>
+              <shadedArtifactAttached>true</shadedArtifactAttached>
+              <shadedClassifierName>shaded</shadedClassifierName>
               <filters>
                 <filter>
                   <artifact>*:*</artifact>

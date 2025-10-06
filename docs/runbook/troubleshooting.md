@@ -68,7 +68,7 @@ log4j.logger.org.apache.phoenix=WARN
 
 ## Проверка конфигурации
 - Убедиться, что задан h2k.kafka.bootstrap.servers.
-- Проверить корректность h2k.topic.pattern и h2k.cf.list (несуществующие CF игнорируются).
+- Проверить корректность h2k.topic.pattern и свойств `"h2k.cf.list"` в Avro-схемах (несуществующие CF игнорируются).
 - Для decode.mode=phoenix-avro рекомендуется указать h2k.schema.path как фолбэк; для json-phoenix этот ключ обязателен.
 - При несоответствии типов в schema.json `PhoenixColumnTypeRegistry` логирует WARN и использует VARCHAR, а `ValueCodecPhoenix` бросает `IllegalStateException` при декодировании фиксированных типов.
 
@@ -79,7 +79,7 @@ log4j.logger.org.apache.phoenix=WARN
 - Проверить, что peer включён (`enable_peer`).
 - Проверить, что репликация включена для таблиц (alter + REPLICATION_SCOPE).
 - Убедиться, что bootstrap.servers указывают на рабочий кластер Kafka.
-- Если используется фильтр `h2k.cf.list`, убедитесь, что ключ задан явно и список CF соответствует реальному регистру имён.
+- Если используется фильтр (свойство `"h2k.cf.list"` в `.avsc`), убедитесь, что список CF соответствует регистру имён в HBase.
 
 ### Ошибки декодирования Phoenix
 - ValueCodecPhoenix проверяет фиксированные типы (например, UNSIGNED_INT = 4 байта).

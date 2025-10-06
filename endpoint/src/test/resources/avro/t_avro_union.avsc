@@ -2,6 +2,7 @@
   "type": "record",
   "name": "T_AVRO_UNION",
   "namespace": "kz.qazmarka.test",
+  "h2k.cf.list": "d",
   "fields": [
     {
       "name": "value_union",

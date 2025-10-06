@@ -45,8 +45,6 @@ final class H2kConfigLoader {
         builder.topic()
                 .pattern(topic.topicPattern)
                 .maxLength(topic.topicMaxLength)
-                .cfNames(topic.cfNames)
-                .filterExplicit(topic.cfFilterExplicit)
                 .configs(topicConfigs)
                 .done();
 

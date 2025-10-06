@@ -15,6 +15,9 @@ public interface PhoenixTableMetadataProvider {
 
         @Override
         public Integer capacityHint(TableName table) { return null; }
+
+        @Override
+        public String[] columnFamilies(TableName table) { return SchemaRegistry.EMPTY; }
     };
 
     /**
@@ -28,4 +31,12 @@ public interface PhoenixTableMetadataProvider {
      * @return подсказка ёмкости корневого JSON (ожидаемое число полей) или {@code null}, если значение неизвестно
      */
     Integer capacityHint(TableName table);
+
+    /**
+     * @param table таблица Phoenix/HBase
+     * @return перечисление column family, которое следует реплицировать, или пустой массив для отключения фильтра
+     */
+    default String[] columnFamilies(TableName table) {
+        return SchemaRegistry.EMPTY;
+    }
 }

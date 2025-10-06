@@ -5,6 +5,7 @@
   "doc": "Phoenix TBL_JTI_TRACE_DOCUMENT_ERRORS. PK: (id). TIMESTAMP — миллисекунды epoch. Таблица без соли.",
   "h2k.saltBytes": 0,
   "h2k.capacityHint": 8,
+  "h2k.cf.list": "d",
   "fields": [
     { "name": "id",    "type": "string",            "h2k.phoenixType": "VARCHAR",    "doc": "NOT NULL: VARCHAR" },
 

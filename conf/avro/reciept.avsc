@@ -5,6 +5,7 @@
   "doc": "Phoenix RECEIPT. PK: (did). TIMESTAMP — миллисекунды epoch. Таблица посолена (SALT_BUCKETS=30).",
   "h2k.saltBytes": 1,
   "h2k.capacityHint": 16,
+  "h2k.cf.list": "b,d",
   "fields": [
     { "name": "did",   "type": "string",            "h2k.phoenixType": "VARCHAR",            "doc": "NOT NULL: VARCHAR" },
 

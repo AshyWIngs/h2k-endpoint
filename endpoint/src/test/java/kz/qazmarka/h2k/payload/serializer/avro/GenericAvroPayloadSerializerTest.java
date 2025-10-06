@@ -51,7 +51,6 @@ class GenericAvroPayloadSerializerTest {
 
     private static H2kConfig prepareConfig(String format) {
         Configuration conf = new Configuration(false);
-        conf.set("h2k.cf.list", "d");
         conf.set("h2k.payload.format", format);
         conf.set("h2k.avro.mode", "generic");
         conf.set("h2k.avro.schema.dir", SHARED_SCHEMA_DIR);
@@ -250,7 +249,6 @@ class GenericAvroPayloadSerializerTest {
     @DisplayName("Avro generic: отсутствие схемы даёт понятную ошибку")
     void avroMissingSchemaFails() {
         Configuration c = new Configuration(false);
-        c.set("h2k.cf.list", "d");
         c.set("h2k.payload.format", "avro-binary");
         c.set("h2k.avro.mode", "generic");
         c.set("h2k.avro.schema.dir", Paths.get("src", "test", "resources", "avro-missing").toAbsolutePath().toString());
@@ -281,7 +279,6 @@ class GenericAvroPayloadSerializerTest {
                 + "}");
 
         Configuration c = new Configuration(false);
-        c.set("h2k.cf.list", "d");
         c.set("h2k.payload.format", "avro-binary");
         c.set("h2k.avro.mode", "generic");
         c.set("h2k.avro.schema.dir", tmp.toString());
@@ -313,7 +310,6 @@ class GenericAvroPayloadSerializerTest {
                 + "}");
 
         Configuration c = new Configuration(false);
-        c.set("h2k.cf.list", "d");
         c.set("h2k.payload.format", "avro-binary");
         c.set("h2k.avro.mode", "generic");
         c.set("h2k.avro.schema.dir", tmp.toString());

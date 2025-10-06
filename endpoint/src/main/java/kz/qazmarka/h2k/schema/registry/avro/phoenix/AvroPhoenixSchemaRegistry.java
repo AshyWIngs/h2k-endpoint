@@ -34,6 +34,7 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
     private static final String PROP_TYPE = "h2k.phoenixType";
     private static final String PROP_SALT = "h2k.saltBytes";
     private static final String PROP_CAPACITY = "h2k.capacityHint";
+    private static final String PROP_CF_LIST = "h2k.cf.list";
     private static final ObjectMapper PK_MAPPER = new ObjectMapper();
 
     private final AvroSchemaRegistry avroRegistry;
@@ -86,6 +87,11 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
         return metadataFor(table).capacityHint();
     }
 
+    @Override
+    public String[] columnFamilies(TableName table) {
+        return metadataFor(table).columnFamilies();
+    }
+
     /** Читает и кеширует метаданные таблицы, используя локальный .avsc и fallback. */
     private TableMetadata metadataFor(TableName table) {
         String key = table.getNameAsString().toUpperCase(Locale.ROOT);
@@ -136,20 +142,146 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
         String[] pk = readPk(schema);
         Integer salt = readSaltBytes(schema, table);
         Integer capacity = readCapacityHint(schema, table);
+        String[] cfFamilies = readColumnFamilies(schema, table);
         if (LOG.isDebugEnabled()) {
             String pkText = pk.length == 0 ? "-" : String.join(",", pk);
             String saltText = salt == null ? "-" : salt.toString();
             String capacityText = capacity == null ? "-" : capacity.toString();
-            LOG.debug("Avro-схема {} загружена: файл={}, полей={}, pk={}, соль={}, capacity={}, cacheSize={}",
+            String cfText = cfFamilies.length == 0 ? "-" : String.join(",", cfFamilies);
+            LOG.debug("Avro-схема {} загружена: файл={}, полей={}, pk={}, соль={}, capacity={}, cf={}, cacheSize={}",
                     table.getNameAsString(),
                     schemaPath.toAbsolutePath(),
                     schema.getFields().size(),
                     pkText,
                     saltText,
                     capacityText,
+                    cfText,
                     avroRegistry.cacheSize());
         }
-        return new TableMetadata(table, types, pk, fallback, salt, capacity);
+        return new TableMetadata(table, types, pk, fallback, salt, capacity, cfFamilies);
+    }
+
+    private String[] readColumnFamilies(Schema schema, TableName table) {
+        Object raw = firstNonNull(schema.getObjectProp(PROP_CF_LIST), schema.getProp(PROP_CF_LIST));
+        if (raw == null) {
+            return SchemaRegistry.EMPTY;
+        }
+        if (raw instanceof JsonNode) {
+            return sanitizeCfFromJson((JsonNode) raw, table);
+        }
+        if (isLegacyJacksonNode(raw)) {
+            return sanitizeCfFromLegacy(raw, table);
+        }
+        if (raw instanceof java.util.List<?>) {
+            return sanitizeCfFromList((java.util.List<?>) raw);
+        }
+        String text = String.valueOf(raw);
+        return sanitizeCfCsv(text, table);
+    }
+
+    private String[] sanitizeCfFromJson(JsonNode node, TableName table) {
+        if (!node.isArray()) {
+            LOG.warn("Avro-схема {}: h2k.cf.list задан в виде JSON, но не является массивом — значение проигнорировано", table.getNameAsString());
+            return SchemaRegistry.EMPTY;
+        }
+        java.util.List<String> values = new java.util.ArrayList<>(node.size());
+        for (int i = 0; i < node.size(); i++) {
+            JsonNode item = node.get(i);
+            if (item == null || item.isNull()) {
+                continue;
+            }
+            String val = normalizeCfName(item.asText());
+            if (val != null) {
+                values.add(val);
+            }
+        }
+        return deduplicate(values);
+    }
+
+    private String[] sanitizeCfFromLegacy(Object node, TableName table) {
+        try {
+            java.lang.reflect.Method isArray = node.getClass().getMethod("isArray");
+            if (!Boolean.TRUE.equals(isArray.invoke(node))) {
+                LOG.warn("Avro-схема {}: h2k.cf.list legacy Jackson значение не является массивом — проигнорировано", table.getNameAsString());
+                return SchemaRegistry.EMPTY;
+            }
+            java.lang.reflect.Method sizeMethod = node.getClass().getMethod("size");
+            int size = ((Number) sizeMethod.invoke(node)).intValue();
+            java.util.List<String> values = new java.util.ArrayList<>(size);
+            java.lang.reflect.Method getMethod = node.getClass().getMethod("get", int.class);
+            for (int i = 0; i < size; i++) {
+                Object element = getMethod.invoke(node, i);
+                if (element == null) {
+                    continue;
+                }
+                java.lang.reflect.Method asText = element.getClass().getMethod("asText");
+                String text = (String) asText.invoke(element);
+                String normalized = normalizeCfName(text);
+                if (normalized != null) {
+                    values.add(normalized);
+                }
+            }
+            return deduplicate(values);
+        } catch (ReflectiveOperationException ex) {
+            LOG.warn("Avro-схема {}: не удалось прочитать legacy JSON h2k.cf.list — значение проигнорировано", table.getNameAsString());
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("Трассировка чтения legacy h2k.cf.list", ex);
+            }
+            return SchemaRegistry.EMPTY;
+        }
+    }
+
+    private String[] sanitizeCfFromList(java.util.List<?> list) {
+        if (list.isEmpty()) {
+            return SchemaRegistry.EMPTY;
+        }
+        java.util.List<String> values = new java.util.ArrayList<>(list.size());
+        for (Object o : list) {
+            String normalized = normalizeCfName(o == null ? null : String.valueOf(o));
+            if (normalized != null) {
+                values.add(normalized);
+            }
+        }
+        return deduplicate(values);
+    }
+
+    private String[] sanitizeCfCsv(String raw, TableName table) {
+        if (raw == null) {
+            return SchemaRegistry.EMPTY;
+        }
+        String text = raw.trim();
+        if (text.isEmpty()) {
+            return SchemaRegistry.EMPTY;
+        }
+        String[] parts = text.split(",");
+        java.util.List<String> values = new java.util.ArrayList<>(parts.length);
+        for (String part : parts) {
+            String normalized = normalizeCfName(part);
+            if (normalized != null) {
+                values.add(normalized);
+            }
+        }
+        if (values.isEmpty()) {
+            LOG.warn("Avro-схема {}: h2k.cf.list не содержит валидных имён — фильтр будет отключён", table.getNameAsString());
+            return SchemaRegistry.EMPTY;
+        }
+        return deduplicate(values);
+    }
+
+    private static String normalizeCfName(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        String trimmed = raw.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    private static String[] deduplicate(java.util.List<String> values) {
+        if (values.isEmpty()) {
+            return SchemaRegistry.EMPTY;
+        }
+        java.util.LinkedHashSet<String> unique = new java.util.LinkedHashSet<>(values);
+        return unique.toArray(new String[0]);
     }
 
     private Integer readSaltBytes(Schema schema, TableName table) {
@@ -348,6 +480,7 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
         private final TableName table;
         private final Integer saltBytes;
         private final Integer capacityHint;
+        private final String[] cfFamilies;
         private final AtomicReference<String[]> fallbackPk = new AtomicReference<>();
 
         TableMetadata(TableName table,
@@ -355,7 +488,8 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
                       String[] pk,
                       SchemaRegistry fallback,
                       Integer saltBytes,
-                      Integer capacityHint) {
+                      Integer capacityHint,
+                      String[] cfFamilies) {
             this.table = table;
             if (columnTypes.isEmpty()) {
                 this.columnTypes = Collections.emptyMap();
@@ -369,6 +503,9 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
                     : PhoenixTableMetadataProvider.NOOP;
             this.saltBytes = saltBytes;
             this.capacityHint = capacityHint;
+            this.cfFamilies = (cfFamilies == null || cfFamilies.length == 0)
+                    ? SchemaRegistry.EMPTY
+                    : cfFamilies.clone();
         }
 
         static TableMetadata fallbackOnly(TableName table, SchemaRegistry fallback) {
@@ -377,7 +514,8 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
                     SchemaRegistry.EMPTY,
                     fallback,
                     null,
-                    null);
+                    null,
+                    SchemaRegistry.EMPTY);
         }
 
         String columnType(String name) {
@@ -462,6 +600,21 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
                 return capacityHint;
             }
             return fallbackMeta.capacityHint(table);
+        }
+
+        String[] columnFamilies() {
+            if (cfFamilies.length > 0) {
+                String[] copy = new String[cfFamilies.length];
+                System.arraycopy(cfFamilies, 0, copy, 0, cfFamilies.length);
+                return copy;
+            }
+            String[] fallbackFamilies = fallbackMeta.columnFamilies(table);
+            if (fallbackFamilies == null || fallbackFamilies.length == 0) {
+                return SchemaRegistry.EMPTY;
+            }
+            String[] copy = new String[fallbackFamilies.length];
+            System.arraycopy(fallbackFamilies, 0, copy, 0, fallbackFamilies.length);
+            return copy;
         }
     }
 }

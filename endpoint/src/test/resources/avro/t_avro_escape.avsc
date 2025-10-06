@@ -3,6 +3,7 @@
   "name": "T_AVRO_ESCAPE",
   "namespace": "kz.qazmarka.test",
   "doc": "line \"q\"\nnext\u0001",
+  "h2k.cf.list": "d",
   "fields": [
     {
       "name": "value",
