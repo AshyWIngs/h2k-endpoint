@@ -31,7 +31,7 @@
 1) **Соберите и разложите JAR** на все RegionServer (JAR уже содержит Avro/Jackson/Confluent 5.3.8):
 ```bash
 mvn -pl endpoint -am -DskipTests clean package
-cp endpoint/target/h2k-endpoint-*.jar /opt/hbase-default-current/lib/
+cp endpoint/target/h2k-endpoint-*-shaded.jar /opt/hbase-default-current/lib/
 ```
 
 2) **Подготовьте Avro‑схемы** с атрибутами `h2k.phoenixType` и массивом `h2k.pk` в каталоге `conf/avro` (см. docs/avro.md).  
@@ -73,7 +73,8 @@ bin/hbase shell conf/add_peer_shell_balanced.txt
 
 ## Установка
 
-1. Скопируйте JAR в `/opt/hbase-default-current/lib/`.  
+1. После сборки Maven появится два артефакта в `endpoint/target/`: `h2k-endpoint-<version>.jar` (тонкий) и `h2k-endpoint-<version>-shaded.jar`. Для RegionServer используйте shaded-вариант (можно переименовать в `h2k-endpoint.jar` или загрузить как есть).
+   Скопируйте `h2k-endpoint-<version>-shaded.jar` в `/opt/hbase-default-current/lib/`.  
 2. Убедитесь, что на RS есть базовые клиентские библиотеки из кластера:
    - `kafka-clients-2.3.1.jar`
    - `lz4-java-1.6.0+.jar` (для FAST/BALANCED)
@@ -299,7 +300,7 @@ Avro Confluent — основной формат на проде, поэтому
 ### Разработка (IDE)
 
 - В workspace присутствует `.vscode/settings.json`, исключающий `target/**` из дерева файлов/индексации и указывающий точные пути исходников (`endpoint/src/main/java`, `endpoint/src/test/java`, `benchmarks/src/main/java`). Это устраняет тысячи ложных предупреждений от JMH‑генерации. Если настройки не применились (VS Code кеширует LSP), выполните «Java: Clean Java Language Server Workspace» или перезапустите IDE.
-- Для IntelliJ IDEA/модуля Maven дополнительные действия не требуются: структура каталогов уже соответствует стандарту (`src/main/java`).
+- Для Visual Studio Code/IntelliJ IDEA/модуля Maven дополнительные действия не требуются: структура каталогов уже соответствует стандарту (`src/main/java`).
 
 ## FAQ
 

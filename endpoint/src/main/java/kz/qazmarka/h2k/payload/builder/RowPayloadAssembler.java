@@ -18,6 +18,7 @@ import kz.qazmarka.h2k.config.H2kConfig;
 import kz.qazmarka.h2k.config.H2kConfig.TableOptionsSnapshot;
 import kz.qazmarka.h2k.config.H2kConfig.ValueSource;
 import kz.qazmarka.h2k.schema.decoder.Decoder;
+import kz.qazmarka.h2k.schema.registry.SchemaRegistry;
 import kz.qazmarka.h2k.util.Maps;
 import kz.qazmarka.h2k.util.RowKeySlice;
 
@@ -82,7 +83,7 @@ final class RowPayloadAssembler {
         TableMeta meta = tableMetaCache.metaFor(table);
         final Map<String, Object> obj = newRootMap(meta, cap);
         MetaWriter.addMetaIfEnabled(includeMeta, obj, meta, meta.cfCsv, cellsCount);
-        decodePkFromRowKey(table, meta.saltBytes, rowKey, obj);
+        decodePkFromRowKey(table, meta, rowKey, obj);
 
         CellStats stats = decodeCells(table, cells, obj);
         MetaWriter.addCellsCfIfMeta(obj, includeMeta, stats.cfCells);
@@ -148,11 +149,19 @@ final class RowPayloadAssembler {
      * @param rk    срез rowkey; может быть {@code null}
      * @param out   карта payload, куда добавляются значения PK
      */
-    private void decodePkFromRowKey(TableName table, int saltBytes, RowKeySlice rk, Map<String, Object> out) {
+    private void decodePkFromRowKey(TableName table, TableMeta meta, RowKeySlice rk, Map<String, Object> out) {
         if (rk == null) {
             return;
         }
-        decoder.decodeRowKey(table, rk, saltBytes, out);
+        decoder.decodeRowKey(table, rk, meta.saltBytes, out);
+        if (meta.pkColumns.length > 0) {
+            for (String pk : meta.pkColumns) {
+                if (!out.containsKey(pk)) {
+                    throw new IllegalStateException(
+                            "PK '" + pk + "' не восстановлен из rowkey таблицы " + table.getNameWithNamespaceInclAsString());
+                }
+            }
+        }
     }
 
     /**
@@ -256,7 +265,8 @@ final class RowPayloadAssembler {
                     table.getQualifierAsString(),
                     cfSnapshot.enabled() ? cfSnapshot.csv() : "",
                     options.saltBytes(),
-                    options.capacityHint());
+                    options.capacityHint(),
+                    cfg.primaryKeyColumns(table));
             TableMeta race = cache.putIfAbsent(key, created);
             return race != null ? race : created;
         }
@@ -270,19 +280,24 @@ final class RowPayloadAssembler {
         final String cfCsv;
         final int saltBytes;
         final int capacityHint;
+        final String[] pkColumns;
 
         TableMeta(String table,
                   String namespace,
                   String qualifier,
                   String cfCsv,
                   int saltBytes,
-                  int capacityHint) {
+                  int capacityHint,
+                  String[] pkColumns) {
             this.table = table;
             this.namespace = namespace;
             this.qualifier = qualifier;
             this.cfCsv = cfCsv;
             this.saltBytes = saltBytes;
             this.capacityHint = capacityHint;
+            this.pkColumns = (pkColumns == null || pkColumns.length == 0)
+                    ? SchemaRegistry.EMPTY
+                    : pkColumns.clone();
         }
     }
 

@@ -18,6 +18,9 @@ public interface PhoenixTableMetadataProvider {
 
         @Override
         public String[] columnFamilies(TableName table) { return SchemaRegistry.EMPTY; }
+
+        @Override
+        public String[] primaryKeyColumns(TableName table) { return SchemaRegistry.EMPTY; }
     };
 
     /**
@@ -37,6 +40,14 @@ public interface PhoenixTableMetadataProvider {
      * @return перечисление column family, которое следует реплицировать, или пустой массив для отключения фильтра
      */
     default String[] columnFamilies(TableName table) {
+        return SchemaRegistry.EMPTY;
+    }
+
+    /**
+     * @param table таблица Phoenix/HBase
+     * @return массив имён PK-колонок или пустой массив, если информация недоступна
+     */
+    default String[] primaryKeyColumns(TableName table) {
         return SchemaRegistry.EMPTY;
     }
 }

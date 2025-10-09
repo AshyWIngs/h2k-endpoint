@@ -12,6 +12,7 @@ import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.TableName;
 
 import kz.qazmarka.h2k.schema.registry.PhoenixTableMetadataProvider;
+import kz.qazmarka.h2k.schema.registry.SchemaRegistry;
 import kz.qazmarka.h2k.util.Parsers;
 
 /**
@@ -206,6 +207,7 @@ public final class H2kConfig {
         public static final String AVRO_SUBJECT_STRATEGY    = "h2k.avro.subject.strategy";
         public static final String AVRO_COMPATIBILITY       = "h2k.avro.compatibility";
         public static final String AVRO_BINARY              = "h2k.avro.binary";
+        public static final String AVRO_MODE                = "h2k.avro.mode";
     }
 
     // ==== Значения по умолчанию (в одном месте) ====
@@ -1017,6 +1019,22 @@ public final class H2kConfig {
     /** @return неизменяемая карта табличных переопределений соли (как задана в конфиге) */
     /** Карта переопределений соли rowkey в байтах. */
     public Map<String, Integer> getSaltBytesByTable() { return saltBytesByTable; }
+
+    /**
+     * Возвращает массив имён PK-колонок для таблицы (может быть пустым).
+     * @param table имя таблицы Phoenix
+     * @return массив имён PK, никогда не {@code null}
+     */
+    public String[] primaryKeyColumns(TableName table) {
+        if (table == null) {
+            throw new NullPointerException("table == null");
+        }
+        String[] pk = tableMetadataProvider.primaryKeyColumns(table);
+        if (pk == null || pk.length == 0) {
+            return SchemaRegistry.EMPTY;
+        }
+        return pk.clone();
+    }
 
     /** @return неизменяемая карта подсказок ёмкости корневого JSON по таблицам */
     /** Подсказки начальной ёмкости JSON для конкретных таблиц. */

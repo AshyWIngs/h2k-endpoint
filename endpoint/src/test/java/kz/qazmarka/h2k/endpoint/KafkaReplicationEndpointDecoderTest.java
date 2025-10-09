@@ -48,6 +48,21 @@ class KafkaReplicationEndpointDecoderTest {
     }
 
     @Test
+    void shouldAutoSelectPhoenixAvroWhenPayloadFormatIsAvro() throws Exception {
+        KafkaReplicationEndpoint endpoint = new KafkaReplicationEndpoint();
+        Method m = KafkaReplicationEndpoint.class.getDeclaredMethod("chooseDecoder", Configuration.class);
+        m.setAccessible(true);
+
+        Configuration cfg = new Configuration(false);
+        cfg.set(H2kConfig.Keys.PAYLOAD_FORMAT, "avro_binary");
+        cfg.set(H2kConfig.Keys.AVRO_SCHEMA_DIR, Paths.get("src", "test", "resources", "avro").toString());
+
+        Decoder decoder = (Decoder) m.invoke(endpoint, cfg);
+
+        assertEquals(ValueCodecPhoenix.class, decoder.getClass());
+    }
+
+    @Test
     void shouldUseJsonPhoenixDecoderWhenLegacyMode(@TempDir Path tempDir) throws Exception {
         KafkaReplicationEndpoint endpoint = new KafkaReplicationEndpoint();
         Method m = KafkaReplicationEndpoint.class.getDeclaredMethod("chooseDecoder", Configuration.class);

@@ -1,4 +1,21 @@
-{
+{ 
+  "java.configuration.runtimes": [
+    {
+      "name": "JavaSE-1.8",
+      "path": "/Library/Java/JavaVirtualMachines/temurin-8.jdk/Contents/Home",
+      "default": true
+    }
+  ],
+  "terminal.integrated.env.osx": {
+    "JAVA_HOME": "/Library/Java/JavaVirtualMachines/temurin-8.jdk/Contents/Home",
+    "PATH": "/Library/Java/JavaVirtualMachines/temurin-8.jdk/Contents/Home/bin:${env:PATH}"
+  },
+  "maven.terminal.customEnv": [
+    {
+      "environmentVariable": "JAVA_HOME",
+      "value": "/Library/Java/JavaVirtualMachines/temurin-8.jdk/Contents/Home"
+    }
+  ],
   "java.import.exclusions": [
     "**/target/**"
   ],
@@ -17,5 +34,6 @@
     "**/target/**": true
   },
   "java.compile.nullAnalysis.mode": "automatic",
-  "java.configuration.updateBuildConfiguration": "automatic"
+  "java.configuration.updateBuildConfiguration": "automatic",
+  "maven.view": "hierarchical"
 }

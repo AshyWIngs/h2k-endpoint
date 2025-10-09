@@ -8,6 +8,7 @@ import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericDatumReader;
@@ -45,6 +46,30 @@ class ConfluentAvroPayloadSerializerTest {
     private static final Decoder STRING_DECODER = (table, qualifier, value) ->
             value == null ? null : new String(value, StandardCharsets.UTF_8);
 
+    private static final Decoder PK_AWARE_DECODER = new Decoder() {
+        @Override
+        public Object decode(TableName table, String qualifier, byte[] value) {
+            return STRING_DECODER.decode(table, qualifier, value);
+        }
+
+        @Override
+        public Object decode(TableName table, byte[] qualifier, int qualifierOffset, int qualifierLength,
+                             byte[] value, int valueOffset, int valueLength) {
+            return STRING_DECODER.decode(table, qualifier, qualifierOffset, qualifierLength, value, valueOffset, valueLength);
+        }
+
+        @Override
+        public void decodeRowKey(TableName table, RowKeySlice rk, int saltBytes, Map<String, Object> out) {
+            if (rk == null) {
+                return;
+            }
+            byte[] keyBytes = rk.toByteArray();
+            int start = Math.min(Math.max(0, saltBytes), keyBytes.length);
+            String pk = new String(keyBytes, start, keyBytes.length - start, StandardCharsets.UTF_8);
+            out.put("id", pk);
+        }
+    };
+
     private static final ThreadLocal<SchemaRegistryClient> TEST_CLIENT = new ThreadLocal<>();
     private static final ThreadLocal<ConfluentAvroPayloadSerializer> LAST_SERIALIZER = new ThreadLocal<>();
 
@@ -78,11 +103,12 @@ class ConfluentAvroPayloadSerializerTest {
         TEST_CLIENT.set(client);
         try {
             H2kConfig cfg = buildConfig("avro-binary");
-            PayloadBuilder builder = new PayloadBuilder(STRING_DECODER, cfg);
+            PayloadBuilder builder = new PayloadBuilder(PK_AWARE_DECODER, cfg);
             long ts = 555L;
             byte[] rowKey = Bytes.toBytes("rk1");
+            Cell idCell = new KeyValue(rowKey, Bytes.toBytes("d"), Bytes.toBytes("id"), ts, rowKey);
             Cell cell = new KeyValue(rowKey, Bytes.toBytes("d"), Bytes.toBytes("value"), ts, Bytes.toBytes("OK"));
-            List<Cell> cells = Collections.singletonList(cell);
+            List<Cell> cells = Arrays.asList(idCell, cell);
 
             byte[] out = builder.buildRowPayloadBytes(TABLE, cells, RowKeySlice.whole(rowKey), ts, ts);
 
@@ -96,6 +122,7 @@ class ConfluentAvroPayloadSerializerTest {
             Schema schema = registry.getByTable(TABLE.getNameAsString());
             GenericDatumReader<GenericRecord> reader = new GenericDatumReader<>(schema);
             GenericRecord avroRecord = reader.read(null, DecoderFactory.get().binaryDecoder(payload, null));
+            assertEquals("rk1", avroRecord.get("id").toString());
             assertEquals("OK", avroRecord.get("value").toString());
 
             java.util.Collection<String> subjects = subjects(client);
@@ -118,7 +145,7 @@ class ConfluentAvroPayloadSerializerTest {
         TEST_CLIENT.set(client);
         try {
             H2kConfig cfg = buildConfig("avro-binary");
-            PayloadBuilder builder = new PayloadBuilder(STRING_DECODER, cfg);
+            PayloadBuilder builder = new PayloadBuilder(PK_AWARE_DECODER, cfg);
             byte[] rowKey = Bytes.toBytes("rk_escape");
             Cell cell = new KeyValue(rowKey, Bytes.toBytes("d"), Bytes.toBytes("value"), 1L, Bytes.toBytes("ESC"));
             List<Cell> cells = Collections.singletonList(cell);
@@ -143,10 +170,11 @@ class ConfluentAvroPayloadSerializerTest {
         TEST_CLIENT.set(client);
         try {
             H2kConfig cfg = buildConfig("avro-binary");
-            PayloadBuilder builder = new PayloadBuilder(STRING_DECODER, cfg);
+            PayloadBuilder builder = new PayloadBuilder(PK_AWARE_DECODER, cfg);
             byte[] rowKey = Bytes.toBytes("rk_fail");
+            Cell idCell = new KeyValue(rowKey, Bytes.toBytes("d"), Bytes.toBytes("id"), 1L, rowKey);
             Cell cell = new KeyValue(rowKey, Bytes.toBytes("d"), Bytes.toBytes("value"), 1L, Bytes.toBytes("fail"));
-            List<Cell> cells = Collections.singletonList(cell);
+            List<Cell> cells = Arrays.asList(idCell, cell);
             RowKeySlice rowKeySlice = RowKeySlice.whole(rowKey);
 
             IllegalStateException ex = assertThrows(IllegalStateException.class, () ->
@@ -167,10 +195,11 @@ class ConfluentAvroPayloadSerializerTest {
     @DisplayName("Confluent: формат avro-json запрещён")
     void confluentJsonNotAllowed() {
         H2kConfig cfg = buildConfigWithoutFactory("avro-json");
-        PayloadBuilder builder = new PayloadBuilder(STRING_DECODER, cfg);
+        PayloadBuilder builder = new PayloadBuilder(PK_AWARE_DECODER, cfg);
         byte[] rowKey = Bytes.toBytes("rk");
+        Cell idCell = new KeyValue(rowKey, Bytes.toBytes("d"), Bytes.toBytes("id"), 1L, rowKey);
         Cell cell = new KeyValue(rowKey, Bytes.toBytes("d"), Bytes.toBytes("value"), 1L, Bytes.toBytes("x"));
-        List<Cell> cells = Collections.singletonList(cell);
+        List<Cell> cells = Arrays.asList(idCell, cell);
         RowKeySlice rowKeySlice = RowKeySlice.whole(rowKey);
         IllegalStateException ex = assertThrows(IllegalStateException.class, () ->
                 builder.buildRowPayloadBytes(TABLE, cells, rowKeySlice, 1L, 1L)
@@ -189,10 +218,11 @@ class ConfluentAvroPayloadSerializerTest {
             c.set("h2k.avro.subject.suffix", "-value");
             H2kConfig cfg = H2kConfig.from(c, "dummy:9092");
 
-            PayloadBuilder builder = new PayloadBuilder(STRING_DECODER, cfg);
+            PayloadBuilder builder = new PayloadBuilder(PK_AWARE_DECODER, cfg);
             byte[] rowKey = Bytes.toBytes("rk_subject");
+            Cell idCell = new KeyValue(rowKey, Bytes.toBytes("d"), Bytes.toBytes("id"), 1L, rowKey);
             Cell cell = new KeyValue(rowKey, Bytes.toBytes("d"), Bytes.toBytes("value"), 1L, Bytes.toBytes("x"));
-            builder.buildRowPayloadBytes(TABLE, Collections.singletonList(cell), RowKeySlice.whole(rowKey), 1L, 1L);
+            builder.buildRowPayloadBytes(TABLE, Arrays.asList(idCell, cell), RowKeySlice.whole(rowKey), 1L, 1L);
 
             assertTrue(subjects(client).contains("T_AVRO-value"));
             SchemaRegistryMetrics metrics = requireSerializer().metrics();
@@ -219,15 +249,17 @@ class ConfluentAvroPayloadSerializerTest {
             c.set("h2k.avro.subject.strategy", "table");
             H2kConfig cfg = H2kConfig.from(c, "dummy:9092");
 
-            PayloadBuilder builder = new PayloadBuilder(STRING_DECODER, cfg);
+            PayloadBuilder builder = new PayloadBuilder(PK_AWARE_DECODER, cfg);
 
             TableName tableDefault = TableName.valueOf("COMMON");
             TableName tableAnalytics = TableName.valueOf("analytics", "COMMON");
             byte[] rowKey = Bytes.toBytes("rk");
+            Cell idCell = new KeyValue(rowKey, Bytes.toBytes("d"), Bytes.toBytes("id"), 1L, rowKey);
             Cell cell = new KeyValue(rowKey, Bytes.toBytes("d"), Bytes.toBytes("value"), 1L, Bytes.toBytes("ok"));
+            List<Cell> cells = Arrays.asList(idCell, cell);
 
-            builder.buildRowPayloadBytes(tableDefault, Collections.singletonList(cell), RowKeySlice.whole(rowKey), 1L, 1L);
-            builder.buildRowPayloadBytes(tableAnalytics, Collections.singletonList(cell), RowKeySlice.whole(rowKey), 1L, 1L);
+            builder.buildRowPayloadBytes(tableDefault, cells, RowKeySlice.whole(rowKey), 1L, 1L);
+            builder.buildRowPayloadBytes(tableAnalytics, cells, RowKeySlice.whole(rowKey), 1L, 1L);
 
             java.util.Collection<String> subjects = subjects(client);
             assertTrue(subjects.contains("COMMON"));

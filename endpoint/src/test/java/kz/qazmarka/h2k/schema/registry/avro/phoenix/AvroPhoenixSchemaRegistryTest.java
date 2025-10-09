@@ -29,9 +29,9 @@ class AvroPhoenixSchemaRegistryTest {
 
         assertEquals("VARCHAR", registry.columnType(TABLE_AVRO, "value"));
         assertNull(registry.columnType(TABLE_AVRO, "missing"));
-        assertArrayEquals(SchemaRegistry.EMPTY, registry.primaryKeyColumns(TABLE_AVRO));
+        assertArrayEquals(new String[]{"id"}, registry.primaryKeyColumns(TABLE_AVRO));
         PhoenixTableMetadataProvider provider = registry;
-        assertEquals(Integer.valueOf(1), provider.saltBytes(TABLE_AVRO));
+        assertEquals(Integer.valueOf(0), provider.saltBytes(TABLE_AVRO));
         assertEquals(Integer.valueOf(4), provider.capacityHint(TABLE_AVRO));
     }
 
@@ -54,9 +54,9 @@ class AvroPhoenixSchemaRegistryTest {
         AvroPhoenixSchemaRegistry registry = new AvroPhoenixSchemaRegistry(avro, fallback);
 
         assertEquals("TIMESTAMP", registry.columnType(TABLE_AVRO, "_event_ts"));
-        assertArrayEquals(new String[]{"value"}, registry.primaryKeyColumns(TABLE_AVRO));
+        assertArrayEquals(new String[]{"id"}, registry.primaryKeyColumns(TABLE_AVRO));
         PhoenixTableMetadataProvider provider = registry;
-        assertEquals(Integer.valueOf(1), provider.saltBytes(TABLE_AVRO));
+        assertEquals(Integer.valueOf(0), provider.saltBytes(TABLE_AVRO));
         assertEquals(Integer.valueOf(4), provider.capacityHint(TABLE_AVRO));
     }
 

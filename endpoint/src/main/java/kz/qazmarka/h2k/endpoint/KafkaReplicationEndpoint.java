@@ -242,9 +242,9 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
      * @return выбранный декодер
      */
     private Decoder chooseDecoder(Configuration cfg) {
-        String mode = cfg.get(Keys.DECODE_MODE, DEFAULT_DECODE_MODE);
-        if (mode != null) {
-            mode = mode.trim();
+        String mode = cfg.getTrimmed(Keys.DECODE_MODE);
+        if (mode == null || mode.isEmpty()) {
+            mode = detectDecodeMode(cfg);
         }
         tableMetadataProvider = PhoenixTableMetadataProvider.NOOP;
         if ("json-phoenix".equalsIgnoreCase(mode)) {
@@ -255,6 +255,21 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
         }
         LOG.debug("Режим декодирования: simple");
         return SimpleDecoder.INSTANCE;
+    }
+
+    private String detectDecodeMode(Configuration cfg) {
+        final String payloadFormat = cfg.getTrimmed(H2kConfig.Keys.PAYLOAD_FORMAT);
+        if (payloadFormat != null) {
+            final String normalized = payloadFormat.trim().toLowerCase(java.util.Locale.ROOT);
+            if (normalized.startsWith("avro")) {
+                return "phoenix-avro";
+            }
+        }
+        final String avroMode = cfg.getTrimmed(H2kConfig.Keys.AVRO_MODE);
+        if (avroMode != null && !avroMode.trim().isEmpty()) {
+            return "phoenix-avro";
+        }
+        return DEFAULT_DECODE_MODE;
     }
 
     private Decoder initJsonPhoenixDecoder(Configuration cfg) {

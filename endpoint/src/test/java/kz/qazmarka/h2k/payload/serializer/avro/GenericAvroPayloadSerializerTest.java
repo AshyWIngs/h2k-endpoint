@@ -47,6 +47,30 @@ class GenericAvroPayloadSerializerTest {
     private static final Decoder STRING_DECODER = (table, qualifier, value) ->
             value == null ? null : new String(value, StandardCharsets.UTF_8);
 
+    private static final Decoder PK_AWARE_DECODER = new Decoder() {
+        @Override
+        public Object decode(TableName table, String qualifier, byte[] value) {
+            return STRING_DECODER.decode(table, qualifier, value);
+        }
+
+        @Override
+        public Object decode(TableName table, byte[] qualifier, int qualifierOffset, int qualifierLength,
+                             byte[] value, int valueOffset, int valueLength) {
+            return STRING_DECODER.decode(table, qualifier, qualifierOffset, qualifierLength, value, valueOffset, valueLength);
+        }
+
+        @Override
+        public void decodeRowKey(TableName table, RowKeySlice rk, int saltBytes, Map<String, Object> out) {
+            if (rk == null) {
+                return;
+            }
+            byte[] keyBytes = rk.toByteArray();
+            int start = Math.min(Math.max(0, saltBytes), keyBytes.length);
+            String pk = new String(keyBytes, start, keyBytes.length - start, StandardCharsets.UTF_8);
+            out.put("id", pk);
+        }
+    };
+
     private static final String SHARED_SCHEMA_DIR = Paths.get("src", "test", "resources", "avro").toAbsolutePath().toString();
 
     private static H2kConfig prepareConfig(String format) {
@@ -204,11 +228,12 @@ class GenericAvroPayloadSerializerTest {
     @DisplayName("Avro generic: бинарный вывод соответствует схеме")
     void avroBinary_matchesSchema() throws Exception {
         H2kConfig configBinary = prepareConfig("avro-binary");
-        PayloadBuilder builder = new PayloadBuilder(STRING_DECODER, configBinary);
+        PayloadBuilder builder = new PayloadBuilder(PK_AWARE_DECODER, configBinary);
         long ts = 123L;
         byte[] rowKey = Bytes.toBytes("rk1");
+        Cell idCell = new KeyValue(rowKey, Bytes.toBytes("d"), Bytes.toBytes("id"), ts, rowKey);
         Cell cell = new KeyValue(rowKey, Bytes.toBytes("d"), Bytes.toBytes("value"), ts, Bytes.toBytes("OK"));
-        List<Cell> cells = Collections.singletonList(cell);
+        List<Cell> cells = Arrays.asList(idCell, cell);
         byte[] bytes = builder.buildRowPayloadBytes(TABLE, cells, RowKeySlice.whole(rowKey), ts, ts);
 
         AvroSchemaRegistry registry = new AvroSchemaRegistry(Paths.get(configBinary.getAvroSchemaDir()));
@@ -218,6 +243,7 @@ class GenericAvroPayloadSerializerTest {
         org.apache.avro.io.Decoder avroDecoder = DecoderFactory.get().binaryDecoder(bytes, null);
         GenericRecord avroRecord = reader.read(null, avroDecoder);
 
+        assertEquals("rk1", avroRecord.get("id").toString());
         assertEquals("OK", avroRecord.get("value").toString());
         assertEquals(ts, ((Long) avroRecord.get("_event_ts")).longValue());
     }
@@ -226,11 +252,12 @@ class GenericAvroPayloadSerializerTest {
     @DisplayName("Avro generic: JSON вывод разбирается обратным преобразованием")
     void avroJson_roundTrip() throws Exception {
         H2kConfig configJson = prepareConfig("avro-json");
-        PayloadBuilder builder = new PayloadBuilder(STRING_DECODER, configJson);
+        PayloadBuilder builder = new PayloadBuilder(PK_AWARE_DECODER, configJson);
         long ts = 321L;
         byte[] rowKey = Bytes.toBytes("rk2");
+        Cell idCell = new KeyValue(rowKey, Bytes.toBytes("d"), Bytes.toBytes("id"), ts, rowKey);
         Cell cell = new KeyValue(rowKey, Bytes.toBytes("d"), Bytes.toBytes("value"), ts, Bytes.toBytes("JSON"));
-        List<Cell> cells = Collections.singletonList(cell);
+        List<Cell> cells = Arrays.asList(idCell, cell);
         byte[] bytes = builder.buildRowPayloadBytes(TABLE, cells, RowKeySlice.whole(rowKey), ts, ts);
 
         AvroSchemaRegistry registry = new AvroSchemaRegistry(Paths.get(configJson.getAvroSchemaDir()));
@@ -240,9 +267,31 @@ class GenericAvroPayloadSerializerTest {
         org.apache.avro.io.Decoder avroDecoder = DecoderFactory.get().jsonDecoder(schema, new ByteArrayInputStream(bytes));
         GenericRecord avroRecord = reader.read(null, avroDecoder);
 
+        assertEquals("rk2", avroRecord.get("id").toString());
         assertEquals("JSON", avroRecord.get("value").toString());
         assertEquals(ts, ((Long) avroRecord.get("_event_ts")).longValue());
         assertEquals('\n', (char) bytes[bytes.length - 1], "JSON вывод должен заканчиваться переводом строки");
+    }
+
+    @Test
+    @DisplayName("Avro generic: PK всегда восстанавливается из rowkey")
+    void avroPkRestoredFromRowKey() throws Exception {
+        H2kConfig config = prepareConfig("avro-binary");
+        PayloadBuilder builder = new PayloadBuilder(PK_AWARE_DECODER, config);
+        byte[] rowKey = Bytes.toBytes("pk-check");
+        Cell idCell = new KeyValue(rowKey, Bytes.toBytes("d"), Bytes.toBytes("id"), 1L, rowKey);
+        Cell cell = new KeyValue(rowKey, Bytes.toBytes("d"), Bytes.toBytes("value"), 1L, Bytes.toBytes("VAL"));
+        List<Cell> cells = Arrays.asList(idCell, cell);
+
+        byte[] bytes = builder.buildRowPayloadBytes(TABLE, cells, RowKeySlice.whole(rowKey), 1L, 1L);
+
+        AvroSchemaRegistry registry = new AvroSchemaRegistry(Paths.get(config.getAvroSchemaDir()));
+        Schema schema = registry.getByTable(TABLE.getNameAsString());
+        GenericDatumReader<GenericRecord> reader = new GenericDatumReader<>(schema);
+        GenericRecord record = reader.read(null, DecoderFactory.get().binaryDecoder(bytes, null));
+
+        assertEquals("pk-check", record.get("id").toString());
+        assertEquals("VAL", record.get("value").toString());
     }
 
     @Test
@@ -254,7 +303,7 @@ class GenericAvroPayloadSerializerTest {
         c.set("h2k.avro.schema.dir", Paths.get("src", "test", "resources", "avro-missing").toAbsolutePath().toString());
         H2kConfig cfg = H2kConfig.from(c, "dummy:9092");
 
-        PayloadBuilder builder = new PayloadBuilder(STRING_DECODER, cfg);
+        PayloadBuilder builder = new PayloadBuilder(PK_AWARE_DECODER, cfg);
         byte[] rowKey = Bytes.toBytes("rk3");
         Cell cell = new KeyValue(rowKey, Bytes.toBytes("d"), Bytes.toBytes("value"), 1L, Bytes.toBytes("oops"));
         List<Cell> cells = Collections.singletonList(cell);
@@ -284,7 +333,7 @@ class GenericAvroPayloadSerializerTest {
         c.set("h2k.avro.schema.dir", tmp.toString());
         H2kConfig cfg = H2kConfig.from(c, "dummy:9092");
 
-        PayloadBuilder builder = new PayloadBuilder(STRING_DECODER, cfg);
+        PayloadBuilder builder = new PayloadBuilder(PK_AWARE_DECODER, cfg);
         byte[] rowKey = Bytes.toBytes("rk-mismatch");
         Cell cell = new KeyValue(rowKey, Bytes.toBytes("d"), Bytes.toBytes("value"), 1L, Bytes.toBytes("NOT_A_NUMBER"));
         List<Cell> cells = Collections.singletonList(cell);
@@ -315,7 +364,7 @@ class GenericAvroPayloadSerializerTest {
         c.set("h2k.avro.schema.dir", tmp.toString());
         H2kConfig cfg = H2kConfig.from(c, "dummy:9092");
 
-        PayloadBuilder builder = new PayloadBuilder(STRING_DECODER, cfg);
+        PayloadBuilder builder = new PayloadBuilder(PK_AWARE_DECODER, cfg);
         byte[] rowKey = Bytes.toBytes("rk-optional");
         Cell cell = new KeyValue(rowKey, Bytes.toBytes("d"), Bytes.toBytes("value"), 1L, Bytes.toBytes("OK"));
         List<Cell> cells = Collections.singletonList(cell);
