@@ -1,11 +1,11 @@
 package kz.qazmarka.h2k.endpoint;
 
 import java.io.IOException;
+import java.nio.file.Paths;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.UUID;
-import java.nio.file.Paths;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.replication.BaseReplicationEndpoint;
@@ -19,8 +19,8 @@ import org.slf4j.LoggerFactory;
 
 import kz.qazmarka.h2k.config.H2kConfig;
 import kz.qazmarka.h2k.config.H2kConfig.Keys;
-import kz.qazmarka.h2k.endpoint.topic.TopicManager;
 import kz.qazmarka.h2k.endpoint.processing.WalEntryProcessor;
+import kz.qazmarka.h2k.endpoint.topic.TopicManager;
 import kz.qazmarka.h2k.kafka.ensure.TopicEnsurer;
 import kz.qazmarka.h2k.kafka.producer.batch.BatchSender;
 import kz.qazmarka.h2k.kafka.producer.batch.BatchSenderMetrics;
@@ -31,9 +31,9 @@ import kz.qazmarka.h2k.schema.decoder.SimpleDecoder;
 import kz.qazmarka.h2k.schema.decoder.ValueCodecPhoenix;
 import kz.qazmarka.h2k.schema.registry.PhoenixTableMetadataProvider;
 import kz.qazmarka.h2k.schema.registry.SchemaRegistry;
-import kz.qazmarka.h2k.schema.registry.json.JsonSchemaRegistry;
-import kz.qazmarka.h2k.schema.registry.avro.phoenix.AvroPhoenixSchemaRegistry;
 import kz.qazmarka.h2k.schema.registry.avro.local.AvroSchemaRegistry;
+import kz.qazmarka.h2k.schema.registry.avro.phoenix.AvroPhoenixSchemaRegistry;
+import kz.qazmarka.h2k.schema.registry.json.JsonSchemaRegistry;
 
 /**
  * Репликация изменений из HBase 1.4.13 в Kafka (производитель 2.x).

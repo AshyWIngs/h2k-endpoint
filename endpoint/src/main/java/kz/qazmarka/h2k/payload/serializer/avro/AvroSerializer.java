@@ -147,6 +147,11 @@ public final class AvroSerializer implements PayloadSerializer {
         COERCERS.put(Schema.Type.BOOLEAN, (schema, v, path) -> {
             if (v == null) return null;
             if (v instanceof Boolean) return v;
+            // Разрешаем числовые флаги (0/1) для совместимости с билдерами payload/метаданными
+            if (v instanceof Number) {
+                return ((Number) v).intValue() != 0;
+            }
+            // (опционально можно добавить поддержку строк "0"/"1"/"true"/"false", но не делаем ради минимализма)
             throw typeError(path, "BOOLEAN", v);
         });
 
@@ -191,22 +196,15 @@ public final class AvroSerializer implements PayloadSerializer {
                 return null;
             }
             if (v instanceof BinarySlice) {
-                return v;
+                BinarySlice s = (BinarySlice) v;
+                return ByteBuffer.wrap(s.array(), s.offset(), s.length());
             }
             if (v instanceof byte[]) {
                 byte[] arr = (byte[]) v;
-                return BinarySlice.of(arr, 0, arr.length);
+                return ByteBuffer.wrap(arr);
             }
             if (v instanceof ByteBuffer) {
-                ByteBuffer buffer = (ByteBuffer) v;
-                if (buffer.hasArray()) {
-                    int offset = buffer.arrayOffset() + buffer.position();
-                    int length = buffer.remaining();
-                    return BinarySlice.of(buffer.array(), offset, length);
-                }
-                byte[] copy = new byte[buffer.remaining()];
-                buffer.duplicate().get(copy);
-                return BinarySlice.of(copy, 0, copy.length);
+                return (ByteBuffer) v;
             }
             throw typeError(path, "BYTES", v);
         });
