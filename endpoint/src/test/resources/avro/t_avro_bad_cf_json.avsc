@@ -1,0 +1,27 @@
+{
+  "type": "record",
+  "name": "T_AVRO_BAD_CF_JSON",
+  "namespace": "kz.qazmarka.test",
+  "h2k.cf.list": {
+    "family": "data"
+  },
+  "fields": [
+    {
+      "name": "id",
+      "type": "string",
+      "h2k.phoenixType": "VARCHAR"
+    },
+    {
+      "name": "payload",
+      "type": [
+        "null",
+        "bytes"
+      ],
+      "default": null,
+      "h2k.phoenixType": "VARBINARY"
+    }
+  ],
+  "h2k.pk": [
+    "id"
+  ]
+}

@@ -48,4 +48,17 @@ class TableCapacityObserverTest {
         assertEquals(6, observer.totalObservedMax(), "Агрегированный максимум совпадает с наблюдением");
         assertTrue(stats.lastRecommendation() > 0, "Должно быть зафиксировано хотя бы одно предупреждение");
     }
+
+    @Test
+    @DisplayName("Отключённый наблюдатель игнорирует события и возвращает пустую статистику")
+    void disabledObserverNoops() {
+        TableCapacityObserver observer = TableCapacityObserver.disabled();
+        TableName table = TableName.valueOf("ns", "disabled");
+
+        observer.observe(table, 10, 100);
+        observer.observe(table, 20, 200);
+
+        assertEquals(0L, observer.totalObservedMax(), "Агрегированный максимум должен быть 0 при отключении");
+        assertTrue(observer.snapshot().isEmpty(), "Снимок статистики должен быть пустым");
+    }
 }

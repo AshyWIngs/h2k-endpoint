@@ -1,0 +1,62 @@
+{
+  "type": "record",
+  "name": "T_ROW",
+  "namespace": "kz.qazmarka.test",
+  "fields": [
+    {
+      "name": "id",
+      "type": "string",
+      "h2k.phoenixType": "VARCHAR"
+    },
+    {
+      "name": "version",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null,
+      "h2k.phoenixType": "BIGINT"
+    },
+    {
+      "name": "payload",
+      "type": [
+        "null",
+        "bytes"
+      ],
+      "default": null,
+      "h2k.phoenixType": "VARBINARY"
+    },
+    {
+      "name": "_event_ts",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    },
+    {
+      "name": "_delete",
+      "type": [
+        "null",
+        "boolean"
+      ],
+      "default": null
+    },
+    {
+      "name": "_wal_seq",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    },
+    {
+      "name": "_wal_write_time",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    }
+  ]
+}

@@ -2,6 +2,8 @@ package kz.qazmarka.h2k.endpoint;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -11,6 +13,11 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.io.IOException;
+import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericData;
@@ -138,6 +145,80 @@ class KafkaReplicationEndpointConfluentIT {
         assertEquals("default:INT_TEST_TABLE", subject, "subject должен совпадать с именем таблицы");
     }
 
+    @Test
+    @DisplayName("Инициализация без bootstrap приводит к IOException")
+    void initFailsWhenBootstrapMissing() throws Exception {
+        Configuration cfg = new Configuration(false);
+        Method method = KafkaReplicationEndpoint.class.getDeclaredMethod("readBootstrapOrThrow", Configuration.class);
+        method.setAccessible(true);
+        IOException ex = assertThrows(IOException.class, () -> {
+            try {
+                method.invoke(null, cfg);
+            } catch (InvocationTargetException ite) {
+                Throwable cause = ite.getCause();
+                if (cause instanceof IOException) {
+                    throw (IOException) cause;
+                }
+                throw new RuntimeException(cause);
+            }
+        });
+        assertTrue(ex.getMessage().contains(H2kConfig.Keys.BOOTSTRAP),
+                "Сообщение должно упоминать ключ bootstrap");
+    }
+
+    @Test
+    @DisplayName("Недоступный Schema Registry → PayloadBuilder бросает IllegalStateException")
+    void schemaRegistryUnavailable() {
+        Configuration cfg = new Configuration(false);
+        cfg.set("h2k.kafka.bootstrap.servers", "mock:9092");
+        cfg.set("h2k.avro.schema.dir", SCHEMA_DIR.toString());
+        cfg.set("h2k.avro.sr.urls", "http://mock-sr");
+
+        H2kConfig config = H2kConfig.from(cfg, "mock:9092");
+
+        SchemaRegistryClientFactory failingFactory = (urls, clientConfig, capacity) -> {
+            throw new IllegalStateException("SR down");
+        };
+
+        Decoder decoder = defaultDecoder();
+
+        assertThrows(IllegalStateException.class, () -> new PayloadBuilder(decoder, config, failingFactory),
+                "Ожидается ошибка инициализации при недоступном Schema Registry");
+    }
+
+    @Test
+    @DisplayName("Ошибка ensureTopic не прерывает обработку WAL и не мешает отправке")
+    void ensureTopicFailureDoesNotInterruptProcessing() throws Exception {
+        Configuration cfg = new Configuration(false);
+        cfg.set("h2k.kafka.bootstrap.servers", "mock:9092");
+        cfg.set("h2k.avro.schema.dir", SCHEMA_DIR.toString());
+        cfg.set("h2k.avro.sr.urls", "http://mock-sr");
+
+        H2kConfig config = H2kConfig.from(cfg, "mock:9092", defaultMetadataProvider());
+
+        Decoder decoder = defaultDecoder();
+        SchemaRegistryClientFactory factory = (urls, clientConfig, identityMapCapacity) -> new MockSchemaRegistryClient();
+        PayloadBuilder builder = new PayloadBuilder(decoder, config, factory);
+
+        TopicEnsurer failingEnsurer = makeFailingEnsurer();
+        TopicManager topicManager = new TopicManager(config, failingEnsurer);
+        MockProducer<byte[], byte[]> producer = new MockProducer<>(true, new ByteArraySerializer(), new ByteArraySerializer());
+        WalEntryProcessor processor = new WalEntryProcessor(builder, topicManager, producer, config);
+
+        TableName table = TableName.valueOf("INT_TEST_TABLE");
+        byte[] row = Bytes.toBytes("rk-ensure");
+        long ts = 123L;
+        List<Cell> cells = new ArrayList<>();
+        cells.add(new KeyValue(row, Bytes.toBytes("d"), Bytes.toBytes("value_long"), ts, Bytes.toBytes(1L)));
+        Entry entry = walEntry(table, row, cells);
+
+        try (BatchSender sender = new BatchSender(1, 5_000)) {
+            processor.process(entry, sender, false);
+        }
+
+        assertEquals(1, producer.history().size(), "Сообщение должно быть отправлено несмотря на ошибку ensure");
+    }
+
     private static Entry walEntry(TableName table, byte[] row, List<Cell> cells) {
         WALEdit edit = new WALEdit();
         for (Cell cell : cells) {
@@ -157,5 +238,65 @@ class KafkaReplicationEndpointConfluentIT {
         Schema schema = client.getById(schemaId);
         GenericDatumReader<GenericData.Record> reader = new GenericDatumReader<>(schema);
         return reader.read(null, DecoderFactory.get().binaryDecoder(avroBytes, null));
+    }
+
+    private static Decoder defaultDecoder() {
+        return new Decoder() {
+            @Override
+            public Object decode(TableName table, String qualifier, byte[] value) {
+                if (value == null) {
+                    return null;
+                }
+                if ("value_long".equalsIgnoreCase(qualifier)) {
+                    return Bytes.toLong(value);
+                }
+                return new String(value, StandardCharsets.UTF_8);
+            }
+
+            @Override
+            public void decodeRowKey(TableName table, RowKeySlice rowKey, int saltBytes, Map<String, Object> out) {
+                assertNotNull(rowKey, "rowkey должен присутствовать");
+                out.put("id", new String(rowKey.toByteArray(), StandardCharsets.UTF_8));
+            }
+        };
+    }
+
+    private static PhoenixTableMetadataProvider defaultMetadataProvider() {
+        return new PhoenixTableMetadataProvider() {
+            @Override
+            public Integer saltBytes(TableName table) {
+                return null;
+            }
+
+            @Override
+            public Integer capacityHint(TableName table) {
+                return 4;
+            }
+
+            @Override
+            public String[] columnFamilies(TableName table) {
+                return new String[]{"d"};
+            }
+
+            @Override
+            public String[] primaryKeyColumns(TableName table) {
+                return new String[]{"id"};
+            }
+        };
+    }
+
+    private static TopicEnsurer makeFailingEnsurer() throws Exception {
+        TopicEnsurer ensurer = TopicEnsurer.disabled();
+        setFinalBoolean(ensurer, "disabledMode", false);
+        return ensurer;
+    }
+
+    private static void setFinalBoolean(Object target, String fieldName, boolean value) throws Exception {
+        Field field = TopicEnsurer.class.getDeclaredField(fieldName);
+        field.setAccessible(true);
+        Field modifiers = Field.class.getDeclaredField("modifiers");
+        modifiers.setAccessible(true);
+        modifiers.setInt(field, field.getModifiers() & ~Modifier.FINAL);
+        field.setBoolean(target, value);
     }
 }

@@ -1,0 +1,25 @@
+{
+  "type": "record",
+  "name": "T_AVRO_BAD_CF_CSV",
+  "namespace": "kz.qazmarka.test",
+  "h2k.cf.list": " ,  ,   ",
+  "fields": [
+    {
+      "name": "id",
+      "type": "string",
+      "h2k.phoenixType": "VARCHAR"
+    },
+    {
+      "name": "info",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null,
+      "h2k.phoenixType": "VARCHAR"
+    }
+  ],
+  "h2k.pk": [
+    "id"
+  ]
+}

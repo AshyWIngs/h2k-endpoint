@@ -2,6 +2,7 @@ package kz.qazmarka.h2k.endpoint.processing;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.TableName;
@@ -60,5 +61,18 @@ class CfFilterObserverTest {
         assertNotNull(ineffectiveStats, "Статистика по второй таблице должна существовать");
         assertEquals(600L, ineffectiveStats.rowsTotal.sum(), "Суммарное число строк корректно");
         assertEquals(0L, ineffectiveStats.rowsFiltered.sum(), "Отфильтрованных строк нет");
+    }
+
+    @Test
+    @DisplayName("Отключённый CfFilterObserver не накапливает статистику")
+    void disabledObserverSkipsAccumulation() {
+        CfFilterObserver observer = CfFilterObserver.disabled();
+        TableName table = TableName.valueOf("ns", "disabled");
+
+        observer.observe(table, 500, 500, true, null);
+        observer.observe(table, 500, 0, true, null);
+
+        assertEquals(0L, observer.ineffectiveTables(), "Отключённый наблюдатель не должен считать предупреждения");
+        assertTrue(observer.snapshot().isEmpty(), "Статистика должна оставаться пустой при отключении");
     }
 }

@@ -1,0 +1,20 @@
+{
+  "type": "record",
+  "name": "T_AVRO_INVALID_TYPE",
+  "namespace": "kz.qazmarka.test",
+  "fields": [
+    {
+      "name": "id",
+      "type": "string",
+      "h2k.phoenixType": "VARCHAR"
+    },
+    {
+      "name": "value",
+      "type": "string",
+      "h2k.phoenixType": "   "
+    }
+  ],
+  "h2k.pk": [
+    "id"
+  ]
+}
