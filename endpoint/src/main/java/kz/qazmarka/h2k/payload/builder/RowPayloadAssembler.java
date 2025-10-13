@@ -1,12 +1,17 @@
 package kz.qazmarka.h2k.payload.builder;
 
 import java.nio.charset.StandardCharsets;
-import java.util.LinkedHashMap;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
+import org.apache.avro.Schema;
+import org.apache.avro.generic.GenericData;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.TableName;
@@ -17,84 +22,128 @@ import org.slf4j.LoggerFactory;
 import kz.qazmarka.h2k.config.H2kConfig;
 import kz.qazmarka.h2k.config.H2kConfig.TableOptionsSnapshot;
 import kz.qazmarka.h2k.config.H2kConfig.ValueSource;
+import kz.qazmarka.h2k.payload.serializer.avro.AvroValueCoercer;
 import kz.qazmarka.h2k.schema.decoder.Decoder;
-import kz.qazmarka.h2k.schema.registry.SchemaRegistry;
-import kz.qazmarka.h2k.util.Maps;
+import kz.qazmarka.h2k.schema.registry.avro.local.AvroSchemaRegistry;
 import kz.qazmarka.h2k.util.RowKeySlice;
 
 /**
- * Собирает корневую карту payload для строки WAL, добавляя метаданные, PK и служебные поля.
- * Логику построения вынесено из {@link PayloadBuilder}, чтобы разгрузить горячий путь и облегчить тестирование.
+ * Формирует Avro {@link GenericData.Record} для строки WAL без промежуточных карт.
+ * Табличный план (поля, индексы PK, служебные поля) вычисляется один раз и переиспользуется.
  */
 final class RowPayloadAssembler {
 
     private static final Logger LOG = LoggerFactory.getLogger(RowPayloadAssembler.class);
+    private static final String FIELD_EVENT_TS = "_event_ts";
+    private static final String FIELD_DELETE = "_delete";
 
     private final Decoder decoder;
     private final H2kConfig cfg;
     private final QualifierCache qualifierCache = new QualifierCache();
     private final Set<String> tableOptionsLogged = ConcurrentHashMap.newKeySet();
-    private final TableMetaCache tableMetaCache;
-    private final boolean jsonPayloadFormat;
+    private final TablePlanCache tablePlans;
 
-    /**
-     * @param decoder декодер Phoenix-значений, используемый для преобразования ячеек в Java-тип
-     * @param cfg     неизменяемая конфигурация h2k с подсказками по соли, capacity и метаданным
-     */
-    RowPayloadAssembler(Decoder decoder, H2kConfig cfg) {
-        this.decoder = decoder;
-        this.cfg = cfg;
-        this.tableMetaCache = new TableMetaCache(cfg);
-        H2kConfig.PayloadFormat format = cfg.getPayloadFormat();
-        this.jsonPayloadFormat = format == null || format == H2kConfig.PayloadFormat.JSON_EACH_ROW;
+    RowPayloadAssembler(Decoder decoder, H2kConfig cfg, AvroSchemaRegistry schemaRegistry) {
+        this.decoder = Objects.requireNonNull(decoder, "decoder");
+        this.cfg = Objects.requireNonNull(cfg, "cfg");
+        this.tablePlans = new TablePlanCache(cfg, schemaRegistry);
     }
 
-    /**
-     * Собирает основную карту payload для отдельной строки WAL с учётом всех включённых опций.
-     *
-     * @param table        таблица Phoenix (включая namespace)
-     * @param cells        список ячеек строкового ключа (может быть пустым)
-     * @param rowKey       срез байтов rowkey (может быть {@code null})
-     * @param walSeq       номер записи WAL
-     * @param walWriteTime «настенные» часы записи WAL (мс), либо отрицательное значение, если нет данных
-     * @return карта payload, готовая к сериализации
-     */
-    Map<String, Object> assemble(TableName table,
-                                 List<Cell> cells,
-                                 RowKeySlice rowKey,
-                                 long walSeq,
-                                 long walWriteTime) {
+    GenericData.Record assemble(TableName table,
+                                List<Cell> cells,
+                                RowKeySlice rowKey,
+                                long walSeq,
+                                long walWriteTime) {
         if (LOG.isDebugEnabled()) {
             debugTableOptions(table);
         }
-        final boolean includeMeta = cfg.isIncludeMeta();
-        final boolean includeWalMeta = includeMeta && cfg.isIncludeMetaWal();
-        final boolean includeRowKey = cfg.isIncludeRowKey();
-        final boolean rowkeyB64 = cfg.isRowkeyBase64();
 
-        final int cellsCount = (cells == null ? 0 : cells.size());
-        final boolean includeRowKeyPresent = includeRowKey && rowKey != null;
-        int cap = 1 // _event_ts
-                + cellsCount
-                + (includeMeta ? 5 : 0)
-                + (includeRowKeyPresent ? 1 : 0)
-                + (includeWalMeta ? 2 : 0);
+        TablePlan plan = tablePlans.planFor(table);
+        GenericData.Record avroRecord = plan.newRecord();
 
-        TableMeta meta = tableMetaCache.metaFor(table);
-        final Map<String, Object> obj = newRootMap(meta, cap);
-        MetaWriter.addMetaIfEnabled(includeMeta, obj, meta, meta.cfCsv, cellsCount);
-        decodePkFromRowKey(table, meta, rowKey, obj);
-
-        CellStats stats = decodeCells(table, cells, obj);
-        MetaWriter.addCellsCfIfMeta(obj, includeMeta, stats.cfCells);
-        if (stats.cfCells > 0) {
-            obj.put(PayloadFields.EVENT_TS, stats.maxTs);
+        PkCollector pkCollector = plan.borrowCollector();
+        try {
+            pkCollector.bind(avroRecord);
+            decodePrimaryKey(table, rowKey, plan, pkCollector);
+        } finally {
+            plan.releaseCollector(pkCollector);
         }
-        MetaWriter.addDeleteFlagIfNeeded(obj, stats.hasDelete);
 
-        RowKeyWriter.addRowKeyIfPresent(includeRowKeyPresent, obj, rowKey, rowkeyB64, meta.saltBytes);
-        MetaWriter.addWalMeta(includeWalMeta, obj, walSeq, walWriteTime);
-        return obj;
+        long maxTimestamp = Long.MIN_VALUE;
+        boolean hasDelete = false;
+
+        if (cells != null) {
+            for (Cell cell : cells) {
+                maxTimestamp = Math.max(maxTimestamp, cell.getTimestamp());
+                if (CellUtil.isDelete(cell)) {
+                    hasDelete = true;
+                } else {
+                    writeCellValue(table, plan, avroRecord, cell);
+                }
+            }
+        }
+
+        if (plan.eventTsIndex >= 0 && maxTimestamp != Long.MIN_VALUE) {
+            avroRecord.put(plan.eventTsIndex, maxTimestamp);
+        }
+        if (plan.deleteIndex >= 0 && hasDelete) {
+            avroRecord.put(plan.deleteIndex, Boolean.TRUE);
+        }
+
+        plan.applyWalMetadata(avroRecord, walSeq, walWriteTime);
+
+        return avroRecord;
+    }
+
+    private void writeCellValue(TableName table,
+                                TablePlan plan,
+                                GenericData.Record avroRecord,
+                                Cell cell) {
+        FieldPlan field = resolveField(plan, cell);
+        if (field == null) {
+            return;
+        }
+
+        Object decodedValue = decoder.decode(
+                table,
+                cell.getQualifierArray(),
+                cell.getQualifierOffset(),
+                cell.getQualifierLength(),
+                cell.getValueArray(),
+                cell.getValueOffset(),
+                cell.getValueLength());
+
+        Object valueToWrite = decodedValue;
+        if (valueToWrite == null && cell.getValueLength() > 0) {
+            valueToWrite = BinarySlice.of(
+                    cell.getValueArray(),
+                    cell.getValueOffset(),
+                    cell.getValueLength());
+        }
+
+        if (valueToWrite != null) {
+            field.write(avroRecord, valueToWrite);
+        }
+    }
+
+    private FieldPlan resolveField(TablePlan plan, Cell cell) {
+        String column = qualifierCache.intern(
+                cell.getQualifierArray(),
+                cell.getQualifierOffset(),
+                cell.getQualifierLength());
+        return plan.field(column);
+    }
+
+    private void decodePrimaryKey(TableName table,
+                                  RowKeySlice rowKey,
+                                  TablePlan plan,
+                                  PkCollector collector) {
+        if (rowKey == null) {
+            throw new IllegalStateException(
+                    "Отсутствует rowkey для таблицы " + table.getNameWithNamespaceInclAsString());
+        }
+        decoder.decodeRowKey(table, rowKey, plan.saltBytes, collector);
+        plan.verifyPk(table, collector.currentRecord());
     }
 
     private void debugTableOptions(TableName table) {
@@ -129,191 +178,321 @@ final class RowPayloadAssembler {
     }
 
     /**
-     * Создаёт корневую {@link java.util.LinkedHashMap} с учётом конфигурационной подсказки ёмкости.
-     *
-     * @param meta                кэшированная мета-информация по таблице
-     * @param estimatedKeysCount  оценка числа ключей в payload до добавления метаданных
-     * @return готовая LinkedHashMap требуемой начальной ёмкости
+     * Кеш табличных планов (Avro-схема, индексы полей, PK, служебные поля).
      */
-    private Map<String, Object> newRootMap(TableMeta meta, int estimatedKeysCount) {
-        final int hint = meta.capacityHint;
-        final int target = Math.max(estimatedKeysCount, hint > 0 ? hint : 0);
-        final int initialCapacity = Maps.initialCapacity(target);
-        return new LinkedHashMap<>(initialCapacity, 0.75f);
+    private static final class TablePlanCache {
+        private final H2kConfig cfg;
+        private final AvroSchemaRegistry schemaRegistry;
+        private final ConcurrentHashMap<String, TablePlan> cache = new ConcurrentHashMap<>();
+
+        TablePlanCache(H2kConfig cfg, AvroSchemaRegistry schemaRegistry) {
+            this.cfg = cfg;
+            this.schemaRegistry = schemaRegistry;
+        }
+
+        TablePlan planFor(TableName table) {
+            String key = table.getNameWithNamespaceInclAsString();
+            return cache.computeIfAbsent(key, k -> buildPlan(table));
+        }
+
+        private TablePlan buildPlan(TableName table) {
+            Schema schema = loadSchema(table);
+            Map<String, FieldPlan> fields = buildFieldPlans(schema);
+
+            String[] pkColumns = cfg.primaryKeyColumns(table);
+            int[] pkIndices = new int[pkColumns.length];
+            for (int i = 0; i < pkColumns.length; i++) {
+                String col = pkColumns[i];
+                FieldPlan plan = lookupField(fields, col);
+                if (plan == null) {
+                    throw new IllegalStateException(
+                            "Avro: PK колонка '" + col + "' отсутствует в схеме " + table.getNameAsString());
+                }
+                pkIndices[i] = plan.index;
+            }
+
+            int eventTsIndex = indexOfField(schema, FIELD_EVENT_TS);
+            int deleteIndex = indexOfField(schema, FIELD_DELETE);
+
+            TableOptionsSnapshot opts = cfg.describeTableOptions(table);
+            int saltBytes = opts.saltBytes();
+
+            WalMetadataPlan walMetadata = WalMetadataPlan.of(
+                    lookupField(fields, PayloadFields.WAL_SEQ),
+                    lookupField(fields, PayloadFields.WAL_WRITE_TIME));
+            return new TablePlan(schema,
+                    fields,
+                    pkIndices,
+                    eventTsIndex,
+                    deleteIndex,
+                    saltBytes,
+                    walMetadata);
+        }
+
+        private Schema loadSchema(TableName table) {
+            try {
+                return schemaRegistry.getByTable(table.getNameAsString());
+            } catch (RuntimeException ex) {
+                throw new IllegalStateException(
+                        "Avro: не удалось загрузить схему для таблицы '" + table.getNameAsString() + "'", ex);
+            }
+        }
+
+        private Map<String, FieldPlan> buildFieldPlans(Schema schema) {
+            Map<String, FieldPlan> map = new HashMap<>(schema.getFields().size() * 2);
+            for (Schema.Field field : schema.getFields()) {
+                FieldPlan plan = new FieldPlan(field);
+                map.put(field.name(), plan);
+                map.put(field.name().toUpperCase(Locale.ROOT), plan);
+                map.put(field.name().toLowerCase(Locale.ROOT), plan);
+            }
+            return map;
+        }
+
+        private FieldPlan lookupField(Map<String, FieldPlan> fields, String name) {
+            FieldPlan plan = fields.get(name);
+            if (plan != null) return plan;
+            if (name == null) return null;
+            FieldPlan upper = fields.get(name.toUpperCase(Locale.ROOT));
+            if (upper != null) return upper;
+            return fields.get(name.toLowerCase(Locale.ROOT));
+        }
+
+        private int indexOfField(Schema schema, String name) {
+            if (name == null) {
+                return -1;
+            }
+            for (Schema.Field field : schema.getFields()) {
+                if (name.equals(field.name())) {
+                    return field.pos();
+                }
+            }
+            return -1;
+        }
     }
 
-    /**
-     * Распаковывает PK из rowkey и добавляет их в выходной payload.
-     *
-     * @param table таблица Phoenix
-     * @param rk    срез rowkey; может быть {@code null}
-     * @param out   карта payload, куда добавляются значения PK
-     */
-    private void decodePkFromRowKey(TableName table, TableMeta meta, RowKeySlice rk, Map<String, Object> out) {
-        if (rk == null) {
-            return;
+    private static final class TablePlan {
+        private final Schema schema;
+        private final Map<String, FieldPlan> fields;
+        private final int[] pkFieldIndices;
+        private final int eventTsIndex;
+        private final int deleteIndex;
+        private final int saltBytes;
+        private final WalMetadataPlan walMetadata;
+        private final ThreadLocal<PkCollector> collectors;
+
+        TablePlan(Schema schema,
+                  Map<String, FieldPlan> fields,
+                  int[] pkFieldIndices,
+                  int eventTsIndex,
+                  int deleteIndex,
+                  int saltBytes,
+                  WalMetadataPlan walMetadata) {
+            this.schema = schema;
+            this.fields = fields;
+            this.pkFieldIndices = pkFieldIndices;
+            this.eventTsIndex = eventTsIndex;
+            this.deleteIndex = deleteIndex;
+            this.saltBytes = saltBytes;
+            this.walMetadata = walMetadata;
+            this.collectors = ThreadLocal.withInitial(() -> new PkCollector(this));
         }
-        decoder.decodeRowKey(table, rk, meta.saltBytes, out);
-        if (meta.pkColumns.length > 0) {
-            for (String pk : meta.pkColumns) {
-                if (!out.containsKey(pk)) {
+
+        GenericData.Record newRecord() {
+            GenericData.Record avroRecord = new GenericData.Record(schema);
+            if (deleteIndex >= 0) {
+                avroRecord.put(deleteIndex, Boolean.FALSE);
+            }
+            return avroRecord;
+        }
+
+        FieldPlan field(String name) {
+            FieldPlan plan = fields.get(name);
+            if (plan != null) {
+                return plan;
+            }
+            if (name == null) {
+                return null;
+            }
+            return fields.get(name.toUpperCase(Locale.ROOT));
+        }
+
+        PkCollector borrowCollector() {
+            return collectors.get();
+        }
+
+        void releaseCollector(PkCollector collector) {
+            collector.unbind();
+            collectors.remove();
+        }
+
+        void verifyPk(TableName table, GenericData.Record avroRecord) {
+            for (int idx : pkFieldIndices) {
+                if (avroRecord.get(idx) == null) {
+                    String fieldName = schema.getFields().get(idx).name();
                     throw new IllegalStateException(
-                            "PK '" + pk + "' не восстановлен из rowkey таблицы " + table.getNameWithNamespaceInclAsString());
+                            "PK '" + fieldName + "' не восстановлен из rowkey таблицы " +
+                                    table.getNameWithNamespaceInclAsString());
                 }
             }
         }
+
+        void applyWalMetadata(GenericData.Record avroRecord, long walSeq, long walWriteTime) {
+            walMetadata.apply(avroRecord, walSeq, walWriteTime);
+        }
     }
+    private static final class WalMetadataPlan {
+        private static final WalMetadataPlan EMPTY = new WalMetadataPlan(null, null);
 
-    /**
-     * Раскодирует значения ячеек и заполняет карту payload, заодно собирая агрегаты для метаданных.
-     *
-     * @param table таблица Phoenix
-     * @param cells список ячеек строки
-     * @param obj   карта payload, куда помещаются значения
-     * @return статистика по обработанным ячейкам
-     */
-    private CellStats decodeCells(TableName table, List<Cell> cells, Map<String, Object> obj) {
-        CellStats s = new CellStats();
-        if (cells == null || cells.isEmpty()) {
-            return s;
+        private final FieldPlan walSeqField;
+        private final FieldPlan walWriteTimeField;
+
+        private WalMetadataPlan(FieldPlan walSeqField, FieldPlan walWriteTimeField) {
+            this.walSeqField = walSeqField;
+            this.walWriteTimeField = walWriteTimeField;
         }
 
-        final boolean serializeNulls = cfg.isJsonSerializeNulls();
-        for (Cell cell : cells) {
-            processCell(table, cell, obj, s, serializeNulls);
-        }
-        return s;
-    }
-
-    /**
-     * Обрабатывает отдельную ячейку: применяет фильтр delete, декодирует значение и добавляет его в payload.
-     *
-     * @param table          таблица Phoenix
-     * @param cell           ячейка WAL
-     * @param obj            карта payload
-     * @param s              статистика по строке (обновляется на месте)
-     * @param serializeNulls разрешена ли сериализация {@code null}-значений
-     */
-    private void processCell(TableName table,
-                             Cell cell,
-                             Map<String, Object> obj,
-                             CellStats s,
-                             boolean serializeNulls) {
-        s.cfCells++;
-        long ts = cell.getTimestamp();
-        if (ts > s.maxTs) s.maxTs = ts;
-        if (CellUtil.isDelete(cell)) {
-            s.hasDelete = true;
-            return;
-        }
-
-        final byte[] qa = cell.getQualifierArray();
-        final int qo = cell.getQualifierOffset();
-        final int ql = cell.getQualifierLength();
-        final String columnName = qualifierCache.intern(qa, qo, ql);
-
-        final byte[] va = cell.getValueArray();
-        final int vo = cell.getValueOffset();
-        final int vl = cell.getValueLength();
-
-        Object decoded = decoder.decode(table, qa, qo, ql, va, vo, vl);
-        if (decoded != null) {
-            obj.put(columnName, decoded);
-            return;
-        }
-
-        if (va != null && vl > 0) {
-            if (jsonPayloadFormat) {
-                obj.put(columnName, new String(va, vo, vl, StandardCharsets.UTF_8));
-            } else {
-                obj.put(columnName, BinarySlice.of(va, vo, vl));
+        static WalMetadataPlan of(FieldPlan walSeqField, FieldPlan walWriteTimeField) {
+            if (walSeqField == null && walWriteTimeField == null) {
+                return EMPTY;
             }
-            return;
+            return new WalMetadataPlan(walSeqField, walWriteTimeField);
         }
 
-        if (serializeNulls && (!obj.containsKey(columnName) || obj.get(columnName) == null)) {
-            obj.put(columnName, null);
-        }
-    }
-
-    /** Кеш строковых представлений имени таблицы, чтобы избегать повторных аллокаций на горячем пути. */
-    private static final class TableMetaCache {
-        private final H2kConfig cfg;
-        private final ConcurrentHashMap<String, TableMeta> cache = new ConcurrentHashMap<>(16);
-
-        TableMetaCache(H2kConfig cfg) {
-            this.cfg = cfg;
-        }
-
-        /**
-         * Возвращает кэшированное строковое представление имени таблицы.
-         *
-         * @param table {@link TableName}, для которого требуется метаданные
-         * @return объект с готовыми строками (table/namespace/qualifier)
-         */
-        TableMeta metaFor(TableName table) {
-            String key = table.getNameWithNamespaceInclAsString();
-            TableMeta cached = cache.get(key);
-            if (cached != null) {
-                return cached;
+        void apply(GenericData.Record avroRecord, long walSeq, long walWriteTime) {
+            if (walSeqField != null) {
+                walSeqField.write(avroRecord, walSeq);
             }
-            TableOptionsSnapshot options = cfg.describeTableOptions(table);
-            H2kConfig.CfFilterSnapshot cfSnapshot = options.cfFilter();
-            TableMeta created = new TableMeta(
-                    table.getNameAsString(),
-                    table.getNamespaceAsString(),
-                    table.getQualifierAsString(),
-                    cfSnapshot.enabled() ? cfSnapshot.csv() : "",
-                    options.saltBytes(),
-                    options.capacityHint(),
-                    cfg.primaryKeyColumns(table));
-            TableMeta race = cache.putIfAbsent(key, created);
-            return race != null ? race : created;
+            if (walWriteTimeField != null) {
+                walWriteTimeField.write(avroRecord, walWriteTime);
+            }
         }
     }
 
-    /** Иммутабельный набор строковых представлений имени таблицы, используемый для метаданных. */
-    private static final class TableMeta {
-        final String table;
-        final String namespace;
-        final String qualifier;
-        final String cfCsv;
-        final int saltBytes;
-        final int capacityHint;
-        final String[] pkColumns;
+    private static final class FieldPlan {
+        final Schema.Field field;
+        final int index;
 
-        TableMeta(String table,
-                  String namespace,
-                  String qualifier,
-                  String cfCsv,
-                  int saltBytes,
-                  int capacityHint,
-                  String[] pkColumns) {
-            this.table = table;
-            this.namespace = namespace;
-            this.qualifier = qualifier;
-            this.cfCsv = cfCsv;
-            this.saltBytes = saltBytes;
-            this.capacityHint = capacityHint;
-            this.pkColumns = (pkColumns == null || pkColumns.length == 0)
-                    ? SchemaRegistry.EMPTY
-                    : pkColumns.clone();
+        FieldPlan(Schema.Field field) {
+            this.field = field;
+            this.index = field.pos();
+        }
+
+        void write(GenericData.Record avroRecord, Object value) {
+            Object coerced = AvroValueCoercer.coerceValue(field.schema(), value, field.name());
+            avroRecord.put(index, coerced);
         }
     }
 
-    /** Минимальный потокобезопасный кэш qualifier → String, чтобы исключить повторные аллокации. */
+    private static final class PkCollector implements Map<String, Object> {
+        private final TablePlan plan;
+        private GenericData.Record avroRecord;
+        private int size;
+
+        PkCollector(TablePlan plan) {
+            this.plan = plan;
+        }
+
+        void bind(GenericData.Record avroRecord) {
+            this.avroRecord = avroRecord;
+            this.size = 0;
+        }
+
+        void unbind() {
+            this.avroRecord = null;
+            this.size = 0;
+        }
+
+        GenericData.Record currentRecord() {
+            return avroRecord;
+        }
+
+        @Override
+        public Object put(String key, Object value) {
+            FieldPlan field = plan.field(key);
+            if (field == null || avroRecord == null) {
+                return null;
+            }
+            Object previous = avroRecord.get(field.index);
+            field.write(avroRecord, value);
+            if (previous == null && avroRecord.get(field.index) != null) {
+                size++;
+            }
+            return previous;
+        }
+
+        @Override
+        public int size() {
+            return size;
+        }
+
+        @Override
+        public boolean isEmpty() {
+            return size == 0;
+        }
+
+        @Override
+        public boolean containsKey(Object key) {
+            if (!(key instanceof String) || avroRecord == null) {
+                return false;
+            }
+            FieldPlan field = plan.field((String) key);
+            return field != null && avroRecord.get(field.index) != null;
+        }
+
+        @Override
+        public boolean containsValue(Object value) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public Object get(Object key) {
+            if (!(key instanceof String) || avroRecord == null) {
+                return null;
+            }
+            FieldPlan field = plan.field((String) key);
+            if (field == null) {
+                return null;
+            }
+            return avroRecord.get(field.index);
+        }
+
+        @Override
+        public Object remove(Object key) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public void putAll(Map<? extends String, ?> m) {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public void clear() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public Set<String> keySet() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public java.util.Collection<Object> values() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public Set<Entry<String, Object>> entrySet() {
+            return Collections.emptySet();
+        }
+    }
+
+    /** Минимальный потокобезопасный кэш qualifier → String. */
     private static final class QualifierCache {
         private final ConcurrentHashMap<AbstractKey, String> cache = new ConcurrentHashMap<>(64);
         private final ThreadLocal<LookupKey> lookup = ThreadLocal.withInitial(LookupKey::new);
 
-        /**
-         * Возвращает интернированное строковое представление qualifier без лишних аллокаций.
-         *
-         * @param array  массив с qualifier в UTF-8
-         * @param offset смещение qualifier
-         * @param length длина qualifier
-         * @return строка qualifier (общий экземпляр для повторных обращений)
-         */
         String intern(byte[] array, int offset, int length) {
             if (length == 0) {
                 return "";
@@ -331,7 +510,7 @@ final class RowPayloadAssembler {
                 return race != null ? race : created;
             } finally {
                 key.clear();
-                lookup.remove(); // гарантируем очистку ThreadLocal на окончание потока
+                lookup.remove();
                 lookup.set(key);
             }
         }
@@ -342,7 +521,6 @@ final class RowPayloadAssembler {
             int length;
             int hash;
 
-            /** Сохраняет ссылку на массив и вычисляет хеш. */
             final void reset(byte[] array, int off, int len) {
                 this.bytes = array;
                 this.offset = off;
@@ -350,7 +528,6 @@ final class RowPayloadAssembler {
                 this.hash = Bytes.hashCode(array, off, len);
             }
 
-            /** Обнуляет ссылки, чтобы не удерживать исходный массив. */
             final void clear() {
                 this.bytes = null;
                 this.offset = 0;
@@ -377,119 +554,21 @@ final class RowPayloadAssembler {
         }
 
         private static final class LookupKey extends AbstractKey {
-            /** Подготовить ключ к поиску в кэше. */
             void set(byte[] array, int off, int len) {
                 reset(array, off, len);
             }
 
-            /** Создаёт владеющую копию qualifier для помещения в кэш. */
             OwnedKey toOwned() {
                 return new OwnedKey(bytes, offset, length);
             }
         }
 
         private static final class OwnedKey extends AbstractKey {
-            /**
-             * @param source исходный массив qualifier (копируется, чтобы избежать совместного владения)
-             * @param off    смещение
-             * @param len    длина qualifier
-             */
             OwnedKey(byte[] source, int off, int len) {
                 byte[] copy = new byte[len];
                 System.arraycopy(source, off, copy, 0, len);
                 reset(copy, 0, len);
             }
         }
-    }
-
-    /** Утилиты для метаданных и служебных полей. */
-    private static final class MetaWriter {
-        private MetaWriter() { }
-
-        /**
-         * Добавляет стандартные метаполя (таблица, namespace, qualifier, список CF и счётчик ячеек).
-         */
-        static void addMetaIfEnabled(boolean includeMeta,
-                                     Map<String, Object> obj,
-                                     TableMeta meta,
-                                     String cfList,
-                                     int totalCells) {
-            if (!includeMeta) {
-                return;
-            }
-            obj.put(PayloadFields.TABLE, meta.table);
-            obj.put(PayloadFields.NAMESPACE, meta.namespace);
-            obj.put(PayloadFields.QUALIFIER, meta.qualifier);
-            obj.put(PayloadFields.CF, cfList);
-            obj.put(PayloadFields.CELLS_TOTAL, totalCells);
-        }
-
-        /** Добавляет число ячеек после фильтра CF, если включены метаданные. */
-        static void addCellsCfIfMeta(Map<String, Object> obj, boolean includeMeta, int cfCells) {
-            if (includeMeta) {
-                obj.put(PayloadFields.CELLS_CF, cfCells);
-            }
-        }
-
-        /** Устанавливает флаг удаления, если в строке присутствовала delete-операция. */
-        static void addDeleteFlagIfNeeded(Map<String, Object> obj, boolean hasDelete) {
-            if (hasDelete) {
-                obj.put(PayloadFields.DELETE, 1);
-            }
-        }
-
-        /**
-         * Дополняет payload полями WAL (_wal_seq, _wal_write_time), если они доступны и разрешены конфигурацией.
-         */
-        static void addWalMeta(boolean includeWalMeta,
-                               Map<String, Object> obj,
-                               long walSeq,
-                               long walWriteTime) {
-            if (!includeWalMeta) {
-                return;
-            }
-            if (walSeq >= 0L) {
-                obj.put(PayloadFields.WAL_SEQ, walSeq);
-            }
-            if (walWriteTime >= 0L) {
-                obj.put(PayloadFields.WAL_WRITE_TIME, walWriteTime);
-            }
-        }
-    }
-
-    /** Утилита записи rowkey в payload. */
-    private static final class RowKeyWriter {
-        private RowKeyWriter() { }
-
-        /**
-         * Добавляет сериализованный rowkey (HEX/Base64) в payload, учитывая соль.
-         */
-        static void addRowKeyIfPresent(boolean includeRowKeyPresent,
-                                       Map<String, Object> obj,
-                                       RowKeySlice rk,
-                                       boolean base64,
-                                       int salt) {
-            if (!includeRowKeyPresent || rk == null || rk.isEmpty()) {
-                return;
-            }
-            final int len = rk.getLength();
-            int off = rk.getOffset() + salt;
-            int effLen = len - salt;
-            if (effLen <= 0) {
-                return;
-            }
-            if (base64) {
-                obj.put(PayloadFields.ROWKEY, kz.qazmarka.h2k.util.Bytes.base64(rk.getArray(), off, effLen));
-            } else {
-                obj.put(PayloadFields.ROWKEY, kz.qazmarka.h2k.util.Bytes.toHex(rk.getArray(), off, effLen));
-            }
-        }
-    }
-
-    /** Аккумулирует статистику по ячейкам строки для последующего формирования метаданных. */
-    private static final class CellStats {
-        long maxTs;
-        boolean hasDelete;
-        int cfCells;
     }
 }

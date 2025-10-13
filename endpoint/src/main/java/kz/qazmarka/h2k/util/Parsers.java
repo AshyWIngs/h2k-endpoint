@@ -186,58 +186,6 @@ public final class Parsers {
     }
 
     /**
-     * Читает формат полезной нагрузки из конфигурации и сопоставляет его с enum.
-     * Принимаются значения без учёта регистра: {@code json_each_row | avro_binary | avro_json},
-     * а также распространённые алиасы: {@code "json"}, {@code "json_each"}, {@code "avro"},
-     * {@code "avro-bin"}, {@code "avro-binary"}, {@code "binary"}.
-     */
-    public static kz.qazmarka.h2k.config.H2kConfig.PayloadFormat readPayloadFormat(
-            org.apache.hadoop.conf.Configuration cfg,
-            String key,
-            kz.qazmarka.h2k.config.H2kConfig.PayloadFormat def
-    ) {
-        String raw = cfg.getTrimmed(key);
-        if (raw == null || raw.isEmpty()) return def;
-        String v = raw.trim().toLowerCase(java.util.Locale.ROOT).replace('-', '_');
-        switch (v) {
-            case "json_each_row":
-            case "json_each":
-            case "json":
-                return kz.qazmarka.h2k.config.H2kConfig.PayloadFormat.JSON_EACH_ROW;
-            case "avro_binary":
-            case "avro_bin":
-            case "avro":
-            case "binary":
-                return kz.qazmarka.h2k.config.H2kConfig.PayloadFormat.AVRO_BINARY;
-            case "avro_json":
-            case "avrojson":
-                return kz.qazmarka.h2k.config.H2kConfig.PayloadFormat.AVRO_JSON;
-            default:
-                return def;
-        }
-    }
-
-    /**
-     * Читает режим Avro (generic|confluent) без учёта регистра; незнакомые значения → {@code def}.
-     */
-    public static kz.qazmarka.h2k.config.H2kConfig.AvroMode readAvroMode(
-            org.apache.hadoop.conf.Configuration cfg,
-            String key,
-            kz.qazmarka.h2k.config.H2kConfig.AvroMode def
-    ) {
-        String raw = cfg.getTrimmed(key);
-        if (raw == null || raw.isEmpty()) return def;
-        switch (raw.trim().toLowerCase(Locale.ROOT)) {
-            case "confluent":
-                return kz.qazmarka.h2k.config.H2kConfig.AvroMode.CONFLUENT;
-            case "generic":
-                return kz.qazmarka.h2k.config.H2kConfig.AvroMode.GENERIC;
-            default:
-                return def;
-        }
-    }
-
-    /**
      * Возвращает строку из {@link Configuration} или значение по умолчанию, если она пустая.
      */
     public static String readStringOrDefault(Configuration cfg, String key, String defVal) {

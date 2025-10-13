@@ -1,9 +1,12 @@
 package kz.qazmarka.h2k.endpoint.processing;
 
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
+import org.apache.avro.generic.GenericData;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.KeyValue;
@@ -27,9 +30,13 @@ import kz.qazmarka.h2k.endpoint.topic.TopicManager;
 import kz.qazmarka.h2k.kafka.ensure.TopicEnsurer;
 import kz.qazmarka.h2k.kafka.producer.batch.BatchSender;
 import kz.qazmarka.h2k.payload.builder.PayloadBuilder;
+import kz.qazmarka.h2k.payload.serializer.avro.SchemaRegistryClientFactory;
+import kz.qazmarka.h2k.schema.decoder.Decoder;
 import kz.qazmarka.h2k.schema.decoder.SimpleDecoder;
 import kz.qazmarka.h2k.schema.registry.PhoenixTableMetadataProvider;
 import kz.qazmarka.h2k.schema.registry.SchemaRegistry;
+import kz.qazmarka.h2k.util.RowKeySlice;
+import io.confluent.kafka.schemaregistry.client.MockSchemaRegistryClient;
 
 /**
  * Юнит‑тесты для внутренних помощников {@link WalEntryProcessor} (initialCapacity и фильтры WAL).
@@ -105,6 +112,10 @@ class WalEntryProcessorTest {
     void metricsAccumulates() throws Exception {
         Configuration cfg = new Configuration(false);
         cfg.set("h2k.kafka.bootstrap.servers", "mock:9092");
+        cfg.set("h2k.avro.sr.urls", "http://mock");
+        cfg.set("h2k.avro.schema.dir", Paths.get("src", "test", "resources", "avro").toAbsolutePath().toString());
+
+        SchemaRegistryClientFactory testFactory = (urls, props, capacity) -> new MockSchemaRegistryClient();
 
         PhoenixTableMetadataProvider provider = new PhoenixTableMetadataProvider() {
             @Override
@@ -115,18 +126,57 @@ class WalEntryProcessorTest {
 
             @Override
             public String[] columnFamilies(TableName table) {
-                return "t".equals(table.getNameAsString()) ? new String[]{"d"} : SchemaRegistry.EMPTY;
+                return "T_AVRO".equalsIgnoreCase(table.getNameAsString()) ? new String[]{"d"} : SchemaRegistry.EMPTY;
             }
         };
 
         H2kConfig h2kConfig = H2kConfig.from(cfg, "mock:9092", provider);
 
-        PayloadBuilder builder = new PayloadBuilder(SimpleDecoder.INSTANCE, h2kConfig);
+        Decoder decoder = new Decoder() {
+            @Override
+            public Object decode(TableName table, String qualifier, byte[] value) {
+                Object raw = SimpleDecoder.INSTANCE.decode(table, qualifier, value);
+                if (raw instanceof byte[]) {
+                    return new String((byte[]) raw, StandardCharsets.UTF_8);
+                }
+                return raw;
+            }
+
+            @Override
+            public Object decode(TableName table, byte[] qual, int qOff, int qLen, byte[] value, int vOff, int vLen) {
+                Object raw = SimpleDecoder.INSTANCE.decode(table, qual, qOff, qLen, value, vOff, vLen);
+                if (raw instanceof byte[]) {
+                    return new String((byte[]) raw, StandardCharsets.UTF_8);
+                }
+                return raw;
+            }
+
+            @Override
+            public void decodeRowKey(TableName table, RowKeySlice rk, int saltBytes, java.util.Map<String, Object> out) {
+                if (rk != null) {
+                    out.put("id", new String(rk.toByteArray(), StandardCharsets.UTF_8));
+                }
+            }
+        };
+
+        PayloadBuilder builder = new PayloadBuilder(decoder, h2kConfig, testFactory);
+
+        byte[] probeRow = bytes("probe");
+        List<Cell> probeCells = Collections.singletonList(new KeyValue(probeRow,
+                Bytes.toBytes("d"),
+                Bytes.toBytes("value"),
+                Bytes.toBytes("v")));
+        GenericData.Record probeRecord = builder.buildRowPayload(TableName.valueOf("T_AVRO"),
+                probeCells,
+                RowKeySlice.whole(probeRow),
+                0L,
+                0L);
+        org.junit.jupiter.api.Assertions.assertEquals("probe", String.valueOf(probeRecord.get("id")));
         TopicManager topicManager = new TopicManager(h2kConfig, TopicEnsurer.disabled());
         MockProducer<byte[], byte[]> producer = new MockProducer<>(true, new ByteArraySerializer(), new ByteArraySerializer());
         WalEntryProcessor processor = new WalEntryProcessor(builder, topicManager, producer, h2kConfig);
 
-        try (BatchSender sender = new BatchSender(10, 1000, false, false)) {
+        try (BatchSender sender = new BatchSender(10, 1_000)) {
             processor.process(walEntry("row1", "d"), sender, false);
         }
 
@@ -136,7 +186,7 @@ class WalEntryProcessorTest {
         assertEquals(1, metrics.cells());
         assertEquals(0, metrics.filteredRows());
 
-        try (BatchSender sender = new BatchSender(10, 1000, false, false)) {
+        try (BatchSender sender = new BatchSender(10, 1_000)) {
             processor.process(walEntry("row2", "x"), sender, false);
         }
 
@@ -150,7 +200,7 @@ class WalEntryProcessorTest {
     private static WAL.Entry walEntry(String row, String cf) {
         byte[] rowBytes = bytes(row);
         byte[] cfBytes = bytes(cf);
-        WALKey key = new WALKey(rowBytes, TableName.valueOf("t"), 1L);
+        WALKey key = new WALKey(rowBytes, TableName.valueOf("T_AVRO"), 1L);
         WALEdit edit = new WALEdit();
         edit.add(new KeyValue(rowBytes, cfBytes, bytes("q"), 1L, bytes("v")));
         return new Entry(key, edit);

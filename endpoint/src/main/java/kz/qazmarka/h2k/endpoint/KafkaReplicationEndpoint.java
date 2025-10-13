@@ -27,11 +27,8 @@ import kz.qazmarka.h2k.kafka.producer.batch.BatchSenderMetrics;
 import kz.qazmarka.h2k.kafka.producer.batch.BatchSenderTuner;
 import kz.qazmarka.h2k.payload.builder.PayloadBuilder;
 import kz.qazmarka.h2k.schema.decoder.Decoder;
-import kz.qazmarka.h2k.schema.decoder.SimpleDecoder;
 import kz.qazmarka.h2k.schema.decoder.ValueCodecPhoenix;
 import kz.qazmarka.h2k.schema.registry.PhoenixTableMetadataProvider;
-import kz.qazmarka.h2k.schema.registry.SchemaRegistry;
-import kz.qazmarka.h2k.schema.registry.avro.local.AvroSchemaRegistry;
 import kz.qazmarka.h2k.schema.registry.avro.phoenix.AvroPhoenixSchemaRegistry;
 import kz.qazmarka.h2k.schema.registry.json.JsonSchemaRegistry;
 
@@ -40,11 +37,11 @@ import kz.qazmarka.h2k.schema.registry.json.JsonSchemaRegistry;
  *
  * Назначение
  *  - Принимать батчи WAL-записей от фреймворка репликации HBase и надёжно публиковать их в Kafka.
- *  - Формировать JSON-представление строки по набору ячеек с учётом выбранного декодера.
+ *  - Формировать Avro-запись (GenericRecord) по набору ячеек с учётом Phoenix-типов.
  *
  * Производительность и потокобезопасность
- *  - Горячий путь максимально прямолинейный: группировка по rowkey → сборка карты → сериализация выбранным
- *    {@link kz.qazmarka.h2k.payload.serializer.PayloadSerializer} → send в Kafka.
+ *  - Горячий путь максимально прямолинейный: группировка по rowkey → сборка Avro {@code GenericRecord}
+ *    → бинарная сериализация в формат Confluent → отправка в Kafka.
  *  - Все тяжёлые инициализации выполняются один раз в init()/doStart(): декодер, конфиг, KafkaProducer, PayloadBuilder.
  *  - Класс используется из потока репликации HBase, дополнительных потоков не создаёт.
  *
@@ -61,10 +58,6 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
 
     /** Логгер класса. Все сообщения — на русском языке. */
     private static final Logger LOG = LoggerFactory.getLogger(KafkaReplicationEndpoint.class);
-
-    // ==== Дефолты локального класса ====
-    /** Значение по умолчанию для режима декодирования значений. */
-    private static final String DEFAULT_DECODE_MODE = "simple";
 
     // ядро
     /** Kafka Producer для отправки событий; ключ/значение сериализуются как байты. */
@@ -148,15 +141,15 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
         final String cfSource = (tableMetadataProvider == PhoenixTableMetadataProvider.NOOP)
                 ? "disabled"
                 : "per-table";
-        LOG.debug("Инициализация завершена: шаблон_топика={}, cf_источник={}, проверять_топики={}, включать_rowkey={}, кодировка_rowkey={}, включать_meta={}, включать_meta_WAL={}, счетчики_батчей={}, debug_батчей_при_ошибке={}",
+        LOG.debug("Инициализация завершена: шаблон_топика={}, cf_источник={}, ensure_topics={}, batch_counters={}, autotune_enabled={}",
                 h2k.getTopicPattern(),
                 cfSource,
-                h2k.isEnsureTopics(), h2k.isIncludeRowKey(), h2k.getRowkeyEncoding(), h2k.isIncludeMeta(), h2k.isIncludeMetaWal(),
-                h2k.isProducerBatchCountersEnabled(), h2k.isProducerBatchDebugOnFailure());
+                h2k.isEnsureTopics(), h2k.isProducerBatchCountersEnabled(),
+                batchTuner != null && batchTuner.isEnabled());
     }
 
     /**
-     * Выводит в INFO итоговый режим сериализации payload (JSON/AVRO, локальные схемы или Schema Registry).
+     * Выводит в INFO активные параметры Avro/Schema Registry.
      * Видно даже при стандартном уровне логирования.
      */
     private void logPayloadSerializer(PayloadBuilder payload) {
@@ -229,121 +222,22 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
         return bootstrap;
     }
 
-    /**
-     * Выбирает и настраивает декодер значений по конфигурации.
-     * Режимы:
-     *  - {@code simple} — простой декодер без схемы (по умолчанию);
-     *  - {@code phoenix-avro} — считывает типы и PK из локальных `.avsc` (атрибуты {@code h2k.phoenixType}, {@code h2k.pk})
-     *    с необязательным фолбэком на {@code schema.json};
-     *  - {@code json-phoenix} — декодер на основе Phoenix-схемы из {@code h2k.schema.path}.
-     * При ошибке инициализации схемы выполняется безопасный фолбэк на {@link SimpleDecoder#INSTANCE}.
-     *
-     * @param cfg HBase-конфигурация
-     * @return выбранный декодер
-     */
+    /** Выбирает и настраивает единственный поддерживаемый декодер Phoenix (Avro-схемы). */
     private Decoder chooseDecoder(Configuration cfg) {
-        String mode = cfg.getTrimmed(Keys.DECODE_MODE);
-        if (mode == null || mode.isEmpty()) {
-            mode = detectDecodeMode(cfg);
-        }
         tableMetadataProvider = PhoenixTableMetadataProvider.NOOP;
-        if ("json-phoenix".equalsIgnoreCase(mode)) {
-            return initJsonPhoenixDecoder(cfg);
-        }
-        if ("phoenix-avro".equalsIgnoreCase(mode) || "phoenix".equalsIgnoreCase(mode)) {
-            return initAvroPhoenixDecoder(cfg);
-        }
-        LOG.debug("Режим декодирования: simple");
-        return SimpleDecoder.INSTANCE;
-    }
-
-    private String detectDecodeMode(Configuration cfg) {
-        final String payloadFormat = cfg.getTrimmed(H2kConfig.Keys.PAYLOAD_FORMAT);
-        if (payloadFormat != null) {
-            final String normalized = payloadFormat.trim().toLowerCase(java.util.Locale.ROOT);
-            if (normalized.startsWith("avro")) {
-                return "phoenix-avro";
-            }
-        }
-        final String avroMode = cfg.getTrimmed(H2kConfig.Keys.AVRO_MODE);
-        if (avroMode != null && !avroMode.trim().isEmpty()) {
-            return "phoenix-avro";
-        }
-        return DEFAULT_DECODE_MODE;
-    }
-
-    private Decoder initJsonPhoenixDecoder(Configuration cfg) {
-        final String rawPath = cfg.get(Keys.SCHEMA_PATH);
-        if (rawPath == null || rawPath.trim().isEmpty()) {
-            throw new IllegalStateException(
-                "Включён режим json-phoenix, но не задан обязательный параметр h2k.schema.path");
-        }
-        final String path = rawPath.trim();
-        try {
-            SchemaRegistry schema = new JsonSchemaRegistry(path);
-            LOG.debug("Режим декодирования: json-phoenix, схема={}", path);
-            if (schema instanceof PhoenixTableMetadataProvider) {
-                tableMetadataProvider = (PhoenixTableMetadataProvider) schema;
-            }
-            return new ValueCodecPhoenix(schema);
-        } catch (Exception e) {
-            LOG.warn("Не удалось инициализировать JsonSchemaRegistry ({}): {} — переключаюсь на простой декодер",
-                    path, e.toString());
-            if (LOG.isDebugEnabled()) {
-                LOG.debug("Трассировка ошибки JsonSchemaRegistry", e);
-            }
-            tableMetadataProvider = PhoenixTableMetadataProvider.NOOP;
-            return SimpleDecoder.INSTANCE;
-        }
-    }
-
-    private Decoder initAvroPhoenixDecoder(Configuration cfg) {
         final String configuredDir = cfg.getTrimmed(H2kConfig.Keys.AVRO_SCHEMA_DIR);
         final String schemaDir = (configuredDir == null || configuredDir.isEmpty())
                 ? H2kConfig.DEFAULT_AVRO_SCHEMA_DIR
                 : configuredDir;
-        final SchemaRegistry legacy = tryInitLegacyJsonRegistry(cfg.get(Keys.SCHEMA_PATH));
         try {
             AvroSchemaRegistry avro = new AvroSchemaRegistry(Paths.get(schemaDir));
-            SchemaRegistry registry = new AvroPhoenixSchemaRegistry(avro, legacy);
-            if (legacy == SchemaRegistry.NOOP) {
-                LOG.debug("Режим декодирования: phoenix-avro, каталог={}", schemaDir);
-            } else {
-                LOG.debug("Режим декодирования: phoenix-avro, каталог={}, legacy schema.json=включён", schemaDir);
-            }
-            if (registry instanceof PhoenixTableMetadataProvider) {
-                tableMetadataProvider = (PhoenixTableMetadataProvider) registry;
-            } else {
-                tableMetadataProvider = PhoenixTableMetadataProvider.NOOP;
-            }
+            AvroPhoenixSchemaRegistry registry = new AvroPhoenixSchemaRegistry(avro);
+            tableMetadataProvider = registry;
+            LOG.debug("Режим декодирования: phoenix-avro, каталог={}", schemaDir);
             return new ValueCodecPhoenix(registry);
         } catch (Exception e) {
-            LOG.warn("Не удалось инициализировать AvroPhoenixSchemaRegistry ({}): {} — переключаюсь на простой декодер",
-                    schemaDir, e.toString());
-            if (LOG.isDebugEnabled()) {
-                LOG.debug("Трассировка ошибки AvroPhoenixSchemaRegistry", e);
-            }
-            tableMetadataProvider = PhoenixTableMetadataProvider.NOOP;
-            return SimpleDecoder.INSTANCE;
-        }
-    }
-
-    private SchemaRegistry tryInitLegacyJsonRegistry(String rawPath) {
-        if (rawPath == null) {
-            return SchemaRegistry.NOOP;
-        }
-        final String path = rawPath.trim();
-        if (path.isEmpty()) {
-            return SchemaRegistry.NOOP;
-        }
-        try {
-            return new JsonSchemaRegistry(path);
-        } catch (Exception e) {
-            LOG.warn("Фолбэк schema.json не инициализирован ({}): {} — будет проигнорирован", path, e.toString());
-            if (LOG.isDebugEnabled()) {
-                LOG.debug("Трассировка ошибки schema.json", e);
-            }
-            return SchemaRegistry.NOOP;
+            throw new IllegalStateException(
+                    "Не удалось инициализировать AvroPhoenixSchemaRegistry (" + schemaDir + "): " + e.getMessage(), e);
         }
     }
 
@@ -428,14 +322,15 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
                 ? batchTuner.selectAwaitEvery(configuredAwaitEvery, batchMetrics)
                 : configuredAwaitEvery;
         final int awaitTimeoutMs = h2k.getAwaitTimeoutMs();
-        final boolean includeWalMeta = h2k.isIncludeMetaWal();
 
         batchMetrics.updateConfiguredAwaitEvery(awaitEvery);
 
         if (LOG.isDebugEnabled()) {
-            LOG.debug("Репликация: записей={}, awaitEvery={}, awaitTimeoutMs={}, включать WAL‑мета={}, базовый awaitEvery={}",
-                    entries.size(), awaitEvery, awaitTimeoutMs, includeWalMeta, configuredAwaitEvery);
+            LOG.debug("Репликация: записей={}, awaitEvery={}, awaitTimeoutMs={}, базовый awaitEvery={}",
+                    entries.size(), awaitEvery, awaitTimeoutMs, configuredAwaitEvery);
         }
+
+        final boolean includeWalMeta = false;
 
         try (BatchSender sender = new BatchSender(
                 awaitEvery,

@@ -30,8 +30,8 @@ import org.apache.hadoop.hbase.TableName;
 @FunctionalInterface
 public interface SchemaRegistry {
     /**
- * Константа: «пустой» реестр — всегда возвращает {@code null}.
- * Полезно в тестах и микробенчмарках, исключает лишние аллокации при каждом вызове {@link #emptyRegistry()}.
+    * Константа: «пустой» реестр — всегда возвращает {@code null}.
+    * Полезно в тестах и микробенчмарках, исключает лишние аллокации при каждом вызове {@link #emptyRegistry()}.
      */
     SchemaRegistry NOOP = (table, qualifier) -> null;
 

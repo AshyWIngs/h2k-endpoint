@@ -23,7 +23,6 @@ import kz.qazmarka.h2k.schema.registry.SchemaRegistry;
  *   имени ({@code NS:TABLE}) и только по квалифаеру ({@code TABLE});
  * - генерация имён Kafka‑топиков: плейсхолдеры ({@code ${namespace}}, {@code ${qualifier}}),
  *   санитайзинг недопустимых символов и жёсткое усечение по {@code h2k.topic.max.length};
- * - нормализация кодировки {@code rowkey} ({@code HEX} / {@code BASE64});
  *
  * Нефункциональные требования:
  * - используется только in‑memory {@link org.apache.hadoop.conf.Configuration}; без I/O;
@@ -150,27 +149,6 @@ class H2kConfigTest {
         assertTrue(topic.startsWith("AGG.INC_") || topic.startsWith("AGG_INC_") || topic.startsWith("AGG.INC."));
     }
 
-    /**
-     * Проверка нормализации значения {@code h2k.rowkey.encoding}.
-     * - {@code BASE64} (любой регистр/пробелы) приводит к {@link H2kConfig#isRowkeyBase64()} = true;
-     * - {@code HEX} и незаданное значение приводят к false.
-     */
-    @Test
-    @DisplayName("rowkey.encoding: нормализация значений (hex/base64)")
-    void rowkeyEncoding_normalization() {
-        Configuration c = new Configuration(false);
-        c.set("h2k.rowkey.encoding", "BASE64");
-        H2kConfig hc = fromCfg(c);
-        assertTrue(hc.isRowkeyBase64());
-
-        c.set("h2k.rowkey.encoding", " HeX ");
-        hc = fromCfg(c);
-        assertFalse(hc.isRowkeyBase64());
-
-        c.unset("h2k.rowkey.encoding");
-        hc = fromCfg(c); // дефолт HEX
-        assertFalse(hc.isRowkeyBase64());
-    }
 
     @Test
     @DisplayName("cfFilter: список CF берётся из провайдера метаданных")
@@ -263,10 +241,9 @@ class H2kConfigTest {
     }
 
     @Test
-    @DisplayName("Avro: типизированное чтение режима, каталога, SR URL и auth")
+    @DisplayName("Avro: чтение каталога, SR URL и auth")
     void avroConfig_typedParsing() {
         Configuration c = new Configuration(false);
-        c.set("h2k.avro.mode", "confluent");
         c.set("h2k.avro.schema.dir", "/opt/avro");
         c.set("h2k.avro.sr.urls", "http://sr1:8081, http://sr2:8081 ");
         c.set("h2k.avro.sr.auth.basic.username", "user");
@@ -275,7 +252,6 @@ class H2kConfigTest {
 
         H2kConfig hc = fromCfg(c);
 
-        assertEquals(H2kConfig.AvroMode.CONFLUENT, hc.getAvroMode());
         assertEquals("/opt/avro", hc.getAvroSchemaDir());
         assertIterableEquals(java.util.Arrays.asList("http://sr1:8081", "http://sr2:8081"), hc.getAvroSchemaRegistryUrls());
         assertEquals("user", hc.getAvroSrAuth().get("basic.username"));
@@ -378,12 +354,4 @@ class H2kConfigTest {
      * Неизвестное значение {@code h2k.rowkey.encoding}.
      * Ожидаем поведение по умолчанию: HEX (т.е. {@link H2kConfig#isRowkeyBase64()} = false).
      */
-    @Test
-    @DisplayName("rowkey.encoding: неизвестное значение трактуется как HEX (дефолт)")
-    void rowkeyEncoding_unknownMeansHex() {
-        Configuration c = new Configuration(false);
-        c.set("h2k.rowkey.encoding", "unknown");
-        H2kConfig hc = fromCfg(c);
-        assertFalse(hc.isRowkeyBase64(), "Неизвестные значения должны приводить к HEX по умолчанию");
-    }
 }

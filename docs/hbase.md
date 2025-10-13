@@ -111,26 +111,19 @@ add_peer 'h2k_balanced',
 # Обновляем только вложенную карту CONFIG (наши h2k.*)
 update_peer_config 'h2k_balanced',
   { 'CONFIG' => {
-      'h2k.payload.format'  => 'avro-binary',
-      'h2k.avro.mode'       => 'generic',
-      'h2k.avro.schema.dir' => '/opt/hbase/conf/avro'
+      'h2k.avro.schema.dir' => '/opt/hbase/conf/avro',
+      'h2k.avro.sr.urls'    => 'http://sr1:8081,http://sr2:8081'
     }
   }
 ```
 
 Быстрые сценарии:
-- Вернуть JSONEachRow:
-  ```ruby
-  update_peer_config 'h2k_balanced', { 'CONFIG' => { 'h2k.payload.format' => 'json-eachrow' } }
-  ```
-- Включить Confluent Schema Registry 5.3.x:
+- Обновить параметры Schema Registry 5.3.x:
   ```ruby
   update_peer_config 'h2k_balanced',
     { 'CONFIG' => {
-        'h2k.payload.format'         => 'avro-binary',
-        'h2k.avro.mode'              => 'confluent',
-        'h2k.avro.schema.dir'        => '/opt/hbase/conf/avro',
-        'h2k.avro.sr.urls'           => 'http://sr1:8081,http://sr2:8081',
+        'h2k.avro.schema.dir'             => '/opt/hbase/conf/avro',
+        'h2k.avro.sr.urls'                => 'http://sr1:8081,http://sr2:8081',
         'h2k.avro.sr.auth.basic.username' => 'svc-hbase',
         'h2k.avro.sr.auth.basic.password' => '***'
       }

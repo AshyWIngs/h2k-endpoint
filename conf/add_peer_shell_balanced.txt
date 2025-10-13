@@ -32,15 +32,7 @@ add_peer 'h2k_balanced',
       # client.id не задаём — Endpoint сам сгенерирует уникальный id per-host (hostname/UUID)
       'h2k.topic.pattern'                   => '${table}',              # ${table}|${namespace}|${qualifier}
 # Фильтрация CF задаётся в conf/avro/*.avsc через свойство h2k.cf.list (CSV без пробелов)
-
-      'h2k.decode.mode'                     => 'phoenix-avro',          # 'simple' | 'phoenix-avro' | 'json-phoenix'
-      # TIMESTAMP/DATE/TIME -> epoch millis; любой ARRAY -> JSON‑массив
-      #'h2k.schema.path'                    => '/opt/hbase-default-current/conf/schema.json', # фолбэк на время миграции
-      # формат полезной нагрузки
-
-      # Для Confluent Schema Registry:
-      'h2k.payload.format'                  => 'avro-binary',           # дефолт json-eachrow
-      'h2k.avro.mode'                       => 'confluent',
+      # Confluent Schema Registry:
       'h2k.avro.sr.urls'                    => 'http://10.254.3.111:8081,http://10.254.3.112:8081,http://10.254.3.113:8081',
       'h2k.avro.subject.strategy'           => 'table',
       'h2k.avro.subject.suffix'             => '-value',
@@ -48,14 +40,6 @@ add_peer 'h2k_balanced',
       'h2k.avro.schema.dir'                 => '/opt/hbase-default-current/conf/avro',
       # 'h2k.avro.sr.auth.basic.username'  => 'svc-hbase',
       # 'h2k.avro.sr.auth.basic.password'  => '***',
-      'h2k.json.serialize.nulls'            => 'false',
-
-      # Метаполя в полезной нагрузке
-      'h2k.payload.include.meta'           => 'false',
-      'h2k.payload.include.meta.wal'       => 'false',
-      'h2k.payload.include.rowkey'         => 'false',
-
-
       # RowKey/соль/подсказки: соль/ёмкость задаются в conf/avro/*.avsc (h2k.saltBytes / h2k.capacityHint)
       'h2k.rowkey.encoding'                 => 'BASE64',
 

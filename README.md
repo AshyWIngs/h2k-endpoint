@@ -1,9 +1,9 @@
-## HBase 1.4.13 → Kafka 2.3.1 ReplicationEndpoint (AVRO — целевой формат; JSONEachRow — вспомогательный)
+## HBase 1.4.13 → Kafka 2.3.1 ReplicationEndpoint (Avro Confluent only)
 
 **Пакет:** `kz.qazmarka.h2k.endpoint`  
 **Endpoint‑класс:** `kz.qazmarka.h2k.endpoint.KafkaReplicationEndpoint`
 
-Лёгкий и быстрый `ReplicationEndpoint` для HBase 1.4.x. Основной режим — **AVRO** (Generic / Confluent Schema Registry), что соответствует целевой архитектуре. Формат **JSONEachRow** также поддерживается, но используется в основном для отладки и интеграций без Avro. Минимум аллокаций, стабильный порядок ключей, дружелюбные логи на русском.
+Лёгкий и быстрый `ReplicationEndpoint` для HBase 1.4.x. Формат полезной нагрузки — строго **Avro (Confluent Schema Registry)**. Минимум аллокаций, стабильный порядок полей, дружелюбные логи на русском.
 
 ---
 
@@ -34,8 +34,7 @@ mvn -pl endpoint -am -DskipTests clean package
 cp endpoint/target/h2k-endpoint-*-shaded.jar /opt/hbase-default-current/lib/
 ```
 
-2) **Подготовьте Avro‑схемы** с атрибутами `h2k.phoenixType` и массивом `h2k.pk` в каталоге `conf/avro` (см. docs/avro.md).  
-   На период миграции можно держать `schema.json` (фолбэк для `phoenix-avro`).
+2) **Подготовьте Avro‑схемы** с атрибутами `h2k.phoenixType` и массивом `h2k.pk` в каталоге `conf/avro` (см. docs/avro.md).
 
 3) **Включите репликацию CF** в нужных таблицах и глобально:
 ```xml
@@ -56,7 +55,7 @@ bin/hbase shell conf/add_peer_shell_balanced.txt
 
    Альтернативы: `add_peer_shell_fast.txt` и `add_peer_shell_reliable.txt` (см. [матрицу профилей](#профили-peer)).
 
-5) **Проверьте доставку**: сообщения появляются в топике `${table}` (по умолчанию в формате AVRO; при необходимости можно выбрать JSONEachRow).
+5) **Проверьте доставку**: сообщения появляются в топике `${table}` (формат Avro Confluent).
 
 ---
 
@@ -65,7 +64,7 @@ bin/hbase shell conf/add_peer_shell_balanced.txt
 - **Java:** 8 (target 1.8)
 - **HBase:** 1.4.13 (совместимо с 1.4.x)
 - **Kafka (клиенты):** 2.3.1
-- **Phoenix:** 4.14/4.15 (совместимо; режим `json-phoenix` поддерживается как legacy)
+- **Phoenix:** 4.14/4.15 (совместимо; используется Avro Phoenix registry)
 
 > RegionServer и Endpoint должны работать на **Java 8**.
 
@@ -98,11 +97,9 @@ hbase classpath | tr ':' '\n' | egrep -i 'kafka-clients|lz4|snappy'
 **Минимально для запуска** (пример для `TBL_JTI_TRACE_CIS_HISTORY`):
 ```properties
 h2k.kafka.bootstrap.servers=10.254.3.111:9092,10.254.3.112:9092,10.254.3.113:9092
-h2k.payload.format=avro-binary
-# Декодирование:
-h2k.decode.mode=phoenix-avro
-# Фолбэк на schema.json (опционально на время миграции)
-h2k.schema.path=/opt/hbase-default-current/conf/schema.json
+h2k.avro.sr.urls=http://schema-registry-1:8081,http://schema-registry-2:8081
+# Каталог локальных .avsc (если не указан — conf/avro)
+# h2k.avro.schema.dir=/opt/h2k/conf/avro
 # Топик:
 h2k.ensure.topics=true
 h2k.topic.pattern=${table}
@@ -112,24 +109,24 @@ h2k.topic.pattern=${table}
 
 | Ключ | Назначение | Примечание |
 |---|---|---|
-| `h2k.payload.format` | Формат сериализации payload | `avro-binary` (рекомендуется) \| `json-each-row` |
+| Ключ | Назначение | Примечание |
+|---|---|---|
 | `h2k.kafka.bootstrap.servers` | Список брокеров Kafka | `host:port[,host2:port2]` |
-| `h2k.decode.mode` | `simple` \| `phoenix-avro` \| `json-phoenix` (legacy) | `phoenix-avro` считывает типы/PK из `.avsc`, `schema.json` нужен только для фолбэка |
-| `h2k.schema.path` | Путь к `schema.json` | Необязательный фолбэк для `phoenix-avro`, обязателен для `json-phoenix` |
-| `h2k.salt.map` | Карта соли rowkey | Опциональный фолбэк; основной источник — `.avsc` (`h2k.saltBytes`) |
-| `h2k.capacity.hints` | Подсказки ёмкости JSON | Опциональный фолбэк; основной источник — `.avsc` (`h2k.capacityHint`) |
+| `h2k.avro.sr.urls` | URL Schema Registry | Обязателен; перечисляйте через запятую |
+| `h2k.avro.schema.dir` | Каталог локальных `.avsc` | По умолчанию `conf/avro` |
+| `h2k.avro.sr.auth.*` | Basic-auth к SR | Используйте при необходимости авторизации |
+| `h2k.salt.map` | Карта соли rowkey | Опционально переопределяет `h2k.saltBytes` в `.avsc` |
+| `h2k.capacity.hints` | Подсказки ёмкости | Опционально; основной источник — `.avsc` (`h2k.capacityHint`) |
 | `h2k.topic.pattern` | Шаблон имени топика | `${table}` по умолчанию |
 | `h2k.ensure.topics` | Автосоздание тем | true/false |
-| `h2k.payload.include.meta` | Добавлять служебные поля | +`_event_ts`,`_delete` и т.д. |
-| `h2k.payload.include.meta.wal` | Добавлять `_wal_seq`,`_wal_write_time` | требует включить meta |
-| `h2k.payload.include.rowkey` | Включать `_rowkey` | `BASE64`/`HEX` управляется `h2k.rowkey.encoding` |
+| `h2k.topic.config.*` | Доп. параметры Kafka-топика | Передаются в AdminClient при ensure |
 
 
 > Фильтрация по CF задаётся на уровне Avro-схемы: укажите `"h2k.cf.list": "cf1,cf2"` в `conf/avro/<TABLE>.avsc`.
 > Если свойство отсутствует, реплицируются все column family.
 
-> Режим `phoenix-avro` ожидает, что локальные `.avsc` содержат атрибуты `h2k.phoenixType` для колонок и массив `h2k.pk`.
-> При наличии `h2k.schema.path` эти данные используются как фолбэк на период миграции.
+> Атрибуты `h2k.phoenixType`, `h2k.pk`, `h2k.saltBytes`, `h2k.capacityHint` должны быть заданы в `.avsc`.
+> Файл `schema.json` более не используется.
 
 > Полная справка по ключам и значениям — см. **docs/config.md**.
 
@@ -171,11 +168,11 @@ h2k.topic.pattern=${table}
 
 Краткая матрица (полные значения и примеры — в [docs/peer-profiles.md](docs/peer-profiles.md)):
 
-| Профиль | Назначение | `h2k.payload.format` | `acks` | `enable.idempotence` | `max.in.flight` | `linger.ms` | `batch.size` | `compression` |
-|---|---|---|---|---|---|---|---|---|
-| FAST | скорость, допускаем дубль | `json-each-row` (Avro опционально) | `1` | `false` | `5` | `100` | `524288` | `lz4` |
-| BALANCED | прод Avro по умолчанию | `avro-binary` + `avro.mode=generic` | `all` | `true` | `5` | `100` | `524288` | `lz4` |
-| RELIABLE | строгий порядок | `json-each-row` (Avro опционально) | `all` | `true` | `1` | `50` | `65536` | `snappy` |
+| Профиль | Назначение | `acks` | `enable.idempotence` | `max.in.flight` | `linger.ms` | `batch.size` | `compression` |
+|---|---|---|---|---|---|---|---|
+| FAST | максимальная скорость | `1` | `false` | `5` | `100` | `524288` | `lz4` |
+| BALANCED | баланс скорость/надёжность | `all` | `true` | `5` | `100` | `524288` | `lz4` |
+| RELIABLE | строгий порядок и гарантии | `all` | `true` | `1` | `50` | `65536` | `snappy` |
 
 > Дополнительные параметры и подсказки по тюнингу см. в **docs/peer-profiles.md** и **docs/hbase.md**.
 
@@ -185,12 +182,11 @@ h2k.topic.pattern=${table}
 
 - [Сводный навигатор по документации](docs/README.md)
 - [Конфигурация (все ключи)](docs/config.md)
-- [Phoenix и `schema.json`](docs/phoenix.md)
+- [Phoenix и Avro-схемы](docs/phoenix.md)
 - [Подсказки ёмкости и метаданные](docs/capacity.md)
 - [HBase shell / ZooKeeper / операции](docs/hbase.md) и runbook: [операции](docs/runbook/operations.md), [troubleshooting](docs/runbook/troubleshooting.md)
 - [Avro (локальные/Confluent)](docs/avro.md) и [интеграция](docs/integration-avro.md)
 - [Roadmap по Avro‑миграции](docs/roadmap-avro.md)
-- [ClickHouse ingest (JSONEachRow)](docs/clickhouse.md)
 - [Профили peer](docs/peer-profiles.md)
 
 ## Обновление версии проекта
@@ -203,30 +199,24 @@ h2k.topic.pattern=${table}
   ```
 - После исполнения команды обновятся все `pom.xml` в дереве. Проверьте diff, запустите `mvn test` и закоммитьте изменения версии вместе с релизными правками.
 
-## Поддержка форматов сообщений
+## Формат сообщений
 
-Endpoint умеет формировать payload в нескольких форматах (ключ `h2k.payload.format`):
-
-| Формат | Тип данных | Основной сценарий | Ключевые параметры | Документация |
-|---|---|---|---|---|
-| `avro-binary` | бинарный Avro | **Прод**. Минимальный размер, совместимость с ClickHouse ingestion через SR | `h2k.avro.mode` = `generic` (локальные `.avsc`) или `confluent` (Schema Registry 5.3.8); `h2k.avro.schema.dir`, `h2k.avro.sr.urls`, `h2k.avro.props.*` | [docs/avro.md](docs/avro.md) |
-| `json-each-row` | текстовый JSON | Отладка, ClickHouse ingest без SR, экспресс-потоки | `h2k.payload.include.meta`, `h2k.payload.include.rowkey`, `h2k.rowkey.encoding` | [docs/clickhouse.md](docs/clickhouse.md) |
-| `avro-json` | Avro в JSON-представлении | Диагностика/сравнение схем, экспорт в тестовые пайплайны | Использует те же `h2k.avro.*` ключи, но выдаёт JSON | [docs/avro.md](docs/avro.md#режим-avro-json) |
-
-Основные параметры Avro:
+Endpoint публикует события в формате Avro (Confluent Schema Registry). Ниже приведены основные параметры Avro:
 
 | Ключ | Значение по умолчанию | Комментарий |
 |---|---|---|
-| `h2k.avro.mode` | `confluent` | `generic` использует локальные `.avsc` |
-| `h2k.avro.schema.dir` | `conf/avro` | Каталог локальных схем и fallback‑кэш SR |
+| `h2k.avro.schema.dir` | `conf/avro` | Каталог локальных схем и fallback‑кэша SR |
 | `h2k.avro.sr.urls` | — | CSV вида `http://sr1:8081,http://sr2:8081` |
-| `h2k.avro.props.subject.strategy` | `table` | `table` → `namespace:table`, `qualifier` — прежнее поведение |
+| `h2k.avro.props.subject.strategy` | `table` | `table` → `namespace:table`; `qualifier` — только имя таблицы |
 | `h2k.avro.props.subject.prefix` | пусто | Используйте для разделения окружений |
 | `h2k.avro.props.subject.suffix` | пусто | Часто ставят `-value` для совместимости с Kafka Connect |
 | `h2k.avro.props.client.cache.capacity` | `1000` | Размер identity-map `CachedSchemaRegistryClient` |
-| `h2k.avro.props.basic.username`/`password` | — | Базовая авторизация, значения маскируются в логах |
+| `h2k.avro.sr.auth.*` | — | Basic-auth (логин/пароль маскируются в логах) |
 
-При старте endpoint выводит строку уровня INFO вида `Payload: payload.format=..., serializer.class=..., avro.mode=...` — по ней видно, активен ли AVRO, какой режим и откуда берутся схемы. Сообщение появляется независимо от включённого DEBUG.
+> Режим сериализации фиксирован: используется только Confluent Schema Registry. Ключ `h2k.avro.mode` удалён; локальные `.avsc` служат источником Phoenix‑метаданных и кешем схем.
+
+При старте endpoint выводит строку уровня INFO вида `Payload: payload.format=AVRO_BINARY, serializer.class=..., schema.registry.urls=...` — по ней видно, что активен Confluent SR и какие URL используются.
+
 
 ## Безопасность и ограничения
 
@@ -326,9 +316,9 @@ Avro Confluent — основной формат на проде, поэтому
 - `kz.qazmarka.h2k.kafka.ensure` — автоматическое создание/согласование топиков (подпакеты `admin`, `planner`, `state`, `metrics`, `config`).
 - `kz.qazmarka.h2k.kafka.producer.batch` — адаптивный `BatchSender`, метрики и тюнер отправок.
 - `kz.qazmarka.h2k.kafka.support` — общие Kafka-утилиты (например, `BackoffPolicy`).
-- `kz.qazmarka.h2k.payload.builder` — сборка JSON/Avro payload’ов, расчёт метаполей и ёмкости.
-- `kz.qazmarka.h2k.payload.serializer` — фабрика и реализация сериализаторов; подпаки `avro`, `json`, `table` и др.
-- `kz.qazmarka.h2k.schema.decoder` — декодирование значений Phoenix/Raw; `schema.registry.*` — резолверы схем (JSON, Avro локальный, Avro Phoenix, Confluent SR).
+- `kz.qazmarka.h2k.payload.builder` — сборка Avro payload’ов и расчёт ёмкости.
+- `kz.qazmarka.h2k.payload.serializer` — сериализация Avro и интеграция с Schema Registry.
+- `kz.qazmarka.h2k.schema.decoder` — декодирование значений Phoenix; `schema.registry.*` — резолверы Avro-схем (локальные, Phoenix, Confluent).
 - `kz.qazmarka.h2k.config` — чтение и валидация конфигурации (`H2kConfig`, секции, builder’ы).
 - `kz.qazmarka.h2k.util` — низкоуровневые утилиты (Bytes, JsonWriter, Parsers, RowKeySlice).
 - Модуль `endpoint` содержит production‑код и тесты; модуль `benchmarks` — JMH-бенчмарки (`benchmarks/src/...`).

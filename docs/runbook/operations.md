@@ -27,14 +27,9 @@
 **Быстрые команды (QA-профиль):**
 
 ```ruby
-# Вернуть JSONEachRow
-update_peer_config 'h2k_balanced', { 'CONFIG' => { 'h2k.payload.format' => 'json-eachrow' } }
-
-# Включить Avro + Confluent SR 5.3.8
+# Обновить параметры Avro + Confluent SR 5.3.8
 update_peer_config 'h2k_balanced',
   { 'CONFIG' => {
-      'h2k.payload.format'         => 'avro-binary',
-      'h2k.avro.mode'              => 'confluent',
       'h2k.avro.schema.dir'        => '/opt/hbase/conf/avro',
       'h2k.avro.sr.urls'           => 'http://10.254.3.111:8081,http://10.254.3.112:8081,http://10.254.3.113:8081',
       'h2k.avro.subject.strategy'  => 'table',

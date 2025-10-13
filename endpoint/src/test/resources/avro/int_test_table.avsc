@@ -1,0 +1,34 @@
+{
+  "type": "record",
+  "name": "INT_TEST_TABLE",
+  "namespace": "kz.qazmarka.h2k.test",
+  "h2k.cf.list": "d",
+  "h2k.pk": ["id"],
+  "h2k.saltBytes": 0,
+  "h2k.capacityHint": 3,
+  "fields": [
+    {
+      "name": "id",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null,
+      "h2k.phoenixType": "VARCHAR"
+    },
+    {
+      "name": "value_long",
+      "type": "long",
+      "default": 0,
+      "h2k.phoenixType": "BIGINT"
+    },
+    {
+      "name": "_event_ts",
+      "type": [
+        "null",
+        "long"
+      ],
+      "default": null
+    }
+  ]
+}

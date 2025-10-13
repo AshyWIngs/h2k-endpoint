@@ -33,7 +33,6 @@ final class H2kConfigLoader {
         bootstrap = bootstrap.trim();
 
         TopicSection topic = TopicSection.from(cfg);
-        PayloadSection payload = PayloadSection.from(cfg);
         AvroSection avro = AvroSection.from(cfg);
         EnsureSection ensure = EnsureSection.from(cfg);
         ProducerBatchSection batch = ProducerBatchSection.from(cfg);
@@ -54,20 +53,11 @@ final class H2kConfigLoader {
                 .metadataProvider(metadataProvider)
                 .done();
 
-        builder.payload()
-                .includeRowKey(payload.includeRowKey)
-                .rowkeyEncoding(payload.rowkeyEncoding)
-                .rowkeyBase64(payload.rowkeyBase64)
-                .includeMeta(payload.includeMeta)
-                .includeMetaWal(payload.includeMetaWal)
-                .jsonSerializeNulls(payload.jsonSerializeNulls)
-                .format(payload.payloadFormat)
-                .serializerFactory(payload.serializerFactoryClass)
-                .avroMode(avro.mode)
-                .avroSchemaDir(avro.schemaDir)
+        builder.avro()
+                .schemaDir(avro.schemaDir)
                 .schemaRegistryUrls(avro.schemaRegistryUrls)
                 .schemaRegistryAuth(avro.auth)
-                .avroProps(avro.props)
+                .properties(avro.props)
                 .done();
 
         builder.ensure()

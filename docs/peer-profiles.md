@@ -7,11 +7,11 @@
 
 ## Сводная таблица ключевых отличий
 
-| Профиль | Целевой сценарий | Формат payload | Avro режим | `acks` | `enable.idempotence` | `max.in.flight` | `linger.ms` | `batch.size` | `compression.type` |
-|---------|------------------|----------------|-----------|--------|----------------------|-----------------|-------------|--------------|--------------------|
-| **FAST** | Максимальная скорость, допускаем дубликаты | `json-each-row` (Avro опционально) | — | `1` | `false` | `5` | `100` | `524288` (512 KiB) | `lz4` |
-| **BALANCED** | Прод формат с Avro и умеренным батчингом | `avro-binary` | `generic` (`conf/avro/*.avsc`) | `all` | `true` | `5` | `100` | `524288` | `lz4` |
-| **RELIABLE** | Максимальная надёжность и порядок | `json-each-row` (Avro опционально) | — | `all` | `true` | `1` | `50` | `65536` (64 KiB) | `snappy` |
+| Профиль | Целевой сценарий | Формат payload | Schema Registry | `acks` | `enable.idempotence` | `max.in.flight` | `linger.ms` | `batch.size` | `compression.type` |
+|---------|------------------|----------------|-----------------|--------|----------------------|-----------------|-------------|--------------|--------------------|
+| **FAST** | Максимальная скорость, допускаем дубликаты | `avro-binary` | Confluent | `1` | `false` | `5` | `100` | `524288` (512 KiB) | `lz4` |
+| **BALANCED** | Прод формат с Avro и умеренным батчингом | `avro-binary` | Confluent | `all` | `true` | `5` | `100` | `524288` | `lz4` |
+| **RELIABLE** | Максимальная надёжность и порядок | `avro-binary` | Confluent | `all` | `true` | `1` | `50` | `65536` (64 KiB) | `snappy` |
 
 Дополнительные общие настройки (равны во всех профилях):
 
@@ -34,7 +34,8 @@
 add_peer 'h2k_fast', {
   'ENDPOINT_CLASSNAME' => 'kz.qazmarka.h2k.endpoint.KafkaReplicationEndpoint',
   'CONFIG' => {
-    'h2k.payload.format'              => 'json-each-row',   # Avro при необходимости раскомментировать
+    'h2k.avro.schema.dir'             => '/opt/hbase-default-current/conf/avro',
+    'h2k.avro.sr.urls'                => 'http://sr1:8081,http://sr2:8081',
     'h2k.producer.enable.idempotence' => 'false',
     'h2k.producer.acks'               => '1',
     'h2k.producer.max.in.flight'      => '5',
@@ -49,7 +50,7 @@ add_peer 'h2k_fast', {
 ```
 
 **Назначение:** ingestion, когда кратковременные дубликаты допустимы и важна минимальная задержка подтверждения.  
-**Комментарий:** если включаете Avro — добавьте `h2k.avro.mode=generic` и `h2k.avro.schema.dir` (или `confluent` + SR параметры).
+**Комментарий:** настройте `h2k.avro.schema.dir` и `h2k.avro.sr.urls` для работы с Schema Registry.
 
 ---
 
@@ -58,9 +59,8 @@ add_peer 'h2k_fast', {
 ```ruby
 add_peer 'h2k_balanced', {
   'CONFIG' => {
-    'h2k.payload.format'              => 'avro-binary',
-    'h2k.avro.mode'                   => 'generic',
     'h2k.avro.schema.dir'             => '/opt/hbase-default-current/conf/avro',
+    'h2k.avro.sr.urls'                => 'http://sr1:8081,http://sr2:8081',
     'h2k.producer.enable.idempotence' => 'true',
     'h2k.producer.acks'               => 'all',
     'h2k.producer.max.in.flight'      => '5',
@@ -75,7 +75,7 @@ add_peer 'h2k_balanced', {
 ```
 
 **Назначение:** основной продакшен-профиль: Avro, идемпотентность и сохранение порядка при `max.in.flight ≤ 5`.  
-**SR (Confluent):** замените блок `avro.mode` на `confluent`, добавьте `h2k.avro.sr.urls` и опциональные ключи авторизации.
+**Schema Registry:** дополнительно задайте `h2k.avro.sr.auth.*`, если требуется basic-auth.
 
 ---
 
@@ -84,7 +84,8 @@ add_peer 'h2k_balanced', {
 ```ruby
 add_peer 'h2k_reliable', {
   'CONFIG' => {
-    'h2k.payload.format'              => 'json-each-row',   # Avro включается аналогично fast
+    'h2k.avro.schema.dir'             => '/opt/hbase-default-current/conf/avro',
+    'h2k.avro.sr.urls'                => 'http://sr1:8081,http://sr2:8081',
     'h2k.producer.enable.idempotence' => 'true',
     'h2k.producer.acks'               => 'all',
     'h2k.producer.max.in.flight'      => '1',

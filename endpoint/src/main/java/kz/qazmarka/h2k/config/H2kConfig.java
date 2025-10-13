@@ -19,17 +19,13 @@ import kz.qazmarka.h2k.util.Parsers;
  * Иммутабельная конфигурация эндпоинта, прочитанная один раз из HBase {@link Configuration}.
  *
  * Содержит:
- *  - Базовые параметры Kafka и ограничение длины имени топика
- *  - Флаги формирования payload (rowkey/meta) и JSON (serializeNulls)
- *  - Параметры ожидания подтверждений отправок (awaitEvery/awaitTimeoutMs)
- *  - Параметры автосоздания топиков (партиции/репликация/таймаут/backoff), client.id для AdminClient и произвольные topic-level конфиги
- *  - Табличные переопределения «соли» rowkey: параметр {@code h2k.salt.map} (TABLE[:BYTES])
+ *  - Базовые параметры Kafka и ограничение длины имени топика;
+ *  - Параметры Avro/Schema Registry для сериализации в формат Confluent;
+ *  - Параметры ожидания подтверждений отправок (awaitEvery/awaitTimeoutMs);
+ *  - Параметры автосоздания топиков (партиции/репликация/таймаут/backoff), client.id для AdminClient и произвольные topic-level конфиги;
+ *  - Табличные переопределения «соли» rowkey: параметр {@code h2k.salt.map} (TABLE[:BYTES]) и подсказки ёмкости {@code h2k.capacity.hint.*}.
  *
  * Все поля неизменяемые (иммутабельные).
- *
- * Примечание по rowkey: по умолчанию rowkey кодируется в HEX. Если в конфигурации задано
- * {@code h2k.rowkey.encoding=base64}, будет использована Base64. Для быстрого ветвления в горячем
- * пути предусмотрен предвычисленный флаг {@link #isRowkeyBase64()}.
  */
 public final class H2kConfig {
     /**
@@ -43,29 +39,13 @@ public final class H2kConfig {
     static final String PLACEHOLDER_NAMESPACE = "${namespace}";
     /** Плейсхолдер в шаблоне топика: будет заменён на qualifier (имя таблицы без namespace). */
     static final String PLACEHOLDER_QUALIFIER = "${qualifier}";
-    /** Строковое значение способа кодирования rowkey по умолчанию — HEX. */
-    static final String ROWKEY_ENCODING_HEX = "hex";
-    /** Строковое значение способа кодирования rowkey — Base64. */
-    static final String ROWKEY_ENCODING_BASE64 = "base64";
     /** Имя namespace HBase по умолчанию. */
     static final String HBASE_DEFAULT_NS = "default";
 
-    /** Формат сериализации payload. */
-    public enum PayloadFormat { JSON_EACH_ROW, AVRO_BINARY, AVRO_JSON }
-
-    /** Режим Avro (локальные схемы или Confluent Schema Registry). */
-    public enum AvroMode { GENERIC, CONFLUENT }
-
     // ==== Дополнительные ключи конфигурации (для формата и AVRO) ====
-    /** Формат сериализации payload: json_each_row | avro_binary | avro_json */
-    static final String K_PAYLOAD_FORMAT = "h2k.payload.format";
-    /** FQCN фабрики сериализаторов (SPI), например kz.qazmarka.h2k.payload.builder.PayloadBuilder$PayloadSerializerFactory */
-    static final String K_PAYLOAD_SERIALIZER_FACTORY = "h2k.payload.serializer.factory";
     // Индивидуальные AVRO-ключи публикуются через внутренний класс Keys; здесь оставляем только общий префикс.
     /** Префикс для всех AVRO-настроек */
     static final String K_AVRO_PREFIX              = "h2k.avro.";
-    /** Ключ режима Avro: generic | confluent. */
-    static final String K_AVRO_MODE                = "h2k.avro.mode";
     /** Ключ каталога локальных Avro-схем. */
     static final String K_AVRO_SCHEMA_DIR          = "h2k.avro.schema.dir";
     /** Основной ключ списка URL Schema Registry (через запятую). */
@@ -85,14 +65,6 @@ public final class H2kConfig {
     static final String K_TOPIC_PATTERN = "h2k.topic.pattern";
     /** Максимально допустимая длина имени Kafka‑топика. */
     static final String K_TOPIC_MAX_LENGTH = "h2k.topic.max.length";
-    /** Флаг включения rowkey в JSON‑payload. */
-    static final String K_PAYLOAD_INCLUDE_ROWKEY = "h2k.payload.include.rowkey";
-    /** Способ кодирования rowkey: "hex" (по умолчанию) или "base64". */
-    static final String K_ROWKEY_ENCODING = "h2k.rowkey.encoding";
-    /** Флаг добавления метаданных ячеек (cf/qualifier/ts) в payload. */
-    static final String K_PAYLOAD_INCLUDE_META = "h2k.payload.include.meta";
-    /** Флаг добавления признака происхождения записи из WAL. */
-    static final String K_PAYLOAD_INCLUDE_META_WAL = "h2k.payload.include.meta.wal";
     /** Флаг автосоздания недостающих топиков. */
     static final String K_ENSURE_TOPICS = "h2k.ensure.topics";
     /** Разрешать ли автоматическое увеличение числа партиций при ensureTopics. По умолчанию выключено. */
@@ -131,20 +103,6 @@ public final class H2kConfig {
          * Формат: host:port[,host2:port2].
          */
         public static final String BOOTSTRAP = "h2k.kafka.bootstrap.servers";
-        /**
-         * Флаг сериализации null‑значений в JSON payload (true/false).
-         * По умолчанию: false — поля с null опускаются.
-         */
-        public static final String JSON_SERIALIZE_NULLS = "h2k.json.serialize.nulls";
-        /**
-         * Режим декодирования значений из HBase: {@code simple}, {@code phoenix-avro} или {@code json-phoenix} (legacy).
-         * Используется при инициализации декодеров.
-         */
-        public static final String DECODE_MODE = "h2k.decode.mode";
-        /**
-         * Путь к JSON‑схеме (Schema Registry) для режимов, требующих типизации колонок.
-         */
-        public static final String SCHEMA_PATH = "h2k.schema.path";
         /**
          * Префикс для переопределения любых свойств Kafka Producer (например,
          * h2k.producer.acks, h2k.producer.linger.ms, и т.п.).
@@ -196,32 +154,18 @@ public final class H2kConfig {
          */
         public static final String CAPACITY_HINTS = "h2k.capacity.hints";
 
-        /** Формат сериализации payload: json_each_row | avro_binary | avro_json */
-        public static final String PAYLOAD_FORMAT = "h2k.payload.format";
-        /** FQCN фабрики сериализаторов (SPI) */
-        public static final String PAYLOAD_SERIALIZER_FACTORY = "h2k.payload.serializer.factory";
-        /** AVRO-настройки (минимальный набор ключей) */
         /** Каталог локальных Avro-схем (generic Avro и режим phoenix-avro для декодера). */
         public static final String AVRO_SCHEMA_DIR = "h2k.avro.schema.dir";
         public static final String AVRO_SCHEMA_REGISTRY_URL = "h2k.avro.schema.registry.url";
         public static final String AVRO_SUBJECT_STRATEGY    = "h2k.avro.subject.strategy";
         public static final String AVRO_COMPATIBILITY       = "h2k.avro.compatibility";
         public static final String AVRO_BINARY              = "h2k.avro.binary";
-        public static final String AVRO_MODE                = "h2k.avro.mode";
     }
 
     // ==== Значения по умолчанию (в одном месте) ====
     /** Имя CF по умолчанию, если в конфигурации не задано явно. */
     /** Базовое значение client.id для AdminClient (к нему добавляется hostname, если доступен). */
     public static final String DEFAULT_ADMIN_CLIENT_ID = "h2k";
-    /** По умолчанию rowkey в payload отключён. */
-    static final boolean DEFAULT_INCLUDE_ROWKEY = false;
-    /** По умолчанию метаданные колонок в payload отключены. */
-    static final boolean DEFAULT_INCLUDE_META = false;
-    /** По умолчанию признак происхождения из WAL отключён. */
-    static final boolean DEFAULT_INCLUDE_META_WAL = false;
-    /** По умолчанию null-поля в JSON не сериализуются. */
-    static final boolean DEFAULT_JSON_SERIALIZE_NULLS = false;
     /** По умолчанию автосоздание топиков включено. */
     static final boolean DEFAULT_ENSURE_TOPICS = true;
     /** По умолчанию увеличение партиций при ensureTopics отключено. */
@@ -260,8 +204,6 @@ public final class H2kConfig {
     static final int DEFAULT_PRODUCER_BATCH_AUTOTUNE_LATENCY_LOW_MS = 0;
     /** По умолчанию охлаждение между решениями автонастройки, мс. */
     static final int DEFAULT_PRODUCER_BATCH_AUTOTUNE_COOLDOWN_MS = 30000;
-    /** Режим Avro по умолчанию. */
-    static final AvroMode DEFAULT_AVRO_MODE = AvroMode.GENERIC;
     /** Каталог локальных Avro-схем по умолчанию. */
     public static final String DEFAULT_AVRO_SCHEMA_DIR = "conf/avro";
 
@@ -270,20 +212,6 @@ public final class H2kConfig {
     private final String topicPattern;
     private final int topicMaxLength;
 
-    // ==== Payload/метаданные/rowkey ====
-    private final boolean includeRowKey;
-    /** Кодирование rowkey: "hex" | "base64" */
-    private final String rowkeyEncoding;
-    /** Предвычисленный флаг: true — rowkey сериализуется в Base64, false — в HEX. */
-    private final boolean rowkeyBase64;
-    private final boolean includeMeta;
-    private final boolean includeMetaWal;
-    private final boolean jsonSerializeNulls;
-
-    // ==== Формат/сериализация ====
-    private final PayloadFormat payloadFormat;
-    private final String serializerFactoryClass;
-    private final AvroMode avroMode;
     private final String avroSchemaDir;
     private final java.util.List<String> avroSchemaRegistryUrls;
     private final Map<String, String> avroSrAuth;
@@ -342,15 +270,6 @@ public final class H2kConfig {
         this.bootstrap = b.bootstrap;
         this.topicPattern = b.topicPattern;
         this.topicMaxLength = b.topicMaxLength;
-        this.includeRowKey = b.includeRowKey;
-        this.rowkeyEncoding = b.rowkeyEncoding;
-        this.rowkeyBase64 = b.rowkeyBase64;
-        this.includeMeta = b.includeMeta;
-        this.includeMetaWal = b.includeMetaWal;
-        this.jsonSerializeNulls = b.jsonSerializeNulls;
-        this.payloadFormat = b.payloadFormat;
-        this.serializerFactoryClass = b.serializerFactoryClass;
-        this.avroMode = b.avroMode;
         this.avroSchemaDir = b.avroSchemaDir;
         this.avroSchemaRegistryUrls = Collections.unmodifiableList(new java.util.ArrayList<>(b.avroSchemaRegistryUrls));
         this.avroSrAuth = Collections.unmodifiableMap(new HashMap<>(b.avroSrAuth));
@@ -412,24 +331,6 @@ public final class H2kConfig {
         private String topicPattern = PLACEHOLDER_TABLE;
         /** Ограничение длины имени топика (символов). */
         private int topicMaxLength = DEFAULT_TOPIC_MAX_LENGTH;
-        /** Включать ли rowkey в payload. */
-        private boolean includeRowKey = DEFAULT_INCLUDE_ROWKEY;
-        /** Способ кодирования rowkey: "hex" или "base64". */
-        private String rowkeyEncoding = ROWKEY_ENCODING_HEX;
-        /** Предвычисленный флаг режима Base64 для горячего пути. */
-        private boolean rowkeyBase64 = false;
-        /** Включать ли метаданные ячеек (cf/qualifier/ts). */
-        private boolean includeMeta = DEFAULT_INCLUDE_META;
-        /** Включать ли признак происхождения записи из WAL. */
-        private boolean includeMetaWal = DEFAULT_INCLUDE_META_WAL;
-        /** Сериализовать ли null‑значения в JSON. */
-        private boolean jsonSerializeNulls = DEFAULT_JSON_SERIALIZE_NULLS;
-        /** Формат сериализации payload. */
-        private PayloadFormat payloadFormat = PayloadFormat.JSON_EACH_ROW;
-        /** FQCN фабрики сериализаторов (SPI), если требуется явная подмена. */
-        private String serializerFactoryClass = null;
-        /** Режим Avro (локальные схемы / Schema Registry). */
-        private AvroMode avroMode = DEFAULT_AVRO_MODE;
         /** Каталог локальных Avro-схем. */
         private String avroSchemaDir = DEFAULT_AVRO_SCHEMA_DIR;
         /** Список URL Schema Registry. */
@@ -528,77 +429,11 @@ public final class H2kConfig {
          */
         public Builder topicMaxLength(int v) { this.topicMaxLength = v; return this; }
         /**
-         * Включать ли rowkey в формируемый payload.
-         * @param v true — включать; false — нет
-         * @return this
-         */
-        public Builder includeRowKey(boolean v) { this.includeRowKey = v; return this; }
-        /**
-         * Способ кодирования rowkey: "hex" (по умолчанию) или "base64".
-         * @param v "hex" | "base64"
-         * @return this
-         */
-        public Builder rowkeyEncoding(String v) {
-            this.rowkeyEncoding = v;
-            if (v != null && ROWKEY_ENCODING_BASE64.equalsIgnoreCase(v)) {
-                this.rowkeyBase64 = true;
-            } else if (v != null && ROWKEY_ENCODING_HEX.equalsIgnoreCase(v)) {
-                this.rowkeyBase64 = false;
-            }
-            return this;
-        }
-        /**
-         * Предвычисленный флаг: true — rowkey будет сериализован в Base64 (для горячего пути).
-         * Обычно вычисляется автоматически на основе rowkeyEncoding.
-         * @param v true для Base64, false для HEX
-         * @return this
-         */
-        public Builder rowkeyBase64(boolean v) { this.rowkeyBase64 = v; return this; }
-        /**
-         * Добавлять ли метаданные ячеек (семейство столбцов/квалайфер/ts) в payload.
-         * @param v флаг включения метаданных
-         * @return this
-         */
-        public Builder includeMeta(boolean v) { this.includeMeta = v; return this; }
-        /**
-         * Включать ли в метаданные отметку о происхождении из WAL (write‑ahead log).
-         * @param v флаг включения признака WAL
-         * @return this
-         */
-        public Builder includeMetaWal(boolean v) { this.includeMetaWal = v; return this; }
-        /**
-         * Сериализовать ли null‑значения в JSON (иначе поля с null опускаются).
-         * @param v флаг сериализации null
-         * @return this
-         */
-        public Builder jsonSerializeNulls(boolean v) { this.jsonSerializeNulls = v; return this; }
-        /**
          * Автоматически создавать недостающие топики при старте.
          * @param v true — создавать при необходимости
          * @return this
          */
         public Builder ensureTopics(boolean v) { this.ensureTopics = v; return this; }
-
-        /**
-         * Формат сериализации payload.
-         * @param v JSON_EACH_ROW | AVRO_BINARY | AVRO_JSON
-         * @return this
-         */
-        public Builder payloadFormat(PayloadFormat v) { this.payloadFormat = v; return this; }
-
-        /**
-         * FQCN фабрики сериализаторов (SPI).
-         * @param v полное имя класса фабрики
-         * @return this
-         */
-        public Builder serializerFactoryClass(String v) { this.serializerFactoryClass = v; return this; }
-
-        /**
-         * Режим Avro.
-         * @param v generic | confluent
-         * @return this
-         */
-        public Builder avroMode(AvroMode v) { this.avroMode = (v == null ? DEFAULT_AVRO_MODE : v); return this; }
 
         /**
          * Каталог локальных Avro-схем.
@@ -729,7 +564,7 @@ public final class H2kConfig {
         public TopicOptions topic() { return new TopicOptions(); }
 
         /** @return сгруппированные настройки payload и Avro. */
-        public PayloadOptions payload() { return new PayloadOptions(); }
+        public AvroOptions avro() { return new AvroOptions(); }
 
         /** @return сгруппированные настройки ensure/topics. */
         public EnsureOptions ensure() { return new EnsureOptions(); }
@@ -757,24 +592,11 @@ public final class H2kConfig {
         }
 
         /** Опции payload/Avro. */
-        public final class PayloadOptions {
-            public PayloadOptions includeRowKey(boolean v) { Builder.this.includeRowKey(v); return this; }
-            public PayloadOptions rowkeyEncoding(String v) {
-                Builder.this.rowkeyEncoding(v);
-                Builder.this.rowkeyBase64(H2kConfig.ROWKEY_ENCODING_BASE64.equalsIgnoreCase(v));
-                return this;
-            }
-            public PayloadOptions rowkeyBase64(boolean v) { Builder.this.rowkeyBase64(v); return this; }
-            public PayloadOptions includeMeta(boolean v) { Builder.this.includeMeta(v); return this; }
-            public PayloadOptions includeMetaWal(boolean v) { Builder.this.includeMetaWal(v); return this; }
-            public PayloadOptions jsonSerializeNulls(boolean v) { Builder.this.jsonSerializeNulls(v); return this; }
-            public PayloadOptions format(PayloadFormat v) { Builder.this.payloadFormat(v); return this; }
-            public PayloadOptions serializerFactory(String v) { Builder.this.serializerFactoryClass(v); return this; }
-            public PayloadOptions avroMode(AvroMode v) { Builder.this.avroMode(v); return this; }
-            public PayloadOptions avroSchemaDir(String dir) { Builder.this.avroSchemaDir(dir); return this; }
-            public PayloadOptions schemaRegistryUrls(java.util.List<String> urls) { Builder.this.avroSchemaRegistryUrls(urls); return this; }
-            public PayloadOptions schemaRegistryAuth(Map<String, String> auth) { Builder.this.avroSrAuth(auth); return this; }
-            public PayloadOptions avroProps(Map<String, String> props) { Builder.this.avroProps(props); return this; }
+        public final class AvroOptions {
+            public AvroOptions schemaDir(String dir) { Builder.this.avroSchemaDir(dir); return this; }
+            public AvroOptions schemaRegistryUrls(java.util.List<String> urls) { Builder.this.avroSchemaRegistryUrls(urls); return this; }
+            public AvroOptions schemaRegistryAuth(Map<String, String> auth) { Builder.this.avroSrAuth(auth); return this; }
+            public AvroOptions properties(Map<String, String> props) { Builder.this.avroProps(props); return this; }
             public Builder done() { return Builder.this; }
         }
 
@@ -898,26 +720,6 @@ public final class H2kConfig {
     public String getTopicPattern() { return topicPattern; }
     /** @return максимальная допустимая длина имени топика */
     public int getTopicMaxLength() { return topicMaxLength; }
-    /** @return флаг включения rowkey в payload */
-    public boolean isIncludeRowKey() { return includeRowKey; }
-    /** @return способ кодирования rowkey: "hex" или "base64" */
-    public String getRowkeyEncoding() { return rowkeyEncoding; }
-    /** @return true, если rowkey сериализуется в Base64; иначе false (HEX) */
-    public boolean isRowkeyBase64() { return rowkeyBase64; }
-
-    /** @return флаг включения метаданных ячеек в payload */
-    public boolean isIncludeMeta() { return includeMeta; }
-    /** @return флаг включения признака происхождения из WAL */
-    public boolean isIncludeMetaWal() { return includeMetaWal; }
-    /** @return сериализуются ли null‑значения в JSON */
-    public boolean isJsonSerializeNulls() { return jsonSerializeNulls; }
-
-    /** @return формат сериализации payload */
-    public PayloadFormat getPayloadFormat() { return payloadFormat; }
-    /** @return FQCN фабрики сериализаторов, если задана */
-    public String getSerializerFactoryClass() { return serializerFactoryClass; }
-    /** @return выбранный режим Avro */
-    public AvroMode getAvroMode() { return avroMode; }
     /** @return каталог локальных Avro-схем */
     public String getAvroSchemaDir() { return avroSchemaDir; }
     /** @return неизменяемый список URL Schema Registry */
@@ -1278,14 +1080,6 @@ public final class H2kConfig {
                 .append("bootstrap=").append(maskedBootstrap)
                 .append(", topicPattern='").append(topicPattern).append('\'')
                 .append(", topicMaxLength=").append(topicMaxLength)
-                .append(", includeRowKey=").append(includeRowKey)
-                .append(", rowkeyEncoding='").append(rowkeyEncoding).append('\'')
-                .append(", includeMeta=").append(includeMeta)
-                .append(", includeMetaWal=").append(includeMetaWal)
-                .append(", jsonSerializeNulls=").append(jsonSerializeNulls)
-                .append(", payloadFormat=").append(payloadFormat)
-                .append(", serializerFactoryClass=").append(serializerFactoryClass)
-                .append(", avroMode=").append(avroMode)
                 .append(", avroSchemaDir='").append(avroSchemaDir).append('\'')
                 .append(", avroSrUrls.size=").append(avroSchemaRegistryUrls.size())
                 .append(", ensureTopics=").append(ensureTopics)

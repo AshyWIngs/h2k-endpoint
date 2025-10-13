@@ -1,7 +1,8 @@
 package kz.qazmarka.h2k.payload.builder;
 
 import java.nio.charset.StandardCharsets;
-import java.util.Map;
+import java.nio.file.Paths;
+import java.util.Collections;
 
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.KeyValue;
@@ -17,8 +18,10 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import kz.qazmarka.h2k.config.H2kConfig;
 import kz.qazmarka.h2k.schema.decoder.Decoder;
-import kz.qazmarka.h2k.schema.registry.SchemaRegistry;
+import kz.qazmarka.h2k.schema.decoder.SimpleDecoder;
 import kz.qazmarka.h2k.util.RowKeySlice;
+import io.confluent.kafka.schemaregistry.client.MockSchemaRegistryClient;
+import kz.qazmarka.h2k.payload.serializer.avro.SchemaRegistryClientFactory;
 
 /**
  * Юнит‑тесты для расчёта начальной ёмкости корневой LinkedHashMap
@@ -52,8 +55,21 @@ class PayloadBuilderTest {
 
     private static final int MAX_HASH_CAP = 1 << 30;
 
+    private static final SchemaRegistryClientFactory TEST_SR_FACTORY =
+            (urls, props, capacity) -> new MockSchemaRegistryClient();
+
     private static int compute(int estimated, int hint) {
         return kz.qazmarka.h2k.util.Maps.computeInitialCapacity(estimated, hint);
+    }
+
+    private static H2kConfig configWithSr() {
+        String schemaDir = Paths.get("src", "test", "resources", "avro").toAbsolutePath().toString();
+        return new H2kConfig.Builder("test-bootstrap")
+                .avro()
+                .schemaDir(schemaDir)
+                .schemaRegistryUrls(Collections.singletonList("http://mock"))
+                .done()
+                .build();
     }
 
     /**
@@ -275,173 +291,76 @@ class PayloadBuilderTest {
         }
     }
 
-    // ------------------------------------------------------------
-    // Интеграционные проверки PayloadBuilder: PK в Value и пропуск null
-    // ------------------------------------------------------------
-    @org.junit.jupiter.api.Nested
-    @org.junit.jupiter.api.DisplayName("PayloadBuilder PK-инъекция и поведение сериализации")
-    class IntegrationPkInjection {
+    @Test
+    @DisplayName("PK-поля попадают в Value, null-значения ячеек пропускаются")
+    void pkFieldsAreInjectedAndNullsSkipped() {
+        PayloadBuilder builder = new PayloadBuilder(new StubDecoder(), configWithSr(), TEST_SR_FACTORY);
 
-        final TableName table = TableName.valueOf("TBL_JTI_TRACE_CIS_HISTORY");
+        java.util.List<Cell> cells = new java.util.ArrayList<>();
+        byte[] row = Bytes.toBytes("rk-1");
+        cells.add(new KeyValue(row, Bytes.toBytes("d"), Bytes.toBytes("value"), "VAL".getBytes(StandardCharsets.UTF_8)));
 
-        /** Минимальный стаб SchemaRegistry: знает типы PK и пользовательского поля id. */
-        final class StubRegistry implements SchemaRegistry {
-            @Override public void refresh() { /* no-op */ }
-            @Override public String columnType(TableName t, String q) {
-                if ("c".equals(q))   return "VARCHAR";
-                if ("t".equals(q))   return "UNSIGNED_TINYINT";
-                if ("opd".equals(q)) return "TIMESTAMP";
-                if ("id".equals(q))  return "VARCHAR"; // пользовательское поле должно попасть в payload
-                return null;
-            }
-            @Override public String[] primaryKeyColumns(TableName t) { return new String[] {"c","t","opd"}; }
-        }
-
-        /**
-         * Минимальный стаб Decoder для теста: инъекция PK и декодирование только поля "id".
-         * Остальные методы — no-op/минимум для прохождения сценария.
-         */
-        final class StubDecoder implements Decoder {
-            @Override
-            public Object decode(TableName table, String qualifier, byte[] bytes) {
-                if (bytes == null) return null;
-                // Не завязываемся на точное имя qualifier: декодируем любую непустую ячейку как строку.
-                return new String(bytes, StandardCharsets.UTF_8);
-            }
-            @Override
-            public void decodeRowKey(TableName table, RowKeySlice slice, int pkCount, java.util.Map<String,Object> out) {
-                out.put("c", "KZ");
-                out.put("t", 3);
-                out.put("opd", 1_700_000_000_000L);
-            }
-        }
-
-        @org.junit.jupiter.api.Test
-        @org.junit.jupiter.api.DisplayName("PK-поля попадают в Value, null-значения ячеек пропускаются")
-        void pkFieldsAreInjectedAndNullsSkipped() {
-            PayloadBuilder builder = new PayloadBuilder(new StubDecoder(),
-                    new H2kConfig.Builder("test-bootstrap").build());
-
-            // Минимальный набор ячеек: одна непустая и одна пропущенная (null не добавляем)
-            java.util.List<Cell> cells = new java.util.ArrayList<>();
-            byte[] row = new byte[]{1};
-            cells.add(new KeyValue(row, Bytes.toBytes("d"), Bytes.toBytes("ID"), "ABC".getBytes(StandardCharsets.UTF_8)));
-
-            java.util.Map<String,Object> payload = builder.buildRowPayload(table, cells, RowKeySlice.whole(row), 0L, 0L);
-            Object idVal = payload.containsKey("id") ? payload.get("id") : payload.get("ID");
-
-            // Проверяем наличие PK-полей и пользовательского поля, а также отсутствие "pn"
-            org.junit.jupiter.api.Assertions.assertAll(
-                    () -> org.junit.jupiter.api.Assertions.assertEquals("KZ", payload.get("c"), "ожидается PK c"),
-                    () -> org.junit.jupiter.api.Assertions.assertEquals(3, ((Number) payload.get("t")).intValue(), "ожидается PK t"),
-                    () -> org.junit.jupiter.api.Assertions.assertEquals(1_700_000_000_000L, ((Number) payload.get("opd")).longValue(), "ожидается PK opd"),
-                    () -> org.junit.jupiter.api.Assertions.assertEquals("ABC", idVal, "ожидается поле id"),
-                    () -> org.junit.jupiter.api.Assertions.assertFalse(payload.containsKey("pn"), "null-значения не сериализуются")
-            );
-        }
-    }
-
-    /**
-     * Простая сериализация JSONEachRow для целей теста (без внешних зависимостей).
-     * Поля с null пропускаются; строки экранируются по минимуму (кавычки и обратный слэш).
-     * Порядок полей сохраняется согласно порядку итерации Map.
-     */
-    private static String toJsonEachRow(java.util.Map<String, Object> payload) {
-        StringBuilder sb = new StringBuilder(64).append('{');
-        boolean first = true;
-        for (java.util.Map.Entry<String, Object> e : payload.entrySet()) {
-            Object v = e.getValue();
-            if (v == null) continue; // пропустить null-поля
-            if (!first) sb.append(',');
-            first = false;
-            // ключ всегда строка
-            sb.append('"').append(escapeJson(e.getKey())).append('"').append(':');
-            if (v instanceof CharSequence) {
-                sb.append('"').append(escapeJson(v.toString())).append('"');
-            } else {
-                sb.append(String.valueOf(v));
-            }
-        }
-        return sb.append('}').toString();
-    }
-
-    /** Минимальное экранирование строк для JSON: кавычка и обратный слэш. */
-    private static String escapeJson(String s) {
-        StringBuilder r = new StringBuilder(s.length());
-        for (int i = 0; i < s.length(); i++) {
-            char ch = s.charAt(i);
-            if (ch == '"' || ch == '\\') r.append('\\');
-            r.append(ch);
-        }
-        return r.toString();
-    }
-
-    @org.junit.jupiter.api.Test
-    @org.junit.jupiter.api.DisplayName("JSONEachRow: PK присутствуют как обычные поля, null-поля отсутствуют")
-    void jsonEachRowContainsPkAndNoNulls() {
-        // Используем уже готовую интеграцию: строим payload, затем сериализуем локальным JSON-формером.
-        IntegrationPkInjection ctx = new IntegrationPkInjection();
-        IntegrationPkInjection.StubDecoder decoder = ctx.new StubDecoder();
-        kz.qazmarka.h2k.config.H2kConfig cfg =
-                new kz.qazmarka.h2k.config.H2kConfig.Builder("test-bootstrap").build();
-        PayloadBuilder builder = new PayloadBuilder(decoder, cfg);
-
-        java.util.List<org.apache.hadoop.hbase.Cell> cells = new java.util.ArrayList<>();
-        byte[] row = new byte[]{1};
-        cells.add(new org.apache.hadoop.hbase.KeyValue(row,
-                org.apache.hadoop.hbase.util.Bytes.toBytes("d"),
-                org.apache.hadoop.hbase.util.Bytes.toBytes("ID"),
-                "ABC".getBytes(java.nio.charset.StandardCharsets.UTF_8)));
-        // Поле со значением null намеренно не добавляем в список ячеек
-
-        java.util.Map<String, Object> payload =
-                builder.buildRowPayload(org.apache.hadoop.hbase.TableName.valueOf("TBL_JTI_TRACE_CIS_HISTORY"),
-                        cells, kz.qazmarka.h2k.util.RowKeySlice.whole(row), 0L, 0L);
-
-        String json = toJsonEachRow(payload);
+        org.apache.avro.generic.GenericData.Record avroRecord =
+                builder.buildRowPayload(TableName.valueOf("T_AVRO"), cells, RowKeySlice.whole(row), 0L, 0L);
+        Object idVal = avroRecord.get("id");
 
         org.junit.jupiter.api.Assertions.assertAll(
-                () -> org.junit.jupiter.api.Assertions.assertTrue(json.contains("\"c\":\"KZ\""), "ожидается PK c"),
-                () -> org.junit.jupiter.api.Assertions.assertTrue(json.contains("\"t\":3"), "ожидается PK t"),
-                () -> org.junit.jupiter.api.Assertions.assertTrue(json.contains("\"opd\":1700000000000"), "ожидается PK opd"),
-                () -> org.junit.jupiter.api.Assertions.assertTrue(json.contains("\"id\":\"ABC\"") || json.contains("\"ID\":\"ABC\""), "ожидается пользовательское поле id"),
-                () -> org.junit.jupiter.api.Assertions.assertFalse(json.contains(":null"), "null-поля не сериализуются")
+                () -> org.junit.jupiter.api.Assertions.assertEquals("rk-1", idVal, "ожидается поле id"),
+                () -> org.junit.jupiter.api.Assertions.assertEquals("VAL", String.valueOf(avroRecord.get("value"))),
+                () -> org.junit.jupiter.api.Assertions.assertNull(avroRecord.getSchema().getField("pn"), "лишние поля отсутствуют")
         );
-    }
-
-    /**
-     * Технический тест для IDE: даёт явную ссылку на вложенный класс, чтобы
-     * инспекция "is never used" не срабатывала. На выполнение и логику тестов не влияет.
-     */
-    @Test
-    @DisplayName("Tech: reference nested class to satisfy IDE analysis")
-    void referenceNestedClassForIde() {
-        // Явная ссылка на тип вложенного класса — этого достаточно для большинства инспекций.
-        Class<?> ignored = IntegrationPkInjection.class;
-        org.junit.jupiter.api.Assertions.assertNotNull(ignored);
-        Class<?> ignoredStub = IntegrationPkInjection.StubRegistry.class;
-        org.junit.jupiter.api.Assertions.assertNotNull(ignoredStub);
     }
 
     @Test
     @DisplayName("Сборка payload не зависит от повторного использования буфера ячеек")
     void payloadIndependentFromRowBufferReuse() {
         Decoder decoder = (table, qualifier, value) -> value == null ? null : new String(value, StandardCharsets.UTF_8);
-        H2kConfig cfg = new H2kConfig.Builder("test-bootstrap").build();
-        PayloadBuilder builder = new PayloadBuilder(decoder, cfg);
+        H2kConfig cfg = configWithSr();
+        PayloadBuilder builder = new PayloadBuilder(decoder, cfg, TEST_SR_FACTORY);
 
         java.util.List<Cell> cells = new java.util.ArrayList<>();
-        byte[] row = Bytes.toBytes("rk");
+        byte[] row = Bytes.toBytes("rk-2");
         cells.add(new KeyValue(row,
                 Bytes.toBytes("d"),
-                Bytes.toBytes("name"),
+                Bytes.toBytes("value"),
                 Bytes.toBytes("value")));
 
-        Map<String, Object> payload = builder.buildRowPayload(TableName.valueOf("T"),
+        org.apache.avro.generic.GenericData.Record avroRecord = builder.buildRowPayload(TableName.valueOf("T_AVRO"),
                 cells, RowKeySlice.whole(row), 7L, 9L);
 
         cells.clear();
 
-        org.junit.jupiter.api.Assertions.assertEquals("value", payload.get("name"));
+        org.junit.jupiter.api.Assertions.assertEquals("value", String.valueOf(avroRecord.get("value")));
+    }
+
+    @Test
+    @DisplayName("describeSerializer() отражает Avro-only режим без поля avro.mode")
+    void describeSerializerOutputsConfluentSummary() {
+        H2kConfig cfg = configWithSr();
+        PayloadBuilder builder = new PayloadBuilder(SimpleDecoder.INSTANCE, cfg, TEST_SR_FACTORY);
+
+        String info = builder.describeSerializer();
+        assertTrue(info.contains("payload.format=AVRO_BINARY"), info);
+        assertTrue(info.contains("schema.registry.urls=[http://mock]"), info);
+        assertTrue(info.contains("schema.registry.auth=disabled"), info);
+        assertEquals(-1, info.indexOf("avro.mode"), "строка не должна содержать legacy-ключ avro.mode");
+    }
+
+    private static final class StubDecoder implements Decoder {
+        @Override
+        public Object decode(TableName table, String qualifier, byte[] bytes) {
+            if (bytes == null) {
+                return null;
+            }
+            return new String(bytes, StandardCharsets.UTF_8);
+        }
+
+        @Override
+        public void decodeRowKey(TableName table,
+                                 RowKeySlice slice,
+                                 int pkCount,
+                                 java.util.Map<String, Object> out) {
+            out.put("id", new String(slice.toByteArray(), StandardCharsets.UTF_8));
+        }
     }
 }

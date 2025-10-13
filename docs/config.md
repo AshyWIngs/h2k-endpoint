@@ -10,8 +10,6 @@
 - [Обязательные и базовые ключи](#обязательные-и-базовые-ключи)
 - [Топики Kafka](#топики-kafka)
 - [CF (Column Families)](#cf-column-families)
-- [Декодирование и схема Phoenix](#декодирование-и-схема-phoenix)
-- [Метаполя и формат rowkey](#метаполя-и-формат-rowkey)
 - [Avro](#avro)
 - [Подсказки ёмкости](#подсказки-ёмкости)
 - [Соль rowkey (Phoenix)](#соль-rowkey-phoenix)
@@ -51,44 +49,19 @@
 
 ---
 
-## Декодирование и схема Phoenix
-
-| Ключ | Назначение | Значения / Требования | Пример |
-|---|---|---|---|
-| **`h2k.decode.mode`** | Режим декодирования значений | `simple` \| `phoenix-avro` \| `json-phoenix` (legacy) | `phoenix-avro` |
-| **`h2k.schema.path`** | Путь к `schema.json` (Phoenix) | Необязательный фолбэк для `phoenix-avro`; обязателен для `json-phoenix` | `/opt/hbase-default-current/conf/schema.json` |
-| **`h2k.json.serialize.nulls`** | Сериализовать `null` в JSON | `true`/`false` (дефолт: `false`) | `false` |
-
-> `phoenix-avro` ожидает, что локальные `.avsc` содержат атрибуты `h2k.phoenixType` по колонкам и массив `h2k.pk`.
-
----
-
-## Метаполя и формат rowkey
-
-| Ключ | Назначение | Значения / Дефолт | Пример |
-|---|---|---|---|
-| **`h2k.payload.include.meta`** | Добавлять базовые метаполя | `true`/`false` (дефолт: `false`) | `false` |
-| **`h2k.payload.include.meta.wal`** | Добавлять WAL‑метаполя | `true`/`false` (дефолт: `false`) | `false` |
-| **`h2k.payload.include.rowkey`** | Включать `_rowkey` в payload | `true`/`false` (дефолт: `false`) | `false` |
-| **`h2k.rowkey.encoding`** | Кодировка `_rowkey` | `BASE64` \| `HEX` | `BASE64` |
-
----
-
 ## Avro
 
 | Ключ | Назначение | Значения / Дефолт | Примечание |
 |---|---|---|---|
-| **`h2k.payload.format`** | Формат payload | `json-each-row` \| `avro-binary` \| `avro-json` (дефолт: `json-each-row`) | Для Avro обязательно задать дополнительные ключи ниже |
-| **`h2k.avro.mode`** | Режим Avro | `generic` (дефолт) \| `confluent` | `generic` — локальные `.avsc`; `confluent` — Schema Registry |
-| **`h2k.avro.schema.dir`** | Каталог `.avsc` | Строка (дефолт: `conf/avro`) | Используется в режиме `generic` |
-| **`h2k.avro.sr.urls`** | URL Schema Registry (CSV) | `http://host1:8081[,http://hostN:8081]` | Для совместимости поддерживаются алиасы `h2k.avro.schema.registry` и `h2k.avro.schema.registry.url` |
-| **`h2k.avro.sr.auth.basic.username/password`** | Basic‑авторизация Schema Registry | Строки | Используются при регистрации схем |
-| **`h2k.avro.subject.*`** | Настройка subject | `h2k.avro.subject.strategy` (`qualifier`/`table`/`table-lower`/`table-upper`), `h2k.avro.subject.prefix`, `h2k.avro.subject.suffix` | По умолчанию используется `table` (namespace учитывается, если он не `default`) |
-| **`h2k.avro.props.client.cache.capacity`** | Размер кэша `CachedSchemaRegistryClient` | Положительное целое (дефолт: `1000`) | Управляет identity-map Schema Registry клиента |
+| **`h2k.avro.schema.dir`** | Каталог `.avsc` | Строка (дефолт: `conf/avro`) | Используется для загрузки схем и fallback-кэша |
+| **`h2k.avro.sr.urls`** | URL Schema Registry (CSV) | `http://host1:8081[,http://hostN:8081]` | Обязательный параметр |
+| **`h2k.avro.sr.auth.basic.username/password`** | Basic-auth к Schema Registry | Строки | Значения маскируются в логах |
+| **`h2k.avro.props.subject.strategy`** | Стратегия subject | `table` (дефолт) \| `qualifier` \| `table-lower` \| `table-upper` | `table` -> `namespace:table` (если namespace не `default`) |
+| **`h2k.avro.props.subject.prefix` / `suffix`** | Префикс/суффикс subject | Строки | Удобно для разделения окружений (`-value`, `dev-` и т.п.) |
+| **`h2k.avro.props.client.cache.capacity`** | Размер кэша `CachedSchemaRegistryClient` | Положительное целое (дефолт: `1000`) | Управляет identity-map SR клиента |
 | **`h2k.avro.*`** | Доп. свойства Avro | Любые ключи, не перечисленные выше | Сохраняются в `H2kConfig#getAvroProps()` для пользовательских фабрик |
 
 > Aliases `h2k.avro.schema.registry` и `h2k.avro.schema.registry.url` обрабатываются как `h2k.avro.sr.urls`.
-> В режиме `h2k.avro.mode=confluent` поддерживается только `h2k.payload.format=avro-binary`.
 
 **Подробнее:** см. `docs/avro.md` (примеры конфигов и интеграция с Schema Registry).
 
@@ -156,13 +129,8 @@
 ```ruby
 'h2k.kafka.bootstrap.servers'   => '10.254.3.111:9092,10.254.3.112:9092,10.254.3.113:9092',
 'h2k.topic.pattern'             => '${table}',
-'h2k.decode.mode'              => 'phoenix-avro',
-'h2k.schema.path'              => '/opt/hbase-default-current/conf/schema.json', # опциональный фолбэк
-'h2k.json.serialize.nulls'     => 'false',
-'h2k.payload.include.meta'     => 'false',
-'h2k.payload.include.meta.wal' => 'false',
-'h2k.payload.include.rowkey'   => 'false',
-'h2k.rowkey.encoding'          => 'BASE64',
+'h2k.avro.sr.urls'              => 'http://schema-registry-1:8081,http://schema-registry-2:8081',
+'h2k.avro.schema.dir'           => '/opt/h2k/conf/avro',
 'h2k.salt.map'                 => 'TBL_JTI_TRACE_CIS_HISTORY=1',
 'h2k.capacity.hints'           => 'TBL_JTI_TRACE_CIS_HISTORY=32',
 'h2k.ensure.topics'            => 'true',
