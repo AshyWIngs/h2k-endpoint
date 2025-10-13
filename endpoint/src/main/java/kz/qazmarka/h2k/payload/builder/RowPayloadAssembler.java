@@ -279,7 +279,7 @@ final class RowPayloadAssembler {
         private final int deleteIndex;
         private final int saltBytes;
         private final WalMetadataPlan walMetadata;
-        private final ThreadLocal<PkCollector> collectors;
+        private final PkCollector collector;
 
         TablePlan(Schema schema,
                   Map<String, FieldPlan> fields,
@@ -295,7 +295,7 @@ final class RowPayloadAssembler {
             this.deleteIndex = deleteIndex;
             this.saltBytes = saltBytes;
             this.walMetadata = walMetadata;
-            this.collectors = ThreadLocal.withInitial(() -> new PkCollector(this));
+            this.collector = new PkCollector(this);
         }
 
         GenericData.Record newRecord() {
@@ -318,12 +318,13 @@ final class RowPayloadAssembler {
         }
 
         PkCollector borrowCollector() {
-            return collectors.get();
+            return collector;
         }
 
         void releaseCollector(PkCollector collector) {
-            collector.unbind();
-            collectors.remove();
+            if (collector != null) {
+                collector.unbind();
+            }
         }
 
         void verifyPk(TableName table, GenericData.Record avroRecord) {
@@ -491,13 +492,13 @@ final class RowPayloadAssembler {
     /** Минимальный потокобезопасный кэш qualifier → String. */
     private static final class QualifierCache {
         private final ConcurrentHashMap<AbstractKey, String> cache = new ConcurrentHashMap<>(64);
-        private final ThreadLocal<LookupKey> lookup = ThreadLocal.withInitial(LookupKey::new);
+        private final LookupKey lookup = new LookupKey();
 
-        String intern(byte[] array, int offset, int length) {
+        synchronized String intern(byte[] array, int offset, int length) {
             if (length == 0) {
                 return "";
             }
-            LookupKey key = lookup.get();
+            LookupKey key = lookup;
             key.set(array, offset, length);
             try {
                 String cached = cache.get(key);
@@ -510,8 +511,6 @@ final class RowPayloadAssembler {
                 return race != null ? race : created;
             } finally {
                 key.clear();
-                lookup.remove();
-                lookup.set(key);
             }
         }
 

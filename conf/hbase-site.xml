@@ -210,35 +210,10 @@
     <value>false</value>
   </property>
 
-  <!--
-    Режим декодирования значений:
-      simple        — отдаём Base64/строки без схемы (минимальные накладные)
-      json-phoenix  — используем schema.json для строгого декодирования типов Phoenix:
-                      - структура: { "TABLE": { "pk": [...], "columns": { "col": "TYPE", ... } }, ... }
-                      - PK всегда инъектируется в payload из rowkey (имена — как в schema.json)
-                      - TIMESTAMP сериализуется как epoch‑millis: поле получает суффикс *_ms
-                      - ARRAY типов возвращается как JSON‑массив (List)
-  -->
+  <!-- Единственный поддерживаемый режим — phoenix-avro (чтение метаданных из .avsc) -->
   <property>
     <name>h2k.decode.mode</name>
     <value>phoenix-avro</value>
-  </property>
-
-  <!--
-    Путь к файлу схемы (schema.json) для режима json‑phoenix и в качестве фолбэка для phoenix-avro.
-    Ожидается структура:
-      {
-        "TBL_JTI_TRACE_CIS_HISTORY": {
-          "pk": ["c","t","opd"],                 // порядок соответствует разбору rowkey
-          "columns": { "c":"VARCHAR", "t":"UNSIGNED_TINYINT", "opd":"TIMESTAMP", ... }
-        },
-        ...
-      }
-    Примечание: PK всегда добавляется в payload; TIMESTAMP пишется с суффиксом *_ms (epoch‑millis).
-  -->
-  <property>
-    <name>h2k.schema.path</name>
-    <value>/opt/hbase-default-current/conf/schema.json</value>
   </property>
 
   <!--

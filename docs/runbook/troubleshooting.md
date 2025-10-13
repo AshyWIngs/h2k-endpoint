@@ -69,8 +69,7 @@ log4j.logger.org.apache.phoenix=WARN
 ## Проверка конфигурации
 - Убедиться, что задан h2k.kafka.bootstrap.servers.
 - Проверить корректность h2k.topic.pattern и свойств `"h2k.cf.list"` в Avro-схемах (несуществующие CF игнорируются).
-- Для decode.mode=phoenix-avro рекомендуется указать h2k.schema.path как фолбэк; для json-phoenix этот ключ обязателен.
-- При несоответствии типов в schema.json `PhoenixColumnTypeRegistry` логирует WARN и использует VARCHAR, а `ValueCodecPhoenix` бросает `IllegalStateException` при декодировании фиксированных типов.
+- Все таблицы должны иметь актуальные `.avsc` с `h2k.pk`, `h2k.phoenixType`, `h2k.saltBytes`, `h2k.capacityHint`.
 
 ## Частые проблемы
 
@@ -85,14 +84,13 @@ log4j.logger.org.apache.phoenix=WARN
 - ValueCodecPhoenix проверяет фиксированные типы (например, UNSIGNED_INT = 4 байта).
 - Если длина не совпадает — выбрасывается IllegalStateException с сообщением «ожидалось N байт».
 - При неизвестном типе смотрите WARN от PhoenixColumnTypeRegistry (тип будет принят как VARCHAR).
-- Для phoenix-avro проверить `.avsc` (атрибуты `h2k.phoenixType`/`h2k.pk`) и, при необходимости, schema.json для фолбэка.
+- Для phoenix-avro проверить `.avsc` (атрибуты `h2k.phoenixType`/`h2k.pk`) .
 - Для проверки используемых `.avsc` включите DEBUG логгер `kz.qazmarka.h2k.schema.registry.avro.phoenix.AvroPhoenixSchemaRegistry` —
   он выводит путь к файлу, PK, соль и `capacityHint`.
 
-### Ошибки при формировании JSON
+### Ошибки при формировании payload
 - Null в обязательных параметрах (TableName/qualifier) → NullPointerException.
-- При decode.mode=json-phoenix без schema.path → ошибка конфигурации.
-- При decode.mode=phoenix-avro без `.avsc` и без schema.json → декодер не сможет инициализироваться.
+- Отсутствует `.avsc` для таблицы → AvroPhoenixSchemaRegistry не сможет инициализироваться (WARN + пропуск данных).
 - При некорректной кодировке rowkey (BASE64/HEX) → ошибка парсинга RowKeySlice.
 
 ### Ошибки Kafka Producer
@@ -122,7 +120,7 @@ log4j.logger.org.apache.phoenix=WARN
 
 ## Связанные документы
 - [Конфигурация (все ключи)](config.md)
-- [Phoenix и schema.json](phoenix.md)
+- [Phoenix метаданные](phoenix.md)
 - [Профили peer](peer-profiles.md)
 - [HBase shell / операции](hbase.md)
 - [Операции эксплуатации](operations.md)

@@ -43,6 +43,7 @@ add_peer 'h2k_reliable',
       # Диагностика BatchSender (читается при старте)
       'h2k.producer.batch.counters.enabled' => 'false',
       'h2k.producer.batch.debug.on.failure' => 'false',
+      'h2k.producer.batch.autotune.enabled' => 'true',
 
       # --- Профиль RELIABLE: приоритет — надёжность и порядок ---
       'h2k.producer.enable.idempotence'     => 'true',

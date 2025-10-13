@@ -5,10 +5,8 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.atomic.AtomicReference;
 
 import org.apache.avro.Schema;
 import org.apache.avro.Schema.Field;
@@ -38,28 +36,16 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
     private static final ObjectMapper PK_MAPPER = new ObjectMapper();
 
     private final AvroSchemaRegistry avroRegistry;
-    private final SchemaRegistry fallback;
     private final ConcurrentMap<String, TableMetadata> cache = new ConcurrentHashMap<>();
-    private final Set<String> missingSchemaWarned =
-            Collections.newSetFromMap(new ConcurrentHashMap<>());
 
     /**
      * @param avroRegistry локальный реестр Avro-схем (обязательный)
      */
     public AvroPhoenixSchemaRegistry(AvroSchemaRegistry avroRegistry) {
-        this(avroRegistry, null);
-    }
-
-    /**
-     * @param avroRegistry локальный реестр Avro-схем
-     * @param fallback     реестр, к которому выполняется фолбэк (JSON/legacy); может быть {@code null}
-     */
-    public AvroPhoenixSchemaRegistry(AvroSchemaRegistry avroRegistry, SchemaRegistry fallback) {
         if (avroRegistry == null) {
             throw new NullPointerException("avroRegistry == null");
         }
         this.avroRegistry = avroRegistry;
-        this.fallback = fallback == null ? SchemaRegistry.NOOP : fallback;
     }
 
     @Override
@@ -70,19 +56,19 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
     }
 
     @Override
-    /** Возвращает массив имён PK, заданный в Avro-схеме (или во fallback-реестре). */
+    /** Возвращает массив имён PK, заданный в Avro-схеме. */
     public String[] primaryKeyColumns(TableName table) {
         return metadataFor(table).primaryKey();
     }
 
     @Override
-    /** Возвращает количество байт соли rowkey, указанное в Avro-схеме или во fallback. */
+    /** Возвращает количество байт соли rowkey, указанное в Avro-схеме. */
     public Integer saltBytes(TableName table) {
         return metadataFor(table).saltBytes();
     }
 
     @Override
-    /** Возвращает подсказку ёмкости JSON, считанную из Avro-схемы или fallback. */
+    /** Возвращает подсказку ёмкости JSON, считанную из Avro-схемы. */
     public Integer capacityHint(TableName table) {
         return metadataFor(table).capacityHint();
     }
@@ -92,35 +78,10 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
         return metadataFor(table).columnFamilies();
     }
 
-    /** Читает и кеширует метаданные таблицы, используя локальный .avsc и fallback. */
+    /** Читает и кеширует метаданные таблицы, используя локальный .avsc. */
     private TableMetadata metadataFor(TableName table) {
         String key = table.getNameAsString().toUpperCase(Locale.ROOT);
-        return cache.computeIfAbsent(key, k -> loadMetadataSafely(table, k));
-    }
-
-    /** Устойчиво загружает метаданные и выполняет фолбэк при ошибке. */
-    private TableMetadata loadMetadataSafely(TableName table, String cacheKey) {
-        try {
-            return loadMetadata(table);
-        } catch (RuntimeException ex) {
-            if (fallback == SchemaRegistry.NOOP) {
-                throw ex;
-            }
-            warnSchemaFallback(cacheKey, table, ex);
-            return TableMetadata.fallbackOnly(table, fallback);
-        }
-    }
-
-    private void warnSchemaFallback(String cacheKey, TableName table, RuntimeException ex) {
-        if (missingSchemaWarned.add(cacheKey)) {
-            if (LOG.isWarnEnabled()) {
-                LOG.warn("Avro-схема Phoenix не загружена для таблицы {} — используем schema.json как фолбэк: {}",
-                        table.getNameAsString(), ex.toString());
-            }
-            if (LOG.isDebugEnabled()) {
-                LOG.debug("Трассировка ошибки Avro Phoenix схемы {}", table.getNameAsString(), ex);
-            }
-        }
+        return cache.computeIfAbsent(key, k -> loadMetadata(table));
     }
 
     /** Загружает Avro-схему и извлекает из неё типы, PK, соль и подсказку ёмкости. */
@@ -158,7 +119,7 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
                     cfText,
                     avroRegistry.cacheSize());
         }
-        return new TableMetadata(table, types, pk, fallback, salt, capacity, cfFamilies);
+        return new TableMetadata(types, pk, salt, capacity, cfFamilies);
     }
 
     private String[] readColumnFamilies(Schema schema, TableName table) {
@@ -475,47 +436,26 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
     private static final class TableMetadata {
         private final Map<String, String> columnTypes;
         private final String[] pk;
-        private final SchemaRegistry fallback;
-        private final PhoenixTableMetadataProvider fallbackMeta;
-        private final TableName table;
         private final Integer saltBytes;
         private final Integer capacityHint;
         private final String[] cfFamilies;
-        private final AtomicReference<String[]> fallbackPk = new AtomicReference<>();
 
-        TableMetadata(TableName table,
-                      Map<String, String> columnTypes,
+        TableMetadata(Map<String, String> columnTypes,
                       String[] pk,
-                      SchemaRegistry fallback,
                       Integer saltBytes,
                       Integer capacityHint,
                       String[] cfFamilies) {
-            this.table = table;
             if (columnTypes.isEmpty()) {
                 this.columnTypes = Collections.emptyMap();
             } else {
                 this.columnTypes = Collections.unmodifiableMap(new HashMap<>(columnTypes));
             }
             this.pk = normalizePk(pk);
-            this.fallback = fallback;
-            this.fallbackMeta = (fallback instanceof PhoenixTableMetadataProvider)
-                    ? (PhoenixTableMetadataProvider) fallback
-                    : PhoenixTableMetadataProvider.NOOP;
             this.saltBytes = saltBytes;
             this.capacityHint = capacityHint;
             this.cfFamilies = (cfFamilies == null || cfFamilies.length == 0)
                     ? SchemaRegistry.EMPTY
                     : cfFamilies.clone();
-        }
-
-        static TableMetadata fallbackOnly(TableName table, SchemaRegistry fallback) {
-            return new TableMetadata(table,
-                    Collections.<String, String>emptyMap(),
-                    SchemaRegistry.EMPTY,
-                    fallback,
-                    null,
-                    null,
-                    SchemaRegistry.EMPTY);
         }
 
         String columnType(String name) {
@@ -534,23 +474,14 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
             if (type != null) {
                 return type;
             }
-            return fallback.columnType(table, name);
+            return null;
         }
 
         String[] primaryKey() {
             if (pk.length > 0) {
                 return pk.clone();
             }
-            String[] cached = fallbackPk.get();
-            if (cached == null) {
-                String[] resolved = copyOrEmpty(fallback.primaryKeyColumns(table));
-                if (fallbackPk.compareAndSet(null, resolved)) {
-                    cached = resolved;
-                } else {
-                    cached = fallbackPk.get();
-                }
-            }
-            return cached.length == 0 ? SchemaRegistry.EMPTY : cached.clone();
+            return SchemaRegistry.EMPTY;
         }
 
         private static String[] normalizePk(String[] pk) {
@@ -579,27 +510,12 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
             return res;
         }
 
-        private static String[] copyOrEmpty(String[] src) {
-            if (src == null || src.length == 0) {
-                return SchemaRegistry.EMPTY;
-            }
-            String[] copy = new String[src.length];
-            System.arraycopy(src, 0, copy, 0, src.length);
-            return copy;
-        }
-
         Integer saltBytes() {
-            if (saltBytes != null) {
-                return saltBytes;
-            }
-            return fallbackMeta.saltBytes(table);
+            return saltBytes;
         }
 
         Integer capacityHint() {
-            if (capacityHint != null) {
-                return capacityHint;
-            }
-            return fallbackMeta.capacityHint(table);
+            return capacityHint;
         }
 
         String[] columnFamilies() {
@@ -608,13 +524,7 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
                 System.arraycopy(cfFamilies, 0, copy, 0, cfFamilies.length);
                 return copy;
             }
-            String[] fallbackFamilies = fallbackMeta.columnFamilies(table);
-            if (fallbackFamilies == null || fallbackFamilies.length == 0) {
-                return SchemaRegistry.EMPTY;
-            }
-            String[] copy = new String[fallbackFamilies.length];
-            System.arraycopy(fallbackFamilies, 0, copy, 0, fallbackFamilies.length);
-            return copy;
+            return SchemaRegistry.EMPTY;
         }
     }
 }

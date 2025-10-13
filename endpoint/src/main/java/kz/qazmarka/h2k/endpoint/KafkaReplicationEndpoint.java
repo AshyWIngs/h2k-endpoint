@@ -94,13 +94,17 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
 
         // immut-конфиг, билдер и энсюрер
         this.h2k = H2kConfig.from(cfg, bootstrap, tableMetadataProvider);
-        this.batchTuner = new BatchSenderTuner(
-                h2k.isProducerBatchAutotuneEnabled(),
-                h2k.getProducerBatchAutotuneMinAwait(),
-                h2k.getProducerBatchAutotuneMaxAwait(),
-                h2k.getProducerBatchAutotuneLatencyHighMs(),
-                h2k.getProducerBatchAutotuneLatencyLowMs(),
-                h2k.getProducerBatchAutotuneCooldownMs());
+        if (h2k.isProducerBatchAutotuneEnabled()) {
+            this.batchTuner = new BatchSenderTuner(
+                    true,
+                    h2k.getProducerBatchAutotuneMinAwait(),
+                    h2k.getProducerBatchAutotuneMaxAwait(),
+                    h2k.getProducerBatchAutotuneLatencyHighMs(),
+                    h2k.getProducerBatchAutotuneLatencyLowMs(),
+                    h2k.getProducerBatchAutotuneCooldownMs());
+        } else {
+            this.batchTuner = null;
+        }
         batchMetrics.updateConfiguredAwaitEvery(this.h2k.getAwaitEvery());
         logSaltSummary();
         final PayloadBuilder payload = new PayloadBuilder(decoder, h2k);
@@ -192,12 +196,15 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
     }
 
     private void registerAutotuneMetrics() {
-        registerMetric("producer.batch.autotune.enabled", () -> batchTuner != null && batchTuner.isEnabled() ? 1L : 0L);
-        registerMetric("producer.batch.await.recommended", () -> batchTuner != null ? batchTuner.recommendedAwaitEvery() : 0L);
-        registerMetric("producer.batch.autotune.decisions.total", () -> batchTuner != null ? batchTuner.decisionsTotal() : 0L);
-        registerMetric("producer.batch.autotune.cooldown.remaining.ms", () -> batchTuner != null ? batchTuner.cooldownRemainingMs() : 0L);
-        registerMetric("producer.batch.autotune.last.latency.ms", () -> batchTuner != null ? batchTuner.lastObservedLatencyMs() : 0L);
-        registerMetric("producer.batch.autotune.last.await", () -> batchTuner != null ? batchTuner.lastObservedAwaitEvery() : 0L);
+        if (batchTuner == null) {
+            return;
+        }
+        registerMetric("producer.batch.autotune.enabled", () -> batchTuner.isEnabled() ? 1L : 0L);
+        registerMetric("producer.batch.await.recommended", batchTuner::recommendedAwaitEvery);
+        registerMetric("producer.batch.autotune.decisions.total", batchTuner::decisionsTotal);
+        registerMetric("producer.batch.autotune.cooldown.remaining.ms", batchTuner::cooldownRemainingMs);
+        registerMetric("producer.batch.autotune.last.latency.ms", batchTuner::lastObservedLatencyMs);
+        registerMetric("producer.batch.autotune.last.await", batchTuner::lastObservedAwaitEvery);
     }
 
     private void registerMetric(String name, java.util.function.LongSupplier supplier) {

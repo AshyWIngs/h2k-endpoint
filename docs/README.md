@@ -18,7 +18,7 @@
 - [`docs/roadmap-avro.md`](roadmap-avro.md) — дорожная карта миграции на Avro.
 - [`docs/capacity.md`](capacity.md) — подсказки ёмкости JSON и рекомендации по `h2k.capacity.hints`.
 - [`docs/clickhouse.md`](clickhouse.md) — ingest JSONEachRow в ClickHouse.
-- [`docs/phoenix.md`](phoenix.md) — особенности Phoenix (`schema.json`, PK, salt).
+- [`docs/phoenix.md`](phoenix.md) — особенности Phoenix (PK, salt).
 
 ## Дополнительно
 - [`docs/runbook/`](runbook/) — папка с эксплуатационным runbook.

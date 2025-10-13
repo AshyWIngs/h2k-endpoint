@@ -185,6 +185,23 @@ class H2kConfigTest {
     }
 
     @Test
+    @DisplayName("observers.enabled: по умолчанию отключены")
+    void observers_disabledByDefault() {
+        Configuration cfg = new Configuration(false);
+        H2kConfig hc = fromCfg(cfg);
+        assertFalse(hc.isObserversEnabled());
+    }
+
+    @Test
+    @DisplayName("observers.enabled: включение через конфигурацию")
+    void observers_enabledViaConfig() {
+        Configuration cfg = new Configuration(false);
+        cfg.setBoolean(H2kConfig.Keys.OBSERVERS_ENABLED, true);
+        H2kConfig hc = fromCfg(cfg);
+        assertTrue(hc.isObserversEnabled());
+    }
+
+    @Test
     @DisplayName("cfFilter: отсутствие списка CF отключает фильтр")
     void cfFilter_disabledWhenEmpty() {
         Configuration cfg = new Configuration(false);
@@ -217,14 +234,14 @@ class H2kConfigTest {
         c.setInt("h2k.producer.await.timeout.ms", 240_000);
 
         H2kConfig defaults = fromCfg(c);
-        assertTrue(defaults.isProducerBatchAutotuneEnabled());
+        assertFalse(defaults.isProducerBatchAutotuneEnabled());
         assertEquals(Math.max(16, 600 / 4), defaults.getProducerBatchAutotuneMinAwait());
         assertEquals(Math.max(600, 600 * 2), defaults.getProducerBatchAutotuneMaxAwait());
         assertEquals(Math.max(100, 240_000 / 2), defaults.getProducerBatchAutotuneLatencyHighMs());
         assertEquals(Math.max(20, 240_000 / 6), defaults.getProducerBatchAutotuneLatencyLowMs());
         assertEquals(30_000, defaults.getProducerBatchAutotuneCooldownMs());
 
-        c.setBoolean("h2k.producer.batch.autotune.enabled", false);
+        c.setBoolean("h2k.producer.batch.autotune.enabled", true);
         c.setInt("h2k.producer.batch.autotune.min", 50);
         c.setInt("h2k.producer.batch.autotune.max", 200);
         c.setInt("h2k.producer.batch.autotune.latency.high.ms", 500);
@@ -232,7 +249,7 @@ class H2kConfigTest {
         c.setInt("h2k.producer.batch.autotune.cooldown.ms", 15_000);
 
         H2kConfig overridden = fromCfg(c);
-        assertFalse(overridden.isProducerBatchAutotuneEnabled());
+        assertTrue(overridden.isProducerBatchAutotuneEnabled());
         assertEquals(50, overridden.getProducerBatchAutotuneMinAwait());
         assertEquals(200, overridden.getProducerBatchAutotuneMaxAwait());
         assertEquals(500, overridden.getProducerBatchAutotuneLatencyHighMs());

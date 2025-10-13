@@ -93,7 +93,7 @@
 ## 10. Связанные материалы
 
 - Конфигурация: [`docs/config.md`](config.md)
-- Phoenix и schema.json: [`docs/phoenix.md`](phoenix.md)
+- Phoenix метаданные: [`docs/phoenix.md`](phoenix.md)
 - Подсказки ёмкости: [`docs/capacity.md`](capacity.md)
 - ClickHouse ingest: [`docs/clickhouse.md`](clickhouse.md)
 - Runbook: [`docs/runbook/operations.md`](runbook/operations.md), [`docs/runbook/troubleshooting.md`](runbook/troubleshooting.md)

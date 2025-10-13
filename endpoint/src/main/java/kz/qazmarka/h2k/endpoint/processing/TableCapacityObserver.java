@@ -23,13 +23,19 @@ final class TableCapacityObserver {
 
     private final ConcurrentHashMap<TableName, Stats> statsByTable = new ConcurrentHashMap<>();
     private final H2kConfig config;
+    private final boolean enabled;
 
-    private TableCapacityObserver(H2kConfig config) {
+    private TableCapacityObserver(H2kConfig config, boolean enabled) {
         this.config = config;
+        this.enabled = enabled;
     }
 
     static TableCapacityObserver create(H2kConfig config) {
-        return new TableCapacityObserver(config);
+        return new TableCapacityObserver(config, true);
+    }
+
+    static TableCapacityObserver disabled() {
+        return new TableCapacityObserver(null, false);
     }
 
     /**
@@ -42,6 +48,9 @@ final class TableCapacityObserver {
      * @param rowsMeasured сколько строк обработано в партии (используется как "вес" наблюдения)
      */
     void observe(TableName table, int fieldsPerRow, long rowsMeasured) {
+        if (!enabled) {
+            return;
+        }
         if (table == null || fieldsPerRow <= 0 || rowsMeasured <= 0L) {
             return;
         }
@@ -64,6 +73,9 @@ final class TableCapacityObserver {
      * @return агрегированный максимум по всем таблицам — удобно для тестов и диагностики.
      */
     long totalObservedMax() {
+        if (!enabled) {
+            return 0L;
+        }
         long sum = 0L;
         for (Stats stats : statsByTable.values()) {
             sum += stats.maxFields.get();
@@ -76,6 +88,9 @@ final class TableCapacityObserver {
      * Возвращается новая map, поэтому дальнейшие изменения не влияют на snapshot.
      */
     Map<TableName, StatsSnapshot> snapshot() {
+        if (!enabled) {
+            return java.util.Collections.emptyMap();
+        }
         Map<TableName, StatsSnapshot> copy = new ConcurrentHashMap<>();
         statsByTable.forEach((table, stats) -> copy.put(table,
                 new StatsSnapshot(stats.maxFields.get(), stats.rowsObserved.sum(), stats.lastWarnedRecommendation.get())));
@@ -87,6 +102,9 @@ final class TableCapacityObserver {
      * если фактический максимум полей превышает текущую подсказку из конфигурации.
      */
     private void maybeRecommend(TableName table, Stats stats) {
+        if (!enabled) {
+            return;
+        }
         long rows = stats.rowsObserved.sum();
         if (rows < MIN_ROWS_BEFORE_RECOMMEND) {
             return;

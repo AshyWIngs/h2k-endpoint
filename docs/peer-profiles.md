@@ -18,12 +18,11 @@
 - `h2k.kafka.bootstrap.servers=10.254.3.111:9092,10.254.3.112:9092,10.254.3.113:9092`
 - `h2k.topic.pattern=${table}`
 - `h2k.decode.mode=phoenix-avro`
-- `h2k.schema.path=/opt/hbase-default-current/conf/schema.json`
 - `h2k.json.serialize.nulls=false`
 - `h2k.rowkey.encoding=BASE64`
 - `h2k.ensure.topics=true`, `h2k.topic.partitions=12`, `h2k.topic.replication=3`
 - `h2k.producer.await.every=500`, `h2k.producer.await.timeout.ms=180000` (FAST) / `300000` (BALANCED/RELIABLE)
-- Автоадаптация `awaitEvery` включена по умолчанию; при необходимости отключите `h2k.producer.batch.autotune.enabled=false`
+- Автоадаптация `awaitEvery` теперь выключена по умолчанию; добавьте `h2k.producer.batch.autotune.enabled=true`, если хотите сохранить прежнее поведение тюнера.
 - `h2k.producer.buffer.memory=268435456`, `h2k.producer.max.request.size=2097152`
 
 ---

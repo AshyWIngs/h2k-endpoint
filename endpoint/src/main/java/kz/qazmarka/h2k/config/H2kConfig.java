@@ -153,6 +153,10 @@ public final class H2kConfig {
          * Значение "keys" — ожидаемое число не-null полей (см. README).
          */
         public static final String CAPACITY_HINTS = "h2k.capacity.hints";
+        /**
+         * Включить наблюдателей TableCapacityObserver/CfFilterObserver (true/false).
+         */
+        public static final String OBSERVERS_ENABLED = "h2k.observers.enabled";
 
         /** Каталог локальных Avro-схем (generic Avro и режим phoenix-avro для декодера). */
         public static final String AVRO_SCHEMA_DIR = "h2k.avro.schema.dir";
@@ -192,8 +196,8 @@ public final class H2kConfig {
     static final boolean DEFAULT_PRODUCER_BATCH_COUNTERS_ENABLED = false;
     /** По умолчанию подробный DEBUG при неуспехе авто‑сброса отключён. */
     static final boolean DEFAULT_PRODUCER_BATCH_DEBUG_ON_FAILURE = false;
-    /** По умолчанию расширенная автонастройка awaitEvery включена. */
-    static final boolean DEFAULT_PRODUCER_BATCH_AUTOTUNE_ENABLED = true;
+    /** По умолчанию расширенная автонастройка awaitEvery выключена. */
+    static final boolean DEFAULT_PRODUCER_BATCH_AUTOTUNE_ENABLED = false;
     /** По умолчанию минимальный порог автонастройки рассчитывается относительно базового awaitEvery. */
     static final int DEFAULT_PRODUCER_BATCH_AUTOTUNE_MIN = 0;
     /** По умолчанию максимальный порог автонастройки рассчитывается относительно базового awaitEvery. */
@@ -206,6 +210,8 @@ public final class H2kConfig {
     static final int DEFAULT_PRODUCER_BATCH_AUTOTUNE_COOLDOWN_MS = 30000;
     /** Каталог локальных Avro-схем по умолчанию. */
     public static final String DEFAULT_AVRO_SCHEMA_DIR = "conf/avro";
+    /** По умолчанию наблюдатели таблиц отключены. */
+    static final boolean DEFAULT_OBSERVERS_ENABLED = false;
 
     // ==== Базовые ====
     private final String bootstrap;
@@ -258,6 +264,8 @@ public final class H2kConfig {
     private final Map<String, Integer> capacityHintByTable;
     /** Внешний поставщик табличных метаданных (например, Avro-схемы). */
     private final PhoenixTableMetadataProvider tableMetadataProvider;
+    /** Включены ли наблюдатели TableCapacity/CfFilter. */
+    private final boolean observersEnabled;
     /** Кэш вычисленных опций таблиц для повторного использования в горячем пути. */
     private final ConcurrentMap<String, TableOptionsSnapshot> tableOptionsCache = new ConcurrentHashMap<>(8);
 
@@ -317,6 +325,7 @@ public final class H2kConfig {
         this.saltBytesByTable = Collections.unmodifiableMap(new HashMap<>(b.saltBytesByTable));
         this.capacityHintByTable = Collections.unmodifiableMap(new HashMap<>(b.capacityHintByTable));
         this.tableMetadataProvider = b.tableMetadataProvider;
+        this.observersEnabled = b.observersEnabled;
     }
 
     /**
@@ -386,6 +395,8 @@ public final class H2kConfig {
         private Map<String, Integer> capacityHintByTable = Collections.emptyMap();
         /** Внешний поставщик табличных метаданных (Avro и т.п.). */
         private PhoenixTableMetadataProvider tableMetadataProvider = PhoenixTableMetadataProvider.NOOP;
+        /** Флаг включения наблюдателей таблиц. */
+        private boolean observersEnabled = DEFAULT_OBSERVERS_ENABLED;
         /**
          * Устанавливает карту переопределений соли по таблицам: имя → байты (0 — без соли).
          * Ожидается уже готовая карта (например, результат {@link Parsers#readSaltMap(Configuration, String)}).
@@ -404,6 +415,16 @@ public final class H2kConfig {
 
         public Builder tableMetadataProvider(PhoenixTableMetadataProvider provider) {
             this.tableMetadataProvider = (provider == null) ? PhoenixTableMetadataProvider.NOOP : provider;
+            return this;
+        }
+
+        /**
+         * Включить наблюдатели TableCapacity/CfFilter.
+         * @param v true — включить наблюдателей
+         * @return this
+         */
+        public Builder observersEnabled(boolean v) {
+            this.observersEnabled = v;
             return this;
         }
 
@@ -841,6 +862,9 @@ public final class H2kConfig {
     /** @return неизменяемая карта подсказок ёмкости корневого JSON по таблицам */
     /** Подсказки начальной ёмкости JSON для конкретных таблиц. */
     public Map<String, Integer> getCapacityHintByTable() { return capacityHintByTable; }
+
+    /** @return включены ли наблюдатели статистики таблиц. */
+    public boolean isObserversEnabled() { return observersEnabled; }
 
     /**
      * Возвращает подсказку ёмкости для заданной таблицы (если задана).

@@ -25,12 +25,18 @@ final class CfFilterObserver {
 
     private final ConcurrentHashMap<TableName, Stats> statsByTable = new ConcurrentHashMap<>();
     private final Set<TableName> ineffectiveWarned = ConcurrentHashMap.newKeySet();
+    private final boolean enabled;
 
-    private CfFilterObserver() {
+    private CfFilterObserver(boolean enabled) {
+        this.enabled = enabled;
     }
 
     static CfFilterObserver create() {
-        return new CfFilterObserver();
+        return new CfFilterObserver(true);
+    }
+
+    static CfFilterObserver disabled() {
+        return new CfFilterObserver(false);
     }
 
     /**
@@ -48,6 +54,9 @@ final class CfFilterObserver {
                  long rowsFiltered,
                  boolean filterActive,
                  H2kConfig.CfFilterSnapshot cfSnapshot) {
+        if (!enabled) {
+            return;
+        }
         if (!filterActive || table == null || cfSnapshot == null) {
             return;
         }
@@ -76,10 +85,16 @@ final class CfFilterObserver {
     }
 
     long ineffectiveTables() {
+        if (!enabled) {
+            return 0L;
+        }
         return ineffectiveWarned.size();
     }
 
     Map<TableName, Stats> snapshot() {
+        if (!enabled) {
+            return java.util.Collections.emptyMap();
+        }
         return new ConcurrentHashMap<>(statsByTable);
     }
 

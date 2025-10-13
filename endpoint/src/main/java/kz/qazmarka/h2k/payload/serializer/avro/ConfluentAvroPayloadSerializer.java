@@ -42,6 +42,8 @@ public final class ConfluentAvroPayloadSerializer {
     private static final int MAGIC_HEADER_LENGTH = 5;
     private static final String STRATEGY_TABLE = "table";
     private static final String SCHEMA_REGISTRY_BASIC_AUTH_USER_INFO = "schema.registry.basic.auth.user.info";
+    /** Максимальный размер буфера, который удерживаем в ThreadLocal (байты). */
+    private static final int MAX_THREADLOCAL_BUFFER = 1 << 20;
 
     private final AvroSchemaRegistry localRegistry;
     private final List<String> registryUrls;
@@ -308,23 +310,27 @@ public final class ConfluentAvroPayloadSerializer {
         }
 
         byte[] write(GenericData.Record avroRecord) {
+            ByteArrayOutputStream baos = localBaos.get();
+            baos.reset();
+            BinaryEncoder encoder = EncoderFactory.get().directBinaryEncoder(baos, localEncoder.get());
+            localEncoder.set(encoder);
+            ByteOptimizedDatumWriter writer = localWriter.get();
+            writer.setSchema(schema);
             try {
-                ByteArrayOutputStream baos = localBaos.get();
-                baos.reset();
-                BinaryEncoder encoder = EncoderFactory.get().directBinaryEncoder(baos, localEncoder.get());
-                localEncoder.set(encoder);
-                ByteOptimizedDatumWriter writer = localWriter.get();
-                writer.setSchema(schema);
                 writer.write(avroRecord, encoder);
                 encoder.flush();
-                return baos.toByteArray();
             } catch (IOException | RuntimeException ex) {
-                throw new IllegalStateException("Avro: ошибка сериализации записи: " + ex.getMessage(), ex);
-            } finally {
-                localBaos.remove();
                 localEncoder.remove();
                 localWriter.remove();
+                localBaos.remove();
+                throw new IllegalStateException("Avro: ошибка сериализации записи: " + ex.getMessage(), ex);
             }
+            byte[] result = baos.toByteArray();
+            if (result.length > MAX_THREADLOCAL_BUFFER) {
+                localBaos.set(new ByteArrayOutputStream(512));
+                localEncoder.remove();
+            }
+            return result;
         }
     }
 

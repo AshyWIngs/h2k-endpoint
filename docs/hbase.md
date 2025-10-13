@@ -15,7 +15,6 @@
   - `conf/add_peer_shell_fast.txt`
   - `conf/add_peer_shell_balanced.txt`
   - `conf/add_peer_shell_reliable.txt`
-  - `conf/schema.json`
   - `conf/hbase-site.xml` (опциональный источник `h2k.*`)
 
 ---
@@ -55,7 +54,6 @@ add_peer 'h2k_balanced',
       'h2k.kafka.bootstrap.servers'   => '10.254.3.111:9092,10.254.3.112:9092,10.254.3.113:9092',
       'h2k.topic.pattern'             => '${table}',
       'h2k.decode.mode'               => 'phoenix-avro',
-      'h2k.schema.path'               => '/opt/hbase-default-current/conf/schema.json',
       'h2k.json.serialize.nulls'      => 'false',
       'h2k.payload.include.meta'      => 'false',
       'h2k.payload.include.meta.wal'  => 'false',
@@ -201,6 +199,6 @@ remove_peer 'h2k_balanced'
 
 - [Конфигурация (все ключи)](config.md)
 - [Профили peer (полная матрица)](peer-profiles.md)
-- [Phoenix и `schema.json`](phoenix.md)
+- [Phoenix метаданные](phoenix.md)
 - [Подсказки ёмкости и метаданные](capacity.md)
 - [Диагностика и типовые ошибки](runbook/troubleshooting.md)

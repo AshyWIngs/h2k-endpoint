@@ -73,8 +73,13 @@ public final class WalEntryProcessor {
         this.topicManager = topicManager;
         this.producer = producer;
         this.config = config;
-        this.capacityObserver = TableCapacityObserver.create(config);
-        this.cfFilterObserver = CfFilterObserver.create();
+        if (config.isObserversEnabled()) {
+            this.capacityObserver = TableCapacityObserver.create(config);
+            this.cfFilterObserver = CfFilterObserver.create();
+        } else {
+            this.capacityObserver = TableCapacityObserver.disabled();
+            this.cfFilterObserver = CfFilterObserver.disabled();
+        }
     }
 
     /**

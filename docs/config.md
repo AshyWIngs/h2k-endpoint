@@ -86,6 +86,14 @@
 
 ---
 
+## Наблюдатели горячего пути
+
+| Ключ | Назначение | Значения / Дефолт | Примечание |
+|---|---|---|---|
+| **`h2k.observers.enabled`** | Включить накопление статистики `TableCapacityObserver` / `CfFilterObserver` | `true`/`false` (дефолт: `false`) | При `false` наблюдатели полностью отключены и не влияют на горячий путь; включайте только для диагностики |
+
+---
+
 ## Автосоздание/администрирование тем
 
 | Ключ | Назначение | Значения / Дефолт | Пример |
@@ -112,7 +120,7 @@
 | **`h2k.producer.await.timeout.ms`** | Таймаут ожидания ACK | Не Kafka‑ключ; внутренняя логика endpoint |
 | **`h2k.producer.batch.counters.enabled`** | Счётчики батчей | Не Kafka‑ключ |
 | **`h2k.producer.batch.debug.on.failure`** | Доп. диагностика при сбоях | Не Kafka‑ключ |
-| **`h2k.producer.batch.autotune.enabled`** | Включить автоподстройку `awaitEvery` по задержке и сброс к минимуму при ошибках ожидания | `true`/`false` (дефолт: `true`) |
+| **`h2k.producer.batch.autotune.enabled`** | Включить автоподстройку `awaitEvery` по задержке и сброс к минимуму при ошибках ожидания | `true`/`false` (дефолт: `false`) |
 | **`h2k.producer.batch.autotune.min`** | Нижняя граница `awaitEvery` при автонастройке | `int` (0 — вычислить автоматически) |
 | **`h2k.producer.batch.autotune.max`** | Верхняя граница `awaitEvery` при автонастройке | `int` (0 — вычислить автоматически) |
 | **`h2k.producer.batch.autotune.latency.high.ms`** | Порог задержки (мс), при превышении которого порог снижается | `int` (0 — 50% от `await.timeout.ms`) |

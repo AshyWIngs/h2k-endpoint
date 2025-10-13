@@ -49,6 +49,7 @@ add_peer 'h2k_balanced',
       # Диагностика BatchSender (читается при старте)
       'h2k.producer.batch.counters.enabled' => 'false',
       'h2k.producer.batch.debug.on.failure' => 'false',
+      'h2k.producer.batch.autotune.enabled' => 'true',
 
       # --- Профиль BALANCED: компромисс скорость/надёжность ---
       # --- Профиль BALANCED (чуть быстрее): linger.ms=100, batch.size=524288; порядок и идемпотентность сохранены ---

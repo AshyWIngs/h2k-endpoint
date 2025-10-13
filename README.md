@@ -129,11 +129,10 @@ h2k.topic.pattern=${table}
 > Файл `schema.json` более не используется.
 
 > Полная справка по ключам и значениям — см. **docs/config.md**.
-
 ### Автоадаптация `awaitEvery`
 
-- По умолчанию включена (`h2k.producer.batch.autotune.enabled=true`). Алгоритм анализирует задержку flush и
-  аккуратно сужает/расширяет порог `awaitEvery` между партиями WAL.
+- По умолчанию **выключена** (`h2k.producer.batch.autotune.enabled=false`). Алгоритм доступен по флагу и,
+  после включения, анализирует задержку flush и аккуратно сужает/расширяет порог `awaitEvery` между партиями WAL.
 - Ограничения можно задать ключами `h2k.producer.batch.autotune.min`, `...max`, пороги задержки —
   `...latency.high.ms` и `...latency.low.ms`, интервал между решениями — `...cooldown.ms`.
 - Фактические значения и рекомендации видны в метриках TopicManager: `producer.batch.await.recommended`,
@@ -141,6 +140,12 @@ h2k.topic.pattern=${table}
   автонастройку можно отключить, вернувшись к фиксированному `h2k.producer.await.every`.
 - При «тихих» ошибках ожидания подтверждений (`flushFailures`) тюнер автоматически сбрасывает `awaitEvery` к минимуму
   и фиксирует текущее состояние в метриках `producer.batch.fail.streak.current`, `producer.batch.fail.last.ms` и `producer.batch.fail.last.await`.
+
+### Наблюдатели горячего пути
+
+- Наблюдатели `TableCapacityObserver` и `CfFilterObserver` выключены по умолчанию (`h2k.observers.enabled=false`) и не влияют на горячий путь.
+- Включайте флаг точечно для диагностики: появятся рекомендации по `h2k.capacity.hints` и предупреждения об неэффективных CF-фильтрах.
+- Метрики и WARN-логи помогают уточнить подсказки для таблиц; после тюнинга флаг можно снова отключить.
 
 ### Матрица продьюсерских профилей (значения синхронизированы с `conf/`)
 

@@ -43,6 +43,7 @@ add_peer 'h2k_fast',
       # Диагностика BatchSender (читается при старте)
       'h2k.producer.batch.counters.enabled' => 'false',
       'h2k.producer.batch.debug.on.failure' => 'false',
+      'h2k.producer.batch.autotune.enabled' => 'true',
 
       # --- Профиль FAST: максимум throughput; допускаем дубликаты ---
       'h2k.producer.enable.idempotence'     => 'false',

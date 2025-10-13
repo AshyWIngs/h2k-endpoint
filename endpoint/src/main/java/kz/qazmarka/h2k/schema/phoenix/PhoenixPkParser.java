@@ -229,7 +229,7 @@ public final class PhoenixPkParser {
     private static void warnPkNotDecodedOnce(TableName table, String[] pk) {
         final String t = table.getNameWithNamespaceInclAsString();
         if (PK_WARNED.add(t) && LOG.isWarnEnabled()) {
-            LOG.warn("PK из rowkey не декодированы для таблицы {}. Объявлены в schema.json: {}. " +
+            LOG.warn("PK из rowkey не декодированы для таблицы {}. Определены в Avro-схеме: {}. " +
                     "Проверьте корректность rowkey и настроек соли/типов.", t, Arrays.toString(pk));
         }
     }

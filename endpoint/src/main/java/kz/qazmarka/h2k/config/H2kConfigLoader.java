@@ -84,6 +84,12 @@ final class H2kConfigLoader {
                 .autotuneCooldownMs(batch.autotuneCooldownMs())
                 .done();
 
+        boolean observersEnabled = Parsers.readBoolean(
+                cfg,
+                H2kConfig.Keys.OBSERVERS_ENABLED,
+                H2kConfig.DEFAULT_OBSERVERS_ENABLED);
+        builder.observersEnabled(observersEnabled);
+
         return builder.build();
     }
 }
