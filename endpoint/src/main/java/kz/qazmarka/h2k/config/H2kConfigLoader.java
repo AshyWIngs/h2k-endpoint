@@ -36,7 +36,6 @@ final class H2kConfigLoader {
         AvroSection avro = AvroSection.from(cfg);
         EnsureSection ensure = EnsureSection.from(cfg);
         ProducerBatchSection batch = ProducerBatchSection.from(cfg);
-        TableMapSection tables = TableMapSection.from(cfg);
         Map<String, String> topicConfigs = Parsers.readWithPrefix(cfg, H2kConfig.Keys.TOPIC_CONFIG_PREFIX);
 
         H2kConfig.Builder builder = new H2kConfig.Builder(bootstrap);
@@ -47,11 +46,7 @@ final class H2kConfigLoader {
                 .configs(topicConfigs)
                 .done();
 
-        builder.tables()
-                .saltBytes(tables.saltMap)
-                .capacityHints(tables.capacityHints)
-                .metadataProvider(metadataProvider)
-                .done();
+        builder.tableMetadataProvider(metadataProvider);
 
         builder.avro()
                 .schemaDir(avro.schemaDir)

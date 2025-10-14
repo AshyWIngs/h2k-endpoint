@@ -140,6 +140,33 @@ class ValueCodecPhoenixTest {
             IllegalStateException ex = assertThrows(IllegalStateException.class, () -> vc.decode(TBL, "N8", wrong));
             assertTrue(ex.getMessage().contains("ожидает 8"));
         }
+
+        @Test
+        @DisplayName("DECIMAL: некорректные байты приводят к IllegalStateException с контекстом")
+        void decimal_invalid_bytes() {
+            ValueCodecPhoenix vc = new ValueCodecPhoenix(new FakeRegistry().with("D", "DECIMAL"));
+            byte[] invalid = "not-a-decimal".getBytes(StandardCharsets.UTF_8);
+
+            IllegalStateException ex = assertThrows(IllegalStateException.class, () -> vc.decode(TBL, "D", invalid));
+            String msg = ex.getMessage();
+            assertTrue(msg.contains("тип=DECIMAL"), "Диагностика должна содержать тип DECIMAL: " + msg);
+            assertTrue(msg.contains("получено"), "Сообщение должно указывать длину байтов: " + msg);
+            assertTrue(msg.contains("D"), "Имя колонки должно быть в диагностике: " + msg);
+        }
+
+        @Test
+        @DisplayName("UNSIGNED_INT: неверный offset/length приводит к IllegalStateException с контекстом")
+        void fixed_unsigned_int_invalid_offset() {
+            ValueCodecPhoenix vc = new ValueCodecPhoenix(new FakeRegistry().with("N", "UNSIGNED_INT"));
+            byte[] qualifier = "N".getBytes(StandardCharsets.UTF_8);
+            byte[] value = new byte[] {1, 2, 3, 4};
+
+            IllegalStateException ex = assertThrows(IllegalStateException.class,
+                    () -> ((Decoder) vc).decode(TBL, qualifier, 0, qualifier.length, value, 3, 4));
+            String msg = ex.getMessage();
+            assertTrue(msg.contains("DEFAULT:UT.N"), "Диагностика должна содержать таблицу и колонку: " + msg);
+            assertTrue(msg.contains("тип=UNSIGNED_INT"), "Ожидается указание типа в сообщении: " + msg);
+        }
     }
 
     // --- Вспомогательные алгоритмы (частные методы через рефлексию)

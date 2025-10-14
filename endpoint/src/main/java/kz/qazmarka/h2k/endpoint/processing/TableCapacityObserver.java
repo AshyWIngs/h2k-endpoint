@@ -125,7 +125,7 @@ final class TableCapacityObserver {
             return;
         }
         H2kConfig.TableOptionsSnapshot snapshot = config.describeTableOptions(table);
-        LOG.warn("Таблица {}: замечено {} полей при {} строках (источник подсказки: {}). Рекомендуется установить h2k.capacity.hints не ниже {} (сейчас {}).",
+        LOG.warn("Таблица {}: замечено {} полей при {} строках (источник подсказки: {}). Рекомендуется обновить h2k.capacityHint в Avro-схеме не ниже {} (сейчас {}).",
                 table,
                 maxFields,
                 rows,

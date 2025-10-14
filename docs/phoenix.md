@@ -9,7 +9,7 @@ Phoenix остаётся основным источником схемы для
 | PK (`h2k.pk` или `primaryKey:true`) | Позволяет `PhoenixPkParser` восстановить ключ из rowkey и добавить PK в payload. |
 | Тип (`h2k.phoenixType` или `type`) | Нужен `PhoenixColumnTypeRegistry` и `ValueCodecPhoenix` для корректного декодирования. |
 | Соль (`h2k.saltBytes`) | Позволяет правильно разбить rowkey на соль+PK (Phoenix salt). У таблиц без соли ставьте `0`. |
-| capacity (`h2k.capacityHint`) | Используется `TableCapacityObserver` и `h2k.capacity.hints`. |
+| capacity (`h2k.capacityHint`) | Используется `TableCapacityObserver` при расчёте подсказок. |
 
 ### Как проверить соль в Phoenix
 
@@ -34,7 +34,7 @@ WHERE TABLE_SCHEM IS NULL            -- или = '<namespace>'
 ## 3. Обновление схемы
 
 1. Изменили таблицу в Phoenix → обновите `.avsc`.
-2. Пересчитайте `h2k.capacity.hints` (см. [`docs/capacity.md`](capacity.md)).
+2. Обновите значение `h2k.capacityHint` в `.avsc` (см. [`docs/capacity.md`](capacity.md)).
 3. Выполните `disable_peer / enable_peer` для подхвата новых метаданных.
 
 ## 4. Внутренние компоненты

@@ -152,7 +152,7 @@ class RowPayloadAssemblerTest {
         };
 
         H2kConfig.Builder builder = new H2kConfig.Builder("mock:9092");
-        builder.tables().metadataProvider(metadata).done();
+        builder.tableMetadataProvider(metadata);
         return builder.build();
     }
 

@@ -310,55 +310,6 @@ public final class Parsers {
     }
 
     /**
-     * Парсит CSV‑карту солей в виде {@code TABLE[=BYTES]} или {@code NS:TABLE[:|=]BYTES}.
-     * Пустые элементы игнорируются, значения клиппятся в диапазон {@code [0..8]}.
-     *
-     * @param cfg конфигурация Hadoop
-     * @param key ключ CSV
-     * @return карта { UPPERCASE имя таблицы → число байт соли }
-     */
-    public static Map<String, Integer> readSaltMap(Configuration cfg, String key) {
-        String raw = cfg.get(key);
-        if (raw == null || raw.trim().isEmpty()) {
-            return Collections.emptyMap();
-        }
-        Map<String, Integer> out = new HashMap<>();
-        String[] parts = raw.split(",");
-        for (String part : parts) {
-            if (part == null) continue;
-            String s = part.trim();
-            if (!s.isEmpty()) addSaltEntry(out, s);
-        }
-        return out;
-    }
-
-    /**
-     * Разбирает один CSV‑токен карты соли и, при корректности, добавляет запись в {@code out}.
-     * Форматы: {@code TABLE}, {@code TABLE=BYTES}, {@code NS:TABLE=BYTES}, {@code NS:TABLE:BYTES}.
-     *
-     * @param out   целевая карта
-     * @param token токен CSV
-     */
-    private static void addSaltEntry(Map<String, Integer> out, String token) {
-        int eq = token.lastIndexOf('=');
-        int sep = (eq >= 0) ? eq : token.lastIndexOf(':'); // поддержка NS:TABLE=BYTES и NS:TABLE:BYTES
-        String name = (sep > 0) ? token.substring(0, sep).trim() : token.trim();
-        if (name.isEmpty()) return;
-
-        // Нет явного значения байт — по умолчанию TABLE -> 1
-        if (sep <= 0) { out.put(up(name), 1); return; }
-
-        String num = token.substring(sep + 1).trim();
-        if (num.isEmpty()) { out.put(up(name), 1); return; }
-
-        int bytes = parseIntSafe(num, 1);
-        if (bytes < 0) bytes = 0;
-        else if (bytes > 8) bytes = 8;
-
-        out.put(up(name), bytes);
-    }
-
-    /**
      * Собирает подсказки ёмкости (число ключей на таблицу) из CSV и индивидуальных ключей.
      *
      * @param cfg          конфигурация Hadoop
@@ -366,66 +317,6 @@ public final class Parsers {
      * @param singlePrefix префикс индивидуальных ключей (например, {@code h2k.capacity.hint.})
      * @return карта { UPPERCASE имя таблицы → положительное число ключей }
      */
-    public static Map<String, Integer> readCapacityHints(Configuration cfg, String csvKey, String singlePrefix) {
-        Map<String, Integer> out = new HashMap<>();
-
-        // 1) CSV-вариант: h2k.capacity.hints=TABLE=keys[,NS:TABLE=keys2,...]
-        String raw = cfg.get(csvKey);
-        if (raw != null && !raw.trim().isEmpty()) {
-            for (String t : raw.split(",")) {
-                if (t != null) {
-                    String s = t.trim();
-                    if (!s.isEmpty()) {
-                        addCapacityHintCsvToken(out, s);
-                    }
-                }
-            }
-        }
-        // 2) Индивидуальные ключи с префиксом h2k.capacity.hint.TABLE = int
-        for (Map.Entry<String, String> e : cfg) {
-            addCapacityHint(out, e.getKey(), e.getValue(), singlePrefix);
-        }
-        return out;
-    }
-
-    /**
-     * Добавляет подсказку ёмкости из индивидуального ключа, если он начинается с заданного префикса.
-     *
-     * @param out    целевая карта
-     * @param key    полный ключ (например, {@code h2k.capacity.hint.TABLE})
-     * @param val    строковое значение (может быть {@code null})
-     * @param prefix ожидаемый префикс
-     */
-    private static void addCapacityHint(Map<String, Integer> out, String key, String val, String prefix) {
-        if (key == null || !key.startsWith(prefix)) return;
-        String table = key.substring(prefix.length()).trim();
-        if (table.isEmpty()) return;
-        if (val == null) return;
-        int parsed = parseIntSafe(val, -1);
-        if (parsed <= 0) return;
-        out.put(up(table), parsed);
-    }
-
-    /**
-     * Разбирает один CSV‑токен подсказки ёмкости формата {@code TABLE=keys} или {@code NS:TABLE=keys}.
-     *
-     * @param out   целевая карта
-     * @param token токен CSV
-     */
-    private static void addCapacityHintCsvToken(Map<String, Integer> out, String token) {
-        int eq = token.lastIndexOf('=');
-        if (eq <= 0 || eq >= token.length() - 1) {
-            return; // нет пары key=value
-        }
-        String name = token.substring(0, eq).trim();
-        String val = token.substring(eq + 1).trim();
-        if (name.isEmpty() || val.isEmpty()) return;
-        int parsed = parseIntSafe(val, -1);
-        if (parsed > 0) {
-            out.put(up(name), parsed);
-        }
-    }
-
     /**
      * Формирует {@code client.id} для {@code AdminClient}.
      * Если значение явно задано — возвращает его; иначе пытается использовать имя хоста.

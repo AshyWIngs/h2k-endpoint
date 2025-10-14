@@ -56,10 +56,11 @@
 | **`h2k.avro.schema.dir`** | Каталог `.avsc` | Строка (дефолт: `conf/avro`) | Используется для загрузки схем и fallback-кэша |
 | **`h2k.avro.sr.urls`** | URL Schema Registry (CSV) | `http://host1:8081[,http://hostN:8081]` | Обязательный параметр |
 | **`h2k.avro.sr.auth.basic.username/password`** | Basic-auth к Schema Registry | Строки | Значения маскируются в логах |
-| **`h2k.avro.props.subject.strategy`** | Стратегия subject | `table` (дефолт) \| `qualifier` \| `table-lower` \| `table-upper` | `table` -> `namespace:table` (если namespace не `default`) |
-| **`h2k.avro.props.subject.prefix` / `suffix`** | Префикс/суффикс subject | Строки | Удобно для разделения окружений (`-value`, `dev-` и т.п.) |
-| **`h2k.avro.props.client.cache.capacity`** | Размер кэша `CachedSchemaRegistryClient` | Положительное целое (дефолт: `1000`) | Управляет identity-map SR клиента |
-| **`h2k.avro.*`** | Доп. свойства Avro | Любые ключи, не перечисленные выше | Сохраняются в `H2kConfig#getAvroProps()` для пользовательских фабрик |
+| **`h2k.avro.subject.strategy`** | Стратегия subject | `table` (дефолт) \| `table-lower` \| `table-upper` \| `qualifier` | `table` → `namespace:table` (если namespace ≠ `default`) |
+| **`h2k.avro.subject.prefix` / `h2k.avro.subject.suffix`** | Префикс/суффикс subject | Строки (дефолт: пусто) | Удобно для разделения окружений (`dev-`, `-value` и т.п.) |
+| **`h2k.avro.client.cache.capacity`** | Размер identity-map `CachedSchemaRegistryClient` | Положительное целое (дефолт: `1000`) | Управляет количеством закэшированных схем |
+| **`h2k.avro.compatibility` / `h2k.avro.binary`** | Доп. флаги Avro | Строки/boolean | Передаются в `getAvroProps()` без интерпретации на стороне endpoint |
+| **`h2k.avro.*`** | Любые прочие свойства Avro | Ключи, не перечисленные выше | Сохраняются в `H2kConfig#getAvroProps()` для пользовательских фабрик |
 
 > Aliases `h2k.avro.schema.registry` и `h2k.avro.schema.registry.url` обрабатываются как `h2k.avro.sr.urls`.
 
@@ -69,20 +70,13 @@
 
 ## Подсказки ёмкости
 
-| Ключ | Назначение | Формат | Пример |
-|---|---|---|---|
-| **`h2k.capacity.hints`** | Оценка «максимума не‑null полей» для таблиц (фолбэк; основной источник — `.avsc` `h2k.capacityHint`) | `TABLE=keys[,NS:TABLE=keys2,...]` (для DEFAULT‑NS имя без `DEFAULT`) | `TBL_JTI_TRACE_CIS_HISTORY=32` |
-| **`h2k.capacity.hint.<TABLE>`** | Точечная подсказка для одной таблицы | `<int>` | `h2k.capacity.hint.RECEIPT=18` |
-
-> Подсказки используются для предразмеривания структур в горячем пути (меньше аллокаций/GC). Если включены метаполя, добавляйте к «ключам» соответствующие константы (см. `docs/capacity.md`).
+`h2k.capacityHint` теперь задаётся только в Avro‑схемах (`"h2k.capacityHint"`). Endpoint читает его через `PhoenixTableMetadataProvider`; отдельные ключи `h2k.capacity.hints` и `h2k.capacity.hint.*` удалены. Если фактическое число полей превышает подсказку, `TableCapacityObserver` выведет предупреждение с рекомендацией обновить значение в схеме. Подробнее см. `docs/capacity.md`.
 
 ---
 
 ## Соль rowkey (Phoenix)
 
-| Ключ | Назначение | Формат | Пример |
-|---|---|---|---|
-| **`h2k.salt.map`** | Сопоставление таблиц и числа байт соли в начале rowkey (фолбэк; основной источник — `.avsc` `h2k.saltBytes`) | `TABLE=bytes[,NS:TABLE=bytes2][,default=0]` | `TBL_JTI_TRACE_CIS_HISTORY=1,default=0` |
+Используйте поле `"h2k.saltBytes"` в Avro‑схемах. Ключ `h2k.salt.map` удалён: приоритет у схем Phoenix/Avro.
 
 ---
 
@@ -139,8 +133,6 @@
 'h2k.topic.pattern'             => '${table}',
 'h2k.avro.sr.urls'              => 'http://schema-registry-1:8081,http://schema-registry-2:8081',
 'h2k.avro.schema.dir'           => '/opt/h2k/conf/avro',
-'h2k.salt.map'                 => 'TBL_JTI_TRACE_CIS_HISTORY=1',
-'h2k.capacity.hints'           => 'TBL_JTI_TRACE_CIS_HISTORY=32',
 'h2k.ensure.topics'            => 'true',
 'h2k.topic.partitions'         => '12',
 'h2k.topic.replication'        => '3',

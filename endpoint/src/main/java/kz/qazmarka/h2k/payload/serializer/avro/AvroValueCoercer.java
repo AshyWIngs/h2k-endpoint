@@ -22,13 +22,35 @@ public final class AvroValueCoercer {
 
     private static final Object NO_DEFAULT = new Object();
     private static final EnumMap<Schema.Type, Coercer> COERCERS = new EnumMap<>(Schema.Type.class);
+    private static final String TYPE_BOOLEAN = "BOOLEAN";
 
     static {
         COERCERS.put(Schema.Type.NULL, (schema, v, path) -> null);
         COERCERS.put(Schema.Type.BOOLEAN, (schema, v, path) -> {
             if (v == null) return null;
-            if (v instanceof Boolean) return v;
-            throw typeError(path, "BOOLEAN", v);
+            if (v instanceof Boolean) {
+                return v;
+            }
+            if (v instanceof CharSequence) {
+                String text = v.toString().trim();
+                if (text.isEmpty()) {
+                    throw typeError(path, TYPE_BOOLEAN, v);
+                }
+                if ("1".equals(text) || "true".equalsIgnoreCase(text)) {
+                    return Boolean.TRUE;
+                }
+                if ("0".equals(text) || "false".equalsIgnoreCase(text)) {
+                    return Boolean.FALSE;
+                }
+                throw typeError(path, TYPE_BOOLEAN, v);
+            }
+            if (v instanceof Number) {
+                int numeric = ((Number) v).intValue();
+                if (numeric == 0) return Boolean.FALSE;
+                if (numeric == 1) return Boolean.TRUE;
+                throw typeError(path, TYPE_BOOLEAN, v);
+            }
+            throw typeError(path, TYPE_BOOLEAN, v);
         });
         COERCERS.put(Schema.Type.INT, (schema, v, path) -> {
             if (v == null) return null;

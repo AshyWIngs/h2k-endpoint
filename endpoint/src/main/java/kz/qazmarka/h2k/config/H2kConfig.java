@@ -85,9 +85,6 @@ public final class H2kConfig {
     static final String K_PRODUCER_AWAIT_EVERY = "h2k.producer.await.every";
     /** Таймаут ожидания подтверждения батча (мс). */
     static final String K_PRODUCER_AWAIT_TIMEOUT_MS = "h2k.producer.await.timeout.ms";
-    /** CSV‑карта переопределений длины соли rowkey в байтах по таблицам. */
-    static final String K_SALT_MAP = "h2k.salt.map";
-
     /**
      * Публичные ключи конфигурации h2k.* для использования в других пакетах проекта
      * (исключаем дубли строковых литералов). Значения синхронизированы с приватными K_* выше.
@@ -134,25 +131,6 @@ public final class H2kConfig {
         public static final String PRODUCER_BATCH_AUTOTUNE_LATENCY_LOW_MS = "h2k.producer.batch.autotune.latency.low.ms";
         /** Минимальный интервал между решениями автонастройки, мс. */
         public static final String PRODUCER_BATCH_AUTOTUNE_COOLDOWN_MS = "h2k.producer.batch.autotune.cooldown.ms";
-        /**
-         * Табличные переопределения соли rowkey в байтах.
-         * Формат CSV: TABLE[:BYTES] | TABLE=BYTES | NS:TABLE[:BYTES] | NS:TABLE=BYTES [, ...].
-         * Если BYTES не указан — берётся 1. Значение клиппится в диапазон 0..8.
-         * Допускается полное имя 'namespace:qualifier' или просто 'qualifier'. Поиск — case-insensitive.
-         */
-        public static final String SALT_MAP = "h2k.salt.map";
-        /**
-         * Префикс подсказок ёмкости корневого JSON по таблицам.
-         * Формат ключа: {@code h2k.capacity.hint.<TABLE> = <int>}
-         * где TABLE — "namespace:qualifier" или просто "qualifier".
-         */
-        public static final String CAPACITY_HINT_PREFIX = "h2k.capacity.hint.";
-        /**
-         * CSV с подсказками ёмкости корневого JSON по таблицам.
-         * Формат: h2k.capacity.hints = "TABLE=keys[,NS:TABLE=keys2,...]".
-         * Значение "keys" — ожидаемое число не-null полей (см. README).
-         */
-        public static final String CAPACITY_HINTS = "h2k.capacity.hints";
         /**
          * Включить наблюдателей TableCapacityObserver/CfFilterObserver (true/false).
          */
@@ -258,10 +236,6 @@ public final class H2kConfig {
     private final int producerBatchAutotuneCooldownMs;
     /** Произвольные конфиги топика, собранные из h2k.topic.config.* */
     private final Map<String, String> topicConfigs;
-    /** Переопределения длины соли rowkey в байтах по таблицам. 0 — соли нет. */
-    private final Map<String, Integer> saltBytesByTable;
-    /** Подсказки ёмкости корневого JSON по таблицам (ожидаемое число полей). */
-    private final Map<String, Integer> capacityHintByTable;
     /** Внешний поставщик табличных метаданных (например, Avro-схемы). */
     private final PhoenixTableMetadataProvider tableMetadataProvider;
     /** Включены ли наблюдатели TableCapacity/CfFilter. */
@@ -322,8 +296,6 @@ public final class H2kConfig {
         this.producerBatchAutotuneLatencyLowMs = computedAutotuneLatencyLowMs;
         this.producerBatchAutotuneCooldownMs = computedAutotuneCooldownMs;
         this.topicConfigs = Collections.unmodifiableMap(new HashMap<>(b.topicConfigs));
-        this.saltBytesByTable = Collections.unmodifiableMap(new HashMap<>(b.saltBytesByTable));
-        this.capacityHintByTable = Collections.unmodifiableMap(new HashMap<>(b.capacityHintByTable));
         this.tableMetadataProvider = b.tableMetadataProvider;
         this.observersEnabled = b.observersEnabled;
     }
@@ -389,30 +361,10 @@ public final class H2kConfig {
 
         /** Дополнительные конфиги топика, собранные из префикса h2k.topic.config.* */
         private Map<String, String> topicConfigs = Collections.emptyMap();
-        /** Переопределения длины соли rowkey в байтах по таблицам. */
-        private Map<String, Integer> saltBytesByTable = Collections.emptyMap();
-        /** Подсказки ёмкости корневого JSON по таблицам. */
-        private Map<String, Integer> capacityHintByTable = Collections.emptyMap();
         /** Внешний поставщик табличных метаданных (Avro и т.п.). */
         private PhoenixTableMetadataProvider tableMetadataProvider = PhoenixTableMetadataProvider.NOOP;
         /** Флаг включения наблюдателей таблиц. */
         private boolean observersEnabled = DEFAULT_OBSERVERS_ENABLED;
-        /**
-         * Устанавливает карту переопределений соли по таблицам: имя → байты (0 — без соли).
-         * Ожидается уже готовая карта (например, результат {@link Parsers#readSaltMap(Configuration, String)}).
-         * @param v неизменяемая или копируемая карта name→bytes
-         * @return this
-         */
-        public Builder saltBytesByTable(Map<String, Integer> v) { this.saltBytesByTable = v; return this; }
-
-        /**
-         * Устанавливает подсказки ёмкости корневого JSON по таблицам.
-         * Ожидается уже готовая карта (например, результат {@link Parsers#readCapacityHints(Configuration, String, String)}).
-         * @param v неизменяемая или копируемая карта name→capacity
-         * @return this
-         */
-        public Builder capacityHintByTable(Map<String, Integer> v) { this.capacityHintByTable = v; return this; }
-
         public Builder tableMetadataProvider(PhoenixTableMetadataProvider provider) {
             this.tableMetadataProvider = (provider == null) ? PhoenixTableMetadataProvider.NOOP : provider;
             return this;
@@ -593,9 +545,6 @@ public final class H2kConfig {
         /** @return сгруппированные настройки ожиданий и batch‑поведения. */
         public ProducerOptions producer() { return new ProducerOptions(); }
 
-        /** @return сгруппированные настройки подсказок по таблицам (соль/ёмкость). */
-        public TableOptions tables() { return new TableOptions(); }
-
         /**
          * Собирает неизменяемый объект конфигурации с текущими значениями билдера.
          *
@@ -649,13 +598,6 @@ public final class H2kConfig {
             public Builder done() { return Builder.this; }
         }
 
-        /** Опции табличных подсказок. */
-        public final class TableOptions {
-            public TableOptions saltBytes(Map<String, Integer> v) { Builder.this.saltBytesByTable(v); return this; }
-            public TableOptions capacityHints(Map<String, Integer> v) { Builder.this.capacityHintByTable(v); return this; }
-            public TableOptions metadataProvider(PhoenixTableMetadataProvider provider) { Builder.this.tableMetadataProvider(provider); return this; }
-            public Builder done() { return Builder.this; }
-        }
     }
 
     /**
@@ -839,10 +781,6 @@ public final class H2kConfig {
     /** Удобный булев геттер: используется ли соль для таблицы. */
     public boolean isSalted(TableName table) { return getSaltBytesFor(table) > 0; }
 
-    /** @return неизменяемая карта табличных переопределений соли (как задана в конфиге) */
-    /** Карта переопределений соли rowkey в байтах. */
-    public Map<String, Integer> getSaltBytesByTable() { return saltBytesByTable; }
-
     /**
      * Возвращает массив имён PK-колонок для таблицы (может быть пустым).
      * @param table имя таблицы Phoenix
@@ -858,10 +796,6 @@ public final class H2kConfig {
         }
         return pk.clone();
     }
-
-    /** @return неизменяемая карта подсказок ёмкости корневого JSON по таблицам */
-    /** Подсказки начальной ёмкости JSON для конкретных таблиц. */
-    public Map<String, Integer> getCapacityHintByTable() { return capacityHintByTable; }
 
     /** @return включены ли наблюдатели статистики таблиц. */
     public boolean isObserversEnabled() { return observersEnabled; }
@@ -903,43 +837,22 @@ public final class H2kConfig {
     }
 
     private TableOptionsSnapshot computeTableOptions(TableName table) {
-        String full = Parsers.up(table.getNameAsString());
-        String qualifier = Parsers.up(table.getQualifierAsString());
-
         int saltBytes = 0;
         ValueSource saltSource = ValueSource.DEFAULT;
 
-        Integer explicitSalt = saltBytesByTable.get(full);
-        if (explicitSalt == null) {
-            explicitSalt = saltBytesByTable.get(qualifier);
-        }
-        if (explicitSalt != null) {
-            saltBytes = clampSalt(explicitSalt);
-            saltSource = ValueSource.EXPLICIT;
-        } else {
-            Integer metaSalt = tableMetadataProvider.saltBytes(table);
-            if (metaSalt != null) {
-                saltBytes = clampSalt(metaSalt);
-                saltSource = ValueSource.AVRO;
-            }
+        Integer metaSalt = tableMetadataProvider.saltBytes(table);
+        if (metaSalt != null) {
+            saltBytes = clampSalt(metaSalt);
+            saltSource = ValueSource.AVRO;
         }
 
         int capacityHint = 0;
         ValueSource capacitySource = ValueSource.DEFAULT;
 
-        Integer explicitCapacity = capacityHintByTable.get(full);
-        if (explicitCapacity == null) {
-            explicitCapacity = capacityHintByTable.get(qualifier);
-        }
-        if (explicitCapacity != null) {
-            capacityHint = Math.max(0, explicitCapacity);
-            capacitySource = ValueSource.EXPLICIT;
-        } else {
-            Integer metaCapacity = tableMetadataProvider.capacityHint(table);
-            if (metaCapacity != null && metaCapacity > 0) {
-                capacityHint = metaCapacity;
-                capacitySource = ValueSource.AVRO;
-            }
+        Integer metaCapacity = tableMetadataProvider.capacityHint(table);
+        if (metaCapacity != null && metaCapacity > 0) {
+            capacityHint = metaCapacity;
+            capacitySource = ValueSource.AVRO;
         }
 
         String[] cfNames = tableMetadataProvider.columnFamilies(table);
@@ -966,7 +879,6 @@ public final class H2kConfig {
 
     /** Источники табличных параметров (соль/ёмкость). */
     public enum ValueSource {
-        EXPLICIT("конфигурация h2k.*"),
         AVRO("Avro-схема"),
         DEFAULT("значение по умолчанию");
 
@@ -1123,8 +1035,6 @@ public final class H2kConfig {
                 .append(", batchAutotuneLowMs=").append(producerBatchAutotuneLatencyLowMs)
                 .append(", batchAutotuneCooldownMs=").append(producerBatchAutotuneCooldownMs)
                 .append(", topicConfigs.size=").append(topicConfigs.size())
-                .append(", saltBytesByTable.size=").append(saltBytesByTable.size())
-                .append(", capacityHintByTable.size=").append(capacityHintByTable.size())
                 .append(", avroSrAuth.size=").append(avroSrAuth.size())
                 .append(", avroProps.size=").append(avroProps.size())
                 .append('}')

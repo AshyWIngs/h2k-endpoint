@@ -1,6 +1,7 @@
 package kz.qazmarka.h2k.kafka.ensure;
 
 import java.time.Duration;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -21,8 +22,12 @@ import org.apache.kafka.common.KafkaFuture;
 import org.apache.kafka.common.Node;
 import org.apache.kafka.common.TopicPartitionInfo;
 import org.apache.kafka.common.config.ConfigResource;
+import org.apache.kafka.common.errors.TopicExistsException;
+import org.apache.kafka.common.errors.UnknownTopicOrPartitionException;
+import org.apache.kafka.common.internals.KafkaFutureImpl;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
@@ -80,7 +85,127 @@ class TopicEnsureServiceTest {
         }
 
         assertTrue(admin.configUpdated, "Ожидалась передача ALTER CONFIG для retention.ms");
-        assertEquals("60000", admin.lastConfigValue, "На брокер должен уйти diff с новым значением");
+       assertEquals("60000", admin.lastConfigValue, "На брокер должен уйти diff с новым значением");
+    }
+
+    @Test
+    @DisplayName("ensureTopic(): повторный вызов использует кеш подтверждённой темы")
+    void ensureTopic_usesCacheAfterSuccess() {
+        FakeAdmin admin = new FakeAdmin().withPartitions(3);
+        TopicEnsureState state = new TopicEnsureState();
+        TopicEnsureConfig cfg = defaultConfigBuilder().build();
+
+        try (TopicEnsureService svc = new TopicEnsureService(admin, cfg, state)) {
+            svc.ensureTopic("analytics");
+            svc.ensureTopic("analytics");
+        }
+
+        assertEquals(1, admin.describeRequests, "describeTopics должен вызываться один раз");
+        assertEquals(1L, state.ensureHitCache.longValue(), "повторное ensure должно отработать через кеш");
+        assertTrue(state.ensured.contains("analytics"), "тема должна быть помечена как подтверждённая");
+    }
+
+    @Test
+    @DisplayName("ensureTopic(): ensureTopics=false пропускает вызов без изменения метрик")
+    void ensureTopic_skipsWhenAdminDisabled() {
+        TopicEnsureState state = new TopicEnsureState();
+        TopicEnsureConfig cfg = defaultConfigBuilder().build();
+
+        try (TopicEnsureService svc = new TopicEnsureService(null, cfg, state)) {
+            svc.ensureTopic("orders");
+        }
+
+        assertEquals(0L, state.ensureInvocations.longValue(), "метрики не должны меняться при ensureTopics=false");
+        assertTrue(state.ensured.isEmpty(), "кеш ensured остаётся пустым");
+    }
+
+    @Test
+    @DisplayName("ensureTopic(): отсутствующая тема создаётся и попадает в кеш")
+    void ensureTopic_createsMissingTopic() {
+        FakeAdmin admin = new FakeAdmin()
+                .withPartitions(3)
+                .whenDescribe("inventory", DescribeOutcome.MISSING);
+        TopicEnsureState state = new TopicEnsureState();
+        TopicEnsureConfig cfg = defaultConfigBuilder().build();
+
+        try (TopicEnsureService svc = new TopicEnsureService(admin, cfg, state)) {
+            svc.ensureTopic("inventory");
+        }
+
+        assertEquals(1, admin.createTopicCalls, "ожидается вызов createTopic");
+        assertEquals(1L, state.createOk.longValue(), "создание должно считаться успешным");
+        assertEquals(1L, state.existsFalse.longValue(), "describe фиксирует отсутствие темы");
+        assertTrue(state.ensured.contains("inventory"), "тема попадает в кеш ensured");
+        assertEquals(0, state.unknownSize(), "backoff не назначается при успешном создании");
+    }
+
+    @Test
+    @DisplayName("ensureTopic(): TopicExistsException учитывается как гонка")
+    void ensureTopic_handlesCreateRace() {
+        FakeAdmin admin = new FakeAdmin()
+                .withPartitions(3)
+                .whenDescribe("billing", DescribeOutcome.MISSING)
+                .failCreateWith(new ExecutionException(new TopicExistsException("billing already exists")));
+        TopicEnsureState state = new TopicEnsureState();
+        TopicEnsureConfig cfg = defaultConfigBuilder().build();
+
+        try (TopicEnsureService svc = new TopicEnsureService(admin, cfg, state)) {
+            svc.ensureTopic("billing");
+        }
+
+        assertEquals(1, admin.createTopicCalls, "должна быть предпринята попытка createTopic");
+        assertEquals(1L, state.createRace.longValue(), "гонка фиксируется метрикой createRace");
+        assertEquals(0L, state.createFail.longValue(), "ошибки создания не учитываются");
+        assertTrue(state.ensured.contains("billing"), "тема помечается как ensured после гонки");
+    }
+
+    @Test
+    @DisplayName("ensureTopic(): RuntimeException при создании назначает backoff и считает неуспех")
+    void ensureTopic_recordsFailuresForRuntimeCreateErrors() {
+        FakeAdmin admin = new FakeAdmin()
+                .withPartitions(3)
+                .whenDescribe("ledger", DescribeOutcome.MISSING)
+                .failCreateWith(new RuntimeException("network"));
+        TopicEnsureState state = new TopicEnsureState();
+        TopicEnsureConfig cfg = defaultConfigBuilder().build();
+
+        try (TopicEnsureService svc = new TopicEnsureService(admin, cfg, state)) {
+            svc.ensureTopic("ledger");
+        }
+
+        assertEquals(1, admin.createTopicCalls, "создание пытались выполнить один раз");
+        assertEquals(1L, state.createFail.longValue(), "неуспех должен учитываться");
+        assertFalse(state.ensured.contains("ledger"), "тема не попадёт в кеш при ошибке");
+        assertEquals(1, state.unknownSize(), "backoff-планировщик получает запись");
+    }
+
+    @Test
+    @DisplayName("ensureTopicOk(): кешированный результат возвращает true без повторного describe")
+    void ensureTopicOk_usesCache() {
+        FakeAdmin admin = new FakeAdmin().withPartitions(2);
+        TopicEnsureState state = new TopicEnsureState();
+        TopicEnsureConfig cfg = defaultConfigBuilder().build();
+
+        try (TopicEnsureService svc = new TopicEnsureService(admin, cfg, state)) {
+            assertTrue(svc.ensureTopicOk("audit"), "первая проверка должна вернуть true");
+            assertTrue(svc.ensureTopicOk("audit"), "повторная проверка также true, но уже из кеша");
+        }
+
+        assertEquals(1, admin.describeRequests, "describeTopics выполняется только в первую проверку");
+        assertEquals(1L, state.ensureInvocations.longValue(), "ensureTopic вызывался один раз");
+    }
+
+    private static TopicEnsureConfig.Builder defaultConfigBuilder() {
+        return TopicEnsureConfig.builder()
+                .topicNameMaxLen(249)
+                .topicSanitizer(UnaryOperator.identity())
+                .topicPartitions(3)
+                .topicReplication((short) 1)
+                .topicConfigs(Collections.emptyMap())
+                .ensureIncreasePartitions(false)
+                .ensureDiffConfigs(false)
+                .adminTimeoutMs(50L)
+                .unknownBackoffMs(10L);
     }
 
     private static final class FakeAdmin implements KafkaTopicAdmin {
@@ -90,6 +215,11 @@ class TopicEnsureServiceTest {
         private int increaseNewCount;
         private boolean configUpdated;
         private String lastConfigValue;
+        private final Map<String, ArrayDeque<DescribeOutcome>> describePlan = new LinkedHashMap<>();
+        private final DescribeOutcome defaultOutcome = DescribeOutcome.EXISTS;
+        private int describeRequests;
+        private int createTopicCalls;
+        private Throwable plannedCreateFailure;
 
         FakeAdmin withPartitions(int partitions) {
             this.partitions = partitions;
@@ -101,11 +231,26 @@ class TopicEnsureServiceTest {
             return this;
         }
 
+        FakeAdmin whenDescribe(String topic, DescribeOutcome... outcomes) {
+            ArrayDeque<DescribeOutcome> queue = describePlan.computeIfAbsent(topic, t -> new ArrayDeque<>());
+            for (DescribeOutcome outcome : outcomes) {
+                queue.addLast(outcome);
+            }
+            return this;
+        }
+
+        FakeAdmin failCreateWith(Throwable failure) {
+            this.plannedCreateFailure = failure;
+            return this;
+        }
+
         @Override
         public Map<String, KafkaFuture<TopicDescription>> describeTopics(Set<String> names) {
+            describeRequests++;
             Map<String, KafkaFuture<TopicDescription>> out = new LinkedHashMap<>();
             for (String n : names) {
-                out.put(n, KafkaFuture.completedFuture(topicDescription(n, partitions)));
+                DescribeOutcome outcome = resolveOutcome(n);
+                out.put(n, futureFor(n, outcome));
             }
             return out;
         }
@@ -116,7 +261,25 @@ class TopicEnsureServiceTest {
         }
 
         @Override
-        public void createTopic(NewTopic topic, long timeoutMs) { /* no-op */ }
+        public void createTopic(NewTopic topic, long timeoutMs)
+                throws InterruptedException, ExecutionException, TimeoutException {
+            createTopicCalls++;
+            Throwable failure = plannedCreateFailure;
+            if (failure != null) {
+                plannedCreateFailure = null; // ошибка одноразовая по умолчанию
+                if (failure instanceof InterruptedException) {
+                    throw (InterruptedException) failure;
+                } else if (failure instanceof TimeoutException) {
+                    throw (TimeoutException) failure;
+                } else if (failure instanceof ExecutionException) {
+                    throw (ExecutionException) failure;
+                } else if (failure instanceof RuntimeException) {
+                    throw (RuntimeException) failure;
+                } else {
+                    throw new ExecutionException(failure);
+                }
+            }
+        }
 
         @Override
         public void close(Duration timeout) { /* no-op */ }
@@ -146,6 +309,37 @@ class TopicEnsureServiceTest {
             }
         }
 
+        private DescribeOutcome resolveOutcome(String topic) {
+            ArrayDeque<DescribeOutcome> queue = describePlan.get(topic);
+            if (queue != null && !queue.isEmpty()) {
+                DescribeOutcome outcome = queue.peekFirst();
+                if (queue.size() > 1) {
+                    outcome = queue.removeFirst();
+                }
+                return outcome;
+            }
+            return defaultOutcome;
+        }
+
+        private KafkaFuture<TopicDescription> futureFor(String topic, DescribeOutcome outcome) {
+            KafkaFutureImpl<TopicDescription> future = new KafkaFutureImpl<>();
+            switch (outcome) {
+                case EXISTS:
+                    future.complete(topicDescription(topic, partitions));
+                    break;
+                case MISSING:
+                    future.completeExceptionally(new UnknownTopicOrPartitionException("no such topic " + topic));
+                    break;
+                case UNKNOWN:
+                    future.completeExceptionally(new RuntimeException("describe failure for " + topic));
+                    break;
+                case TIMEOUT:
+                    future.completeExceptionally(new TimeoutException("describe timeout " + topic));
+                    break;
+            }
+            return future;
+        }
+
         private static TopicDescription topicDescription(String name, int partitions) {
             List<TopicPartitionInfo> infos = new ArrayList<>(partitions);
             Node leader = new Node(0, "localhost", 9092);
@@ -159,5 +353,8 @@ class TopicEnsureServiceTest {
         private static Config emptyConfig() {
             return new Config(Collections.<ConfigEntry>emptyList());
         }
+
     }
+
+    private enum DescribeOutcome { EXISTS, MISSING, UNKNOWN, TIMEOUT }
 }

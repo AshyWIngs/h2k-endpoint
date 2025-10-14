@@ -16,13 +16,11 @@ import kz.qazmarka.h2k.schema.registry.SchemaRegistry;
  * Набор юнит‑тестов для конфигурации {@link H2kConfig}.
  *
  * Что проверяем:
- * - парсинг карты соли Phoenix per‑table: {@code h2k.salt.map}. Поддерживаются форматы
- *   {@code NS:TABLE:BYTES}, {@code NS:TABLE=BYTES}, {@code TABLE:BYTES}, {@code TABLE=BYTES},
- *   а также одиночный {@code TABLE} со значением по умолчанию 1; значения клиппируются в диапазон 0..8;
- * - парсинг подсказок ёмкости JSON per‑table: {@code h2k.capacity.hint.*} с разрешением по полному
- *   имени ({@code NS:TABLE}) и только по квалифаеру ({@code TABLE});
- * - генерация имён Kafka‑топиков: плейсхолдеры ({@code ${namespace}}, {@code ${qualifier}}),
+ * - использование Avro‑метаданных для соли/подсказки ёмкости, если отсутствуют явные конфиги;
+ * - генерацию имён Kafka‑топиков: плейсхолдеры ({@code ${namespace}}, {@code ${qualifier}}),
  *   санитайзинг недопустимых символов и жёсткое усечение по {@code h2k.topic.max.length};
+ * - сборку конфигурации CF‑фильтра из провайдера метаданных;
+ * - основные флаги и секции (ensureTopics, autotune BatchSender и т.п.).
  *
  * Нефункциональные требования:
  * - используется только in‑memory {@link org.apache.hadoop.conf.Configuration}; без I/O;
@@ -52,49 +50,14 @@ class H2kConfigTest {
     }
 
     /**
-     * GIVEN: карта соли с разными вариантами записи токенов, включая отрицательные, нулевые,
-     *        сверхлимитные и без числа.
-     * WHEN:  парсим {@code h2k.salt.map}.
-     * THEN:  значения нормализуются к диапазону 0..8; отсутствие числа трактуется как 1;
-     *        поиск по {@link TableName} нечувствителен к регистру.
-     */
-    @Test
-    @DisplayName("salt.map: поддержка ns:qualifier и TABLE:BYTES, клиппинг значений")
-    void saltMap_parsing() {
-        Configuration c = new Configuration(false);
-        // BYTES: 1 по умолчанию, <0 → 0, >8 → 8
-        c.set("h2k.salt.map", "DEFAULT:TBL:1,TBL2:0,DAILY_MOVES:-5,ANOTHER:99,QUALIFIER_ONLY");
-        H2kConfig hc = fromCfg(c);
-
-        assertEquals(1, hc.getSaltBytesFor(TableName.valueOf("DEFAULT", "TBL")));
-        assertEquals(0, hc.getSaltBytesFor(TableName.valueOf("default", "tbl2"))); // нет регистра у ns в HBase, но оставим как есть
-        assertEquals(0, hc.getSaltBytesFor(TableName.valueOf("default", "daily_moves")));
-        assertEquals(8, hc.getSaltBytesFor(TableName.valueOf("default", "another")));
-        assertEquals(1, hc.getSaltBytesFor(TableName.valueOf("default", "qualifier_only")));
-    }
-
-    /**
      * GIVEN: подсказки ёмкости заданы и для полного имени ({@code NS:TABLE}), и только для
      *        квалифаера ({@code TABLE}).
      * WHEN:  запрашиваем хинты для разных {@link TableName}.
      * THEN:  разрешение работает и по полному имени, и по квалифаеру; для отсутствующих ключей → 0.
      */
     @Test
-    @DisplayName("capacity.hint.*: разрешение по полному имени и по квалифаеру")
-    void capacityHints_resolve() {
-        Configuration c = new Configuration(false);
-        c.set("h2k.capacity.hint.DEFAULT:TBL", "36");
-        c.set("h2k.capacity.hint.ONLYQUAL", "18");
-        H2kConfig hc = fromCfg(c);
-
-        assertEquals(36, hc.getCapacityHintFor(TableName.valueOf("DEFAULT", "TBL")));
-        assertEquals(18, hc.getCapacityHintFor(TableName.valueOf("ANY", "ONLYQUAL")));
-        assertEquals(0,  hc.getCapacityHintFor(TableName.valueOf("DEFAULT", "ABSENT")));
-    }
-
-    @Test
-    @DisplayName("Avro metadata provider дополняет соль и capacity при отсутствии конфигурации")
-    void metadataProvider_overridesMissingConfig() {
+    @DisplayName("Avro metadata provider задаёт соль и capacity, если нет конфигурации")
+    void metadataProvider_providesSaltAndCapacity() {
         Configuration c = new Configuration(false);
         PhoenixTableMetadataProvider provider = new PhoenixTableMetadataProvider() {
             @Override
@@ -119,13 +82,6 @@ class H2kConfigTest {
         TableName table = TableName.valueOf("DEFAULT", "T_META");
         assertEquals(3, hc.getSaltBytesFor(table));
         assertEquals(42, hc.getCapacityHintFor(table));
-
-        // Конфигурация имеет приоритет над метаданными
-        c.set("h2k.salt.map", "T_META=5");
-        c.set("h2k.capacity.hint.T_META", "7");
-        hc = fromCfg(c, provider);
-        assertEquals(5, hc.getSaltBytesFor(table));
-        assertEquals(7, hc.getCapacityHintFor(table));
     }
 
     /**
@@ -326,47 +282,6 @@ class H2kConfigTest {
         assertTrue(topic.startsWith("AGG.") || topic.startsWith("AGG_"),
                 "Ожидаем префикс с namespace после санитайза");
     }
-
-    /**
-     * Негативные значения подсказок ёмкости.
-     * Ожидаем: нечисловые и отрицательные значения игнорируются, метод возвращает 0.
-     */
-    @Test
-    @DisplayName("capacity.hint.*: нечисло/отрицательное — игнорируется (возврат 0)")
-    void capacityHints_invalidValues() {
-        Configuration c = new Configuration(false);
-        c.set("h2k.capacity.hint.BADNUM", "abc");  // нечисло
-        c.set("h2k.capacity.hint.NEG", "-5");      // отрицательное
-        H2kConfig hc = fromCfg(c);
-
-        assertEquals(0, hc.getCapacityHintFor(TableName.valueOf("DEFAULT", "BADNUM")));
-        assertEquals(0, hc.getCapacityHintFor(TableName.valueOf("DEFAULT", "NEG")));
-    }
-
-    /**
-     * Стойкость парсера карты соли к «мусорным» токенам.
-     * Ожидаем: отсутствие падений; любые результаты в допустимом диапазоне 0..8,
-     *           а для валидной пары — точное совпадение.
-     */
-    @Test
-    @DisplayName("salt.map: «мусорные» токены не должны ронять парсер; значения в диапазоне 0..8")
-    void saltMap_garbageTokensAreSafe() {
-        Configuration c = new Configuration(false);
-        // BAD: пропущенные части и нечисловые байты
-        c.set("h2k.salt.map", "BADTOKEN,ONLYNS:,NS:QUAL:NaN,VALID:2");
-        H2kConfig hc = fromCfg(c);
-
-        int a = hc.getSaltBytesFor(TableName.valueOf("DEFAULT", "BADTOKEN"));
-        int b = hc.getSaltBytesFor(TableName.valueOf("DEFAULT", "ONLYNS"));
-        int d = hc.getSaltBytesFor(TableName.valueOf("NS", "QUAL"));
-        int ok = hc.getSaltBytesFor(TableName.valueOf("DEFAULT", "VALID"));
-
-        assertTrue(a >= 0 && a <= 8);
-        assertTrue(b >= 0 && b <= 8);
-        assertTrue(d >= 0 && d <= 8);
-        assertEquals(2, ok);
-    }
-
     /**
      * Неизвестное значение {@code h2k.rowkey.encoding}.
      * Ожидаем поведение по умолчанию: HEX (т.е. {@link H2kConfig#isRowkeyBase64()} = false).

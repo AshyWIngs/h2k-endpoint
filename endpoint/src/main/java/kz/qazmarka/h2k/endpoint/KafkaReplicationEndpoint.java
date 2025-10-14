@@ -3,7 +3,6 @@ package kz.qazmarka.h2k.endpoint;
 import java.io.IOException;
 import java.nio.file.Paths;
 import java.util.List;
-import java.util.Map;
 import java.util.Properties;
 import java.util.UUID;
 
@@ -107,7 +106,6 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
             this.batchTuner = null;
         }
         batchMetrics.updateConfiguredAwaitEvery(this.h2k.getAwaitEvery());
-        logSaltSummary();
         final PayloadBuilder payload = new PayloadBuilder(decoder, h2k);
         final TopicEnsurer topicEnsurer = TopicEnsurer.createIfEnabled(h2k);
         this.topicManager = new TopicManager(h2k, topicEnsurer);
@@ -115,25 +113,6 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
         registerMetrics(payload, walEntryProcessor);
         logPayloadSerializer(payload);
         logInitSummary();
-    }
-
-    /**
-     * Печатает сводку по карте «соли» rowkey (h2k.salt.map) в DEBUG. Ошибки не критичны.
-     */
-    private void logSaltSummary() {
-        if (!LOG.isDebugEnabled()) {
-            return;
-        }
-        try {
-            final Map<String, Integer> saltMap = h2k.getSaltBytesByTable();
-            if (saltMap == null || saltMap.isEmpty()) {
-                LOG.debug("Соль rowkey не задана в h2k.salt.map; будут использованы значения из Avro-схем (см. DEBUG при обработке таблиц).");
-            } else {
-                LOG.debug("Соль rowkey (h2k.salt.map): {} ({} записей)", saltMap, saltMap.size());
-            }
-        } catch (Exception t) {
-            LOG.debug("Не удалось вывести сводку h2k.salt.map (не критично)", t);
-        }
     }
 
     /**

@@ -12,6 +12,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import kz.qazmarka.h2k.config.H2kConfig;
+import kz.qazmarka.h2k.schema.registry.PhoenixTableMetadataProvider;
+import kz.qazmarka.h2k.schema.registry.SchemaRegistry;
 
 /**
  * Проверяет накопление статистики TableCapacityObserver и фиксацию рекомендаций.
@@ -20,7 +22,7 @@ class TableCapacityObserverTest {
 
     /**
      * Проверяет, что после накопления достаточного числа строк наблюдатель увеличивает максимум и
-     * фиксирует рекомендацию по обновлению `h2k.capacity.hints`.
+     * фиксирует рекомендацию по обновлению `h2k.capacityHint` в Avro-схеме.
      */
     @Test
     @DisplayName("Рекомендуемая подсказка появляется после достижения порога строк")
@@ -28,9 +30,21 @@ class TableCapacityObserverTest {
         Configuration configuration = new Configuration(false);
         configuration.set("h2k.kafka.bootstrap.servers", "mock:9092");
         configuration.set("h2k.topic.pattern", "${namespace}.${qualifier}");
-        configuration.set("h2k.capacity.hints", "ns:cap=2");
 
-        H2kConfig h2kConfig = H2kConfig.from(configuration, "mock:9092");
+        PhoenixTableMetadataProvider provider = new PhoenixTableMetadataProvider() {
+            @Override
+            public Integer saltBytes(TableName table) { return null; }
+
+            @Override
+            public Integer capacityHint(TableName table) {
+                return "NS:CAP".equalsIgnoreCase(table.getNameAsString()) ? 2 : null;
+            }
+
+            @Override
+            public String[] columnFamilies(TableName table) { return SchemaRegistry.EMPTY; }
+        };
+
+        H2kConfig h2kConfig = H2kConfig.from(configuration, "mock:9092", provider);
         TableCapacityObserver observer = TableCapacityObserver.create(h2kConfig);
         TableName table = TableName.valueOf("ns", "cap");
 
