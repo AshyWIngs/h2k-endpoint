@@ -12,9 +12,7 @@
 - ZK и RegionServers — штатная конфигурация HBase.
 - Kafka clients **2.3.1** (на стороне эндпоинта), без SASL/SSL (по проектной договорённости).
 - Файлы примеров для удобства:
-  - `conf/add_peer_shell_fast.txt`
   - `conf/add_peer_shell_balanced.txt`
-  - `conf/add_peer_shell_reliable.txt`
   - `conf/hbase-site.xml` (опциональный источник `h2k.*`)
 
 ---
@@ -39,47 +37,7 @@
 
 ## Добавление peer (add_peer)
 
-Рекомендуется использовать готовые профили:
-
-- **FAST**: см. `conf/add_peer_shell_fast.txt`
-- **BALANCED**: см. `conf/add_peer_shell_balanced.txt`
-- **RELIABLE**: см. `conf/add_peer_shell_reliable.txt`
-
-Пример общего вида (сокращённо):
-
-```ruby
-add_peer 'h2k_balanced',
-  { 'ENDPOINT_CLASSNAME' => 'kz.qazmarka.h2k.endpoint.KafkaReplicationEndpoint',
-    'CONFIG' => {
-      'h2k.kafka.bootstrap.servers'   => '10.254.3.111:9092,10.254.3.112:9092,10.254.3.113:9092',
-      'h2k.topic.pattern'             => '${table}',
-      'h2k.decode.mode'               => 'phoenix-avro',
-      'h2k.json.serialize.nulls'      => 'false',
-      'h2k.payload.include.meta'      => 'false',
-      'h2k.payload.include.meta.wal'  => 'false',
-      'h2k.payload.include.rowkey'    => 'false',
-      # Соль и capacity берутся из conf/avro/*.avsc (h2k.saltBytes / h2k.capacityHint)
-      'h2k.ensure.topics'             => 'true',
-      'h2k.topic.partitions'          => '12',
-      'h2k.topic.replication'         => '3',
-      'h2k.admin.timeout.ms'          => '30000',
-      'h2k.ensure.unknown.backoff.ms' => '5000',
-      # Kafka Producer (pass-through + спец-ключи проекта)
-      'h2k.producer.enable.idempotence'     => 'true',
-      'h2k.producer.acks'                   => 'all',
-      'h2k.producer.max.in.flight'          => '5',
-      'h2k.producer.retries'                => '2147483647',
-      'h2k.producer.request.timeout.ms'     => '30000',
-      'h2k.producer.delivery.timeout.ms'    => '120000',
-      'h2k.producer.linger.ms'              => '100',
-      'h2k.producer.batch.size'             => '524288',
-      'h2k.producer.compression.type'       => 'lz4',
-      'h2k.producer.buffer.memory'          => '67108864'
-    }
-  }
-```
-
-> Ключи `h2k.*` описаны в `docs/config.md`. Матрица профилей — в `docs/peer-profiles.md`.
+Рекомендуется использовать готовый скрипт `conf/add_peer_shell_balanced.txt`. Он содержит полный набор рекомендуемых ключей для прод-профиля BALANCED. Краткое описание параметров — в `docs/peer-profiles.md`, разбор всех `h2k.*` ключей — в `docs/config.md`.
 
 ### Column Family и фильтрация
 

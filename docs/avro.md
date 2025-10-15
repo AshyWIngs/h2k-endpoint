@@ -62,7 +62,7 @@
 
 1. **Этап 0 (архив)** — legacy режимы (`payload.format`, `avro.mode`) выключены.
 2. **Этап 1** — единый горячий путь Avro Confluent, локальный реестр `.avsc` как кеш.
-3. **Этап 2** — эксплуатация: мониторинг SR, бэкап `_schemas`, нагрузочные тесты профилей FAST/BALANCED/RELIABLE.
+3. **Этап 2** — эксплуатация: мониторинг SR, бэкап `_schemas`, нагрузочные тесты профиля BALANCED (см. `conf/add_peer_shell_balanced.txt`).
 
 Новая инсталляция пропускает этапы generic/JSON: сразу настраивайте Schema Registry и следите за подсказками `h2k.capacity.hints`.
 

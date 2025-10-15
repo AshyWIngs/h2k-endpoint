@@ -205,17 +205,8 @@
       false — не писать лишние поля (меньше трафик/CPU)
       true  — включать null‑поля в JSON (удобнее потребителю)
   -->
-  <property>
-    <name>h2k.json.serialize.nulls</name>
-    <value>false</value>
-  </property>
 
   <!-- Единственный поддерживаемый режим — phoenix-avro (чтение метаданных из .avsc) -->
-  <property>
-    <name>h2k.decode.mode</name>
-    <value>phoenix-avro</value>
-  </property>
-
   <!--
     Дополнительные поля в payload (по умолчанию выключены):
       include.meta      — служебные поля о таблице/CF/счетчиках клеток

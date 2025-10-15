@@ -48,12 +48,10 @@ alter  'TBL_JTI_TRACE_CIS_HISTORY', { NAME => 'd', REPLICATION_SCOPE => 1 }
 enable 'TBL_JTI_TRACE_CIS_HISTORY'
 ```
 
-4) **Создайте peer** готовым скриптом (рекомендуется BALANCED):
+4) **Создайте peer** готовым скриптом:
 ```bash
 bin/hbase shell conf/add_peer_shell_balanced.txt
 ```
-
-   Альтернативы: `add_peer_shell_fast.txt` и `add_peer_shell_reliable.txt` (см. [матрицу профилей](#профили-peer)).
 
 5) **Проверьте доставку**: сообщения появляются в топике `${table}` (формат Avro Confluent).
 
@@ -76,8 +74,8 @@ bin/hbase shell conf/add_peer_shell_balanced.txt
    Скопируйте `h2k-endpoint-<version>-shaded.jar` в `/opt/hbase-default-current/lib/`.  
 2. Убедитесь, что на RS есть базовые клиентские библиотеки из кластера:
    - `kafka-clients-2.3.1.jar`
-   - `lz4-java-1.6.0+.jar` (для FAST/BALANCED)
-   - `snappy-java-1.1.x+.jar` (для RELIABLE, если `compression.type=snappy`)
+   - `lz4-java-1.6.0+.jar`
+     *(если измените `compression.type` на `snappy`, добавьте `snappy-java-1.1.x+.jar`)*
    > Avro/Jackson и Confluent Schema Registry 5.3.8 шейдятся внутрь `h2k-endpoint-*.jar`, поэтому дополнительные Confluent JAR не нужны.
 3. Перезапустите RegionServer.
 
@@ -145,39 +143,29 @@ h2k.topic.pattern=${table}
 - Включайте флаг точечно для диагностики: появятся рекомендации по `h2k.capacityHint` (из Avro) и предупреждения об неэффективных CF-фильтрах.
 - Метрики и WARN-логи помогают уточнить подсказки для таблиц; после тюнинга флаг можно снова отключить.
 
-### Матрица продьюсерских профилей (значения синхронизированы с `conf/`)
+### Настройки продьюсера (синхронизированы с `conf/add_peer_shell_balanced.txt`)
 
-| Ключ | Единицы | Дефолт (Endpoint) | FAST (`conf/add_peer_shell_fast.txt`) | BALANCED (`conf/add_peer_shell_balanced.txt`) | RELIABLE (`conf/add_peer_shell_reliable.txt`) |
-|---|---|---|---|---|---|
-| `h2k.producer.enable.idempotence` | boolean | `true` | `false` | `true` | `true` |
-| `h2k.producer.acks` | ack mode | `all` | `1` | `all` | `all` |
-| `h2k.producer.max.in.flight` | запросов | `1` | `5` | `5` | `1` |
-| `h2k.producer.linger.ms` | миллисекунды | `50` | `100` | `100` | `50` |
-| `h2k.producer.batch.size` | байты | `65536` | `524288` | `524288` | `65536` |
-| `h2k.producer.compression.type` | алгоритм | `lz4` | `lz4` | `lz4` | `snappy` |
-| `h2k.producer.delivery.timeout.ms` | миллисекунды | `180000` | `90000` | `300000` | `300000` |
+| Ключ | Единицы | Дефолт (Endpoint) | BALANCED |
+|---|---|---|---|
+| `h2k.producer.enable.idempotence` | boolean | `true` | `true` |
+| `h2k.producer.acks` | ack mode | `all` | `all` |
+| `h2k.producer.max.in.flight` | запросов | `1` | `5` |
+| `h2k.producer.linger.ms` | миллисекунды | `50` | `100` |
+| `h2k.producer.batch.size` | байты | `65536` | `524288` |
+| `h2k.producer.compression.type` | алгоритм | `lz4` | `lz4` |
+| `h2k.producer.delivery.timeout.ms` | миллисекунды | `180000` | `300000` |
 
-> Таблица отражает реальные значения из скриптов `conf/add_peer_shell_*.txt`; изменения в профилях необходимо синхронизировать с документацией.
+> BALANCED — основной профиль, объединяющий скорость и устойчивость. Если требуется изменить компрессию или поведение, редактируйте `conf/add_peer_shell_balanced.txt` и обновляйте документацию.
 
 ---
 
 ## Профили peer
 
-Готовые скрипты (каталог `conf/`):
+Готовый скрипт (каталог `conf/`):
 
-- **BALANCED** — `conf/add_peer_shell_balanced.txt` (рекомендуется для прод)
-- **RELIABLE** — `conf/add_peer_shell_reliable.txt` (строгие гарантии/порядок)
-- **FAST** — `conf/add_peer_shell_fast.txt` (максимальная скорость)
+- **BALANCED** — `conf/add_peer_shell_balanced.txt` (единственный поддерживаемый профиль).
 
-Краткая матрица (полные значения и примеры — в [docs/peer-profiles.md](docs/peer-profiles.md)):
-
-| Профиль | Назначение | `acks` | `enable.idempotence` | `max.in.flight` | `linger.ms` | `batch.size` | `compression` |
-|---|---|---|---|---|---|---|---|
-| FAST | максимальная скорость | `1` | `false` | `5` | `100` | `524288` | `lz4` |
-| BALANCED | баланс скорость/надёжность | `all` | `true` | `5` | `100` | `524288` | `lz4` |
-| RELIABLE | строгий порядок и гарантии | `all` | `true` | `1` | `50` | `65536` | `snappy` |
-
-> Дополнительные параметры и подсказки по тюнингу см. в **docs/peer-profiles.md** и **docs/hbase.md**.
+Подробные параметры и подсказки по тюнингу см. в [docs/peer-profiles.md](docs/peer-profiles.md) и [docs/hbase.md](docs/hbase.md).
 
 ---
 

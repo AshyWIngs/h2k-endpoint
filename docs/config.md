@@ -109,7 +109,7 @@
 
 | Ключ | Что делает | Примечание |
 |---|---|---|
-| **`h2k.producer.max.in.flight`** | Упрощённая запись для Kafka‑ключа `max.in.flight.requests.per.connection` | Используйте `1` в строгом профиле (RELIABLE); см. README и peer‑скрипты |
+| **`h2k.producer.max.in.flight`** | Упрощённая запись для Kafka‑ключа `max.in.flight.requests.per.connection` | В BALANCED используем `5`; при строгой потребности в порядке можно временно снизить до `1` |
 | **`h2k.producer.await.every`** | Каждые N записей ждать ACK (бэкпрешер) | Не Kafka‑ключ; внутренняя логика endpoint |
 | **`h2k.producer.await.timeout.ms`** | Таймаут ожидания ACK | Не Kafka‑ключ; внутренняя логика endpoint |
 | **`h2k.producer.batch.counters.enabled`** | Счётчики батчей | Не Kafka‑ключ |
@@ -121,7 +121,7 @@
 | **`h2k.producer.batch.autotune.latency.low.ms`** | Порог задержки (мс) для увеличения `awaitEvery` | `int` (0 — ~16% от `await.timeout.ms`) |
 | **`h2k.producer.batch.autotune.cooldown.ms`** | Минимальный интервал между решениями автонастройки | `int` (мс; дефолт `30000`) |
 
-> Полную матрицу рекомендованных настроек по профилям см. в README и `docs/peer-profiles.md`.
+> Актуальные значения поддерживаемого профиля — в README и `docs/peer-profiles.md`.
 
 ---
 
@@ -140,7 +140,7 @@
 'h2k.ensure.unknown.backoff.ms'=> '5000'
 ```
 
-**FAST / RELIABLE** — см. соответствующие файлы в `conf/` и README для матрицы acks/idempotence/max.in.flight/компрессии.
+Все примеры настроек пиров собраны в `conf/add_peer_shell_balanced.txt`; других профилей мы больше не поддерживаем, чтобы держаться золотой середины между скоростью и стабильностью.
 
 ---
 
