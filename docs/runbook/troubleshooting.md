@@ -91,7 +91,7 @@ log4j.logger.org.apache.phoenix=WARN
 ### Ошибки при формировании payload
 - Null в обязательных параметрах (TableName/qualifier) → NullPointerException.
 - Отсутствует `.avsc` для таблицы → AvroPhoenixSchemaRegistry не сможет инициализироваться (WARN + пропуск данных).
-- При некорректной кодировке rowkey (BASE64/HEX) → ошибка парсинга RowKeySlice.
+- При некорректном rowkey (например, длина меньше `h2k.saltBytes`) → ошибка парсинга `RowKeySlice`.
 
 ### Ошибки Kafka Producer
 - Если producer не может подключиться — проверить bootstrap.servers.

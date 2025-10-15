@@ -220,7 +220,7 @@
     Дополнительные поля в payload (по умолчанию выключены):
       include.meta      — служебные поля о таблице/CF/счетчиках клеток
       include.meta.wal  — поля WAL (_wal_seq/_wal_write_time)
-      include.rowkey    — добавлять rowkey (ниже можно выбрать формат BASE64/HEX)
+      include.rowkey    — добавлять rowkey (байтовое поле Avro без повторного кодирования)
   -->
   <property>
     <name>h2k.payload.include.meta</name>
@@ -233,10 +233,6 @@
   <property>
     <name>h2k.payload.include.rowkey</name>
     <value>false</value>
-  </property>
-  <property>
-    <name>h2k.rowkey.encoding</name>
-    <value>BASE64</value>
   </property>
 
   <!--

@@ -117,18 +117,6 @@ public final class Parsers {
     }
 
     /**
-     * Нормализует способ кодирования rowkey до двух допустимых значений: {@code "hex"} или {@code "base64"}.
-     *
-     * @param val исходное значение (может быть {@code null})
-     * @return {@code "base64"}, если явно указано; иначе {@code "hex"}
-     */
-    public static String normalizeRowkeyEncoding(String val) {
-        if (val == null) return "hex";
-        String v = val.trim().toLowerCase(Locale.ROOT);
-        return "base64".equals(v) ? "base64" : "hex";
-    }
-
-    /**
      * Внутренняя реализация чтения пар ключ/значение по заданному префиксу.
      * Используется публичными методами-обёртками для избежания дублирования логики.
      */

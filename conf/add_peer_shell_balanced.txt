@@ -44,7 +44,6 @@ add_peer 'h2k_balanced',
       # 'h2k.avro.sr.auth.basic.username'  => 'svc-hbase',
       # 'h2k.avro.sr.auth.basic.password'  => '***',
       # RowKey/соль/подсказки задаются в conf/avro/*.avsc через h2k.saltBytes / h2k.capacityHint
-      'h2k.rowkey.encoding'                 => 'BASE64',
 
       # Ожидание подтверждений внутри BatchSender
       'h2k.producer.await.every'            => '500',

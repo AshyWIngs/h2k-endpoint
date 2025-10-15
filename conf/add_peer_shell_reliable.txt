@@ -40,7 +40,6 @@ add_peer 'h2k_reliable',
       # 'h2k.avro.client.cache.capacity'     => '1000',
 
       # RowKey/соль/подсказки задаются в conf/avro/*.avsc (h2k.saltBytes / h2k.capacityHint)
-      'h2k.rowkey.encoding'                 => 'BASE64',
 
       # Ожидание подтверждений внутри BatchSender
       'h2k.producer.await.every'            => '500',

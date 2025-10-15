@@ -13,7 +13,7 @@ CAPACITY_HINT =
 + N(PK)                // колонки первичного ключа — ВСЕГДА присутствуют в JSON
 + (include.meta      ? 8 : 0)   // базовые метаполя
 + (include.meta.wal  ? 2 : 0)   // метаполя WAL
-+ (include.rowkey    ? 1 : 0)   // сериализованный rowkey
++ (include.rowkey    ? 1 : 0)   // поле с бинарным rowkey
 ```
 
 ### Почему так
@@ -41,7 +41,7 @@ CAPACITY_HINT =
 - `_wal_write_time` — время записи в WAL в миллисекундах epoch.
 
 ### Если `h2k.payload.include.rowkey = true` (строго **1** ключ)
-- `_rowkey` — строковый rowkey в кодировке из `h2k.rowkey.encoding` (`BASE64` или `HEX`).
+- `_rowkey` — исходный rowkey как поле Avro `bytes`.
 
 > **Важно:** флаги независимые. Вы можете включать только WAL‑метаданные, оставив базовые `include.meta=false` — тогда добавятся ровно **2** поля.
 

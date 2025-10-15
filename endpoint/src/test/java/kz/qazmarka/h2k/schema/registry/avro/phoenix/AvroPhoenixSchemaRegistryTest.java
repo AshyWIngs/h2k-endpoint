@@ -10,15 +10,21 @@ import java.lang.reflect.Field;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Modifier;
 import java.lang.reflect.Proxy;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.TableName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
+import kz.qazmarka.h2k.config.H2kConfig;
 import kz.qazmarka.h2k.schema.registry.SchemaRegistry;
 import kz.qazmarka.h2k.schema.registry.PhoenixTableMetadataProvider;
 import kz.qazmarka.h2k.schema.registry.avro.local.AvroSchemaRegistry;
@@ -85,7 +91,7 @@ class AvroPhoenixSchemaRegistryTest {
     @Test
     void shouldWarnAndFallbackWhenCfCsvHasNoValidValues() {
         AvroPhoenixSchemaRegistry registry = registryWithTestSchemas();
-        TableName table = TableName.valueOf("T_AVRO_BAD_CF_CSV");
+       TableName table = TableName.valueOf("T_AVRO_BAD_CF_CSV");
 
         try (WarnCapture capture = new WarnCapture()) {
             String[] families = registry.columnFamilies(table);
@@ -95,6 +101,101 @@ class AvroPhoenixSchemaRegistryTest {
             assertTrue(capture.contains("не содержит валидных имён"),
                     "WARN должен описывать фильтр без валидных значений");
         }
+    }
+
+    @Test
+    void shouldUseAvroSaltAndCapacityWhenAvailable(@TempDir Path tempDir) throws Exception {
+        TableName table = TableName.valueOf("T_META_POS");
+        Path schemaPath = tempDir.resolve("t_meta_pos.avsc");
+        Files.write(schemaPath, schemaJson("T_META_POS", 1, 12).getBytes(StandardCharsets.UTF_8));
+
+        AvroPhoenixSchemaRegistry registry = new AvroPhoenixSchemaRegistry(new AvroSchemaRegistry(tempDir));
+        assertEquals(Integer.valueOf(1), registry.saltBytes(table));
+        assertEquals(Integer.valueOf(12), registry.capacityHint(table));
+
+        Configuration cfg = new Configuration(false);
+        cfg.set("h2k.capacity.hints.DEFAULT:T_META_POS", "999"); // legacy конфиг игнорируется
+
+        H2kConfig config = H2kConfig.from(cfg, "mock:9092", registry);
+        H2kConfig.TableOptionsSnapshot snapshot = config.describeTableOptions(table);
+        assertEquals(1, snapshot.saltBytes());
+        assertEquals(H2kConfig.ValueSource.AVRO, snapshot.saltSource());
+        assertEquals(12, snapshot.capacityHint());
+        assertEquals(H2kConfig.ValueSource.AVRO, snapshot.capacitySource());
+    }
+
+    @Test
+    void shouldWarnAndFallbackForNegativeSaltOrCapacity(@TempDir Path tempDir) throws Exception {
+        TableName table = TableName.valueOf("T_META_NEG");
+        Path schemaPath = tempDir.resolve("t_meta_neg.avsc");
+        Files.write(schemaPath, schemaJson("T_META_NEG", -3, -7).getBytes(StandardCharsets.UTF_8));
+
+        AvroPhoenixSchemaRegistry registry = new AvroPhoenixSchemaRegistry(new AvroSchemaRegistry(tempDir));
+        try (WarnCapture capture = new WarnCapture()) {
+            assertNull(registry.saltBytes(table), "Отрицательная соль должна игнорироваться");
+            assertNull(registry.capacityHint(table), "Отрицательная подсказка должна игнорироваться");
+            assertTrue(capture.warnCount() >= 2, "Ожидаем хотя бы два предупреждения (соль и подсказка)");
+            assertTrue(capture.contains("h2k.saltBytes"), "WARN должен упоминать h2k.saltBytes");
+            assertTrue(capture.contains("h2k.capacityHint"), "WARN должен упоминать h2k.capacityHint");
+        }
+
+        H2kConfig config = H2kConfig.from(new Configuration(false), "mock:9092", registry);
+        H2kConfig.TableOptionsSnapshot snapshot = config.describeTableOptions(table);
+        assertEquals(0, snapshot.saltBytes());
+        assertEquals(H2kConfig.ValueSource.DEFAULT, snapshot.saltSource());
+        assertEquals(0, snapshot.capacityHint());
+        assertEquals(H2kConfig.ValueSource.DEFAULT, snapshot.capacitySource());
+    }
+
+    @Test
+    void shouldFallbackToDefaultsWhenSaltAndCapacityMissing(@TempDir Path tempDir) throws Exception {
+        TableName table = TableName.valueOf("T_META_EMPTY");
+        Path schemaPath = tempDir.resolve("t_meta_empty.avsc");
+        Files.write(schemaPath, schemaJson("T_META_EMPTY", null, null).getBytes(StandardCharsets.UTF_8));
+
+        AvroPhoenixSchemaRegistry registry = new AvroPhoenixSchemaRegistry(new AvroSchemaRegistry(tempDir));
+        try (WarnCapture capture = new WarnCapture()) {
+            assertNull(registry.saltBytes(table));
+            assertNull(registry.capacityHint(table));
+            assertEquals(0, capture.warnCount(), "Отсутствие свойств не должно генерировать WARN");
+        }
+
+        H2kConfig config = H2kConfig.from(new Configuration(false), "mock:9092", registry);
+        H2kConfig.TableOptionsSnapshot snapshot = config.describeTableOptions(table);
+        assertEquals(0, snapshot.saltBytes());
+        assertEquals(H2kConfig.ValueSource.DEFAULT, snapshot.saltSource());
+        assertEquals(0, snapshot.capacityHint());
+        assertEquals(H2kConfig.ValueSource.DEFAULT, snapshot.capacitySource());
+    }
+
+    private static String schemaJson(String recordName, Integer saltBytes, Integer capacityHint) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("{\n");
+        sb.append("  \"type\": \"record\",\n");
+        sb.append("  \"name\": \"").append(recordName).append("\",\n");
+        sb.append("  \"namespace\": \"kz.qazmarka.temp\",\n");
+        if (saltBytes != null) {
+            sb.append("  \"h2k.saltBytes\": ").append(saltBytes).append(",\n");
+        }
+        if (capacityHint != null) {
+            sb.append("  \"h2k.capacityHint\": ").append(capacityHint).append(",\n");
+        }
+        sb.append("  \"h2k.pk\": [\"id\"],\n");
+        sb.append("  \"fields\": [\n");
+        sb.append("    {\n");
+        sb.append("      \"name\": \"id\",\n");
+        sb.append("      \"type\": \"string\",\n");
+        sb.append("      \"h2k.phoenixType\": \"VARCHAR\"\n");
+        sb.append("    },\n");
+        sb.append("    {\n");
+        sb.append("      \"name\": \"value\",\n");
+        sb.append("      \"type\": [\"null\", \"string\"],\n");
+        sb.append("      \"default\": null,\n");
+        sb.append("      \"h2k.phoenixType\": \"VARCHAR\"\n");
+        sb.append("    }\n");
+        sb.append("  ]\n");
+        sb.append("}\n");
+        return sb.toString();
     }
 
     private AvroPhoenixSchemaRegistry registryWithTestSchemas() {

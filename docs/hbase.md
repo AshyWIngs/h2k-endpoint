@@ -58,7 +58,6 @@ add_peer 'h2k_balanced',
       'h2k.payload.include.meta'      => 'false',
       'h2k.payload.include.meta.wal'  => 'false',
       'h2k.payload.include.rowkey'    => 'false',
-      'h2k.rowkey.encoding'           => 'BASE64',
       # Соль и capacity берутся из conf/avro/*.avsc (h2k.saltBytes / h2k.capacityHint)
       'h2k.ensure.topics'             => 'true',
       'h2k.topic.partitions'          => '12',

@@ -19,7 +19,6 @@
 - `h2k.topic.pattern=${table}`
 - `h2k.decode.mode=phoenix-avro`
 - `h2k.json.serialize.nulls=false`
-- `h2k.rowkey.encoding=BASE64`
 - `h2k.ensure.topics=true`, `h2k.topic.partitions=12`, `h2k.topic.replication=3`
 - `h2k.producer.await.every=500`, `h2k.producer.await.timeout.ms=180000` (FAST) / `300000` (BALANCED/RELIABLE)
 - Автоадаптация `awaitEvery` теперь выключена по умолчанию; добавьте `h2k.producer.batch.autotune.enabled=true`, если хотите сохранить прежнее поведение тюнера.

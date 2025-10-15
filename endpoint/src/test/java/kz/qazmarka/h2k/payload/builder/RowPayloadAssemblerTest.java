@@ -10,6 +10,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.nio.ByteBuffer;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
@@ -117,6 +118,75 @@ class RowPayloadAssemblerTest {
         assertTrue(ex.getMessage().contains("rowkey"), "Диагностика должна указывать на отсутствие rowkey");
     }
 
+    @Test
+    void assembleShouldDecodeRowKeyWhenSaltConfigured() {
+        SaltAwareDecoder saltAware = new SaltAwareDecoder();
+        Decoder decoder = saltAware;
+        RowPayloadAssembler assembler = new RowPayloadAssembler(
+                decoder,
+                configWithProvider(metadataProvider(1)),
+                new AvroSchemaRegistry(Paths.get("src", "test", "resources", "avro")));
+
+        byte[] rowKeyBytes = new byte[]{(byte) 0x7F, 'i', 'd', '-', 's', 'a', 'l', 't'};
+        GenericData.Record avroRecord = assembler.assemble(
+                TABLE,
+                Collections.emptyList(),
+                RowKeySlice.whole(rowKeyBytes),
+                0L,
+                0L);
+
+        assertEquals("id-salt", avroRecord.get("id"));
+        assertEquals(1, saltAware.lastSaltBytes(),
+                "Decoder должен получать число байтов соли из конфигурации");
+    }
+
+    @Test
+    void assembleShouldPassZeroSaltWhenMetadataMissing() {
+        SaltAwareDecoder saltAware = new SaltAwareDecoder();
+        Decoder decoder = saltAware;
+        RowPayloadAssembler assembler = new RowPayloadAssembler(
+                decoder,
+                configWithProvider(metadataProvider(null)),
+                new AvroSchemaRegistry(Paths.get("src", "test", "resources", "avro")));
+
+        byte[] rowKeyBytes = Bytes.toBytes("plain-rowkey");
+        GenericData.Record avroRecord = assembler.assemble(
+                TABLE,
+                Collections.emptyList(),
+                RowKeySlice.whole(rowKeyBytes),
+                0L,
+                0L);
+
+        assertEquals("plain-rowkey", avroRecord.get("id"));
+        assertEquals(0, saltAware.lastSaltBytes(),
+                "При отсутствии соли в метаданных RowPayloadAssembler должен передавать 0");
+    }
+
+    @Test
+    void assembleShouldFailWhenRowKeyShorterThanSaltBytes() {
+        SaltAwareDecoder saltAware = new SaltAwareDecoder();
+        Decoder decoder = saltAware;
+        RowPayloadAssembler assembler = new RowPayloadAssembler(
+                decoder,
+                configWithProvider(metadataProvider(1)),
+                new AvroSchemaRegistry(Paths.get("src", "test", "resources", "avro")));
+
+        byte[] rowKeyBytes = new byte[]{0x42}; // только байт соли, без PK
+        List<Cell> emptyCells = Collections.emptyList();
+        RowKeySlice rowKeySlice = RowKeySlice.whole(rowKeyBytes);
+        IllegalStateException ex = assertThrows(IllegalStateException.class,
+                () -> assembler.assemble(
+                        TABLE,
+                        emptyCells,
+                        rowKeySlice,
+                        0L,
+                        0L));
+        assertTrue(ex.getMessage().contains("PK 'id'"),
+                "Диагностика должна указывать на отсутствие декодированного PK");
+        assertEquals(1, saltAware.lastSaltBytes(),
+                "Даже при ошибке декодер получает ожидаемое число байтов соли");
+    }
+
     private TestContext newContext() {
         StubDecoder decoder = new StubDecoder();
         RowPayloadAssembler assembler = new RowPayloadAssembler(
@@ -127,17 +197,22 @@ class RowPayloadAssemblerTest {
     }
 
     private H2kConfig config() {
-        PhoenixTableMetadataProvider metadata = new PhoenixTableMetadataProvider() {
+        return configWithProvider(metadataProvider(0));
+    }
+
+    private H2kConfig configWithProvider(PhoenixTableMetadataProvider metadata) {
+        H2kConfig.Builder builder = new H2kConfig.Builder("mock:9092");
+        builder.tableMetadataProvider(metadata);
+        return builder.build();
+    }
+
+    private PhoenixTableMetadataProvider metadataProvider(final Integer saltBytes) {
+        return new PhoenixTableMetadataProvider() {
             private final String[] pk = new String[]{"id"};
 
             @Override
-            public String[] primaryKeyColumns(TableName table) {
-                return pk.clone();
-            }
-
-            @Override
             public Integer saltBytes(TableName table) {
-                return 0;
+                return saltBytes;
             }
 
             @Override
@@ -149,11 +224,12 @@ class RowPayloadAssemblerTest {
             public String[] columnFamilies(TableName table) {
                 return new String[]{"data"};
             }
-        };
 
-        H2kConfig.Builder builder = new H2kConfig.Builder("mock:9092");
-        builder.tableMetadataProvider(metadata);
-        return builder.build();
+            @Override
+            public String[] primaryKeyColumns(TableName table) {
+                return pk.clone();
+            }
+        };
     }
 
     private Cell putCell(String qualifier, long ts, byte[] value) {
@@ -214,6 +290,31 @@ class RowPayloadAssemblerTest {
                 result = result * 10 + digit;
             }
             return negative ? -result : result;
+        }
+    }
+
+    private static final class SaltAwareDecoder implements Decoder {
+        private int lastSaltBytes = -1;
+
+        @Override
+        public Object decode(TableName table, String qualifier, byte[] value) {
+            return null;
+        }
+
+        @Override
+        public void decodeRowKey(TableName table, RowKeySlice rk, int saltBytes, Map<String, Object> out) {
+            lastSaltBytes = saltBytes;
+            if (rk == null || rk.getLength() <= saltBytes) {
+                return;
+            }
+            int offset = rk.getOffset() + saltBytes;
+            int length = rk.getLength() - saltBytes;
+            String id = Bytes.toString(rk.getArray(), offset, length);
+            out.put("id", id);
+        }
+
+        int lastSaltBytes() {
+            return lastSaltBytes;
         }
     }
 

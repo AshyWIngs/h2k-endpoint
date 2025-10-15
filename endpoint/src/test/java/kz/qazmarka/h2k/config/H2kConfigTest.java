@@ -282,8 +282,4 @@ class H2kConfigTest {
         assertTrue(topic.startsWith("AGG.") || topic.startsWith("AGG_"),
                 "Ожидаем префикс с namespace после санитайза");
     }
-    /**
-     * Неизвестное значение {@code h2k.rowkey.encoding}.
-     * Ожидаем поведение по умолчанию: HEX (т.е. {@link H2kConfig#isRowkeyBase64()} = false).
-     */
 }

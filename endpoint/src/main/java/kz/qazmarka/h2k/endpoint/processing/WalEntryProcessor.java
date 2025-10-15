@@ -59,6 +59,8 @@ public final class WalEntryProcessor {
     private final LongAdder rowBufferTrim = new LongAdder();
     private final TableCapacityObserver capacityObserver;
     private final CfFilterObserver cfFilterObserver;
+    private final TableOptionsObserver tableOptionsObserver;
+    private final SaltUsageObserver saltObserver;
     private final AtomicLong throughputWindowStart = new AtomicLong(System.nanoTime());
     private final java.util.concurrent.atomic.AtomicReference<CfFilterCache> cfFilterCache =
             new java.util.concurrent.atomic.AtomicReference<>(CfFilterCache.EMPTY);
@@ -76,9 +78,13 @@ public final class WalEntryProcessor {
         if (config.isObserversEnabled()) {
             this.capacityObserver = TableCapacityObserver.create(config);
             this.cfFilterObserver = CfFilterObserver.create();
+            this.tableOptionsObserver = TableOptionsObserver.create();
+            this.saltObserver = SaltUsageObserver.create();
         } else {
             this.capacityObserver = TableCapacityObserver.disabled();
             this.cfFilterObserver = CfFilterObserver.disabled();
+            this.tableOptionsObserver = TableOptionsObserver.disabled();
+            this.saltObserver = SaltUsageObserver.disabled();
         }
     }
 
@@ -94,6 +100,7 @@ public final class WalEntryProcessor {
                         boolean includeWalMeta) {
         final List<Cell> cells = entry.getEdit().getCells();
         final TableName table = entry.getKey().getTablename();
+        final H2kConfig.TableOptionsSnapshot tableOptions = config.describeTableOptions(table);
         final H2kConfig.CfFilterSnapshot cfSnapshot = config.describeCfFilter(table);
         final boolean filterConfigured = cfSnapshot.enabled();
 
@@ -110,7 +117,15 @@ public final class WalEntryProcessor {
         CfFilterCache cfCache = prepareCfCache(filterConfigured ? cfSnapshot.families() : null);
         boolean filterActive = filterConfigured && !cfCache.isEmpty();
 
-        RowProcessingContext context = createRowProcessingContext(filterActive, cfCache, topic, table, walMeta, sender, counters);
+        RowProcessingContext context = createRowProcessingContext(
+                filterActive,
+                cfCache,
+                topic,
+                table,
+                walMeta,
+                sender,
+                counters);
+        context.applyTableOptions(tableOptions);
 
         final ArrayList<Cell> localRowBuffer = prepareRowBuffer(cells.size());
         processWalCells(cells, context, localRowBuffer);
@@ -120,7 +135,7 @@ public final class WalEntryProcessor {
                     table, topic, counters.rowsSent, counters.cellsSent, filterActive, topicManager.ensureEnabled());
         }
 
-        finalizeEntry(table, counters, filterActive, cfSnapshot);
+        finalizeEntry(table, counters, filterActive, cfSnapshot, tableOptions);
         logThroughput(counters);
     }
 
@@ -240,6 +255,7 @@ public final class WalEntryProcessor {
         private WalMeta walMeta;
         private BatchSender sender;
         private ProcessingCounters counters;
+        private H2kConfig.TableOptionsSnapshot tableOptions;
 
         RowProcessingContext configure(boolean filterActive,
                                        CfFilterCache cfCache,
@@ -255,6 +271,12 @@ public final class WalEntryProcessor {
             this.walMeta = walMeta;
             this.sender = sender;
             this.counters = counters;
+            this.tableOptions = null;
+            return this;
+        }
+
+        RowProcessingContext applyTableOptions(H2kConfig.TableOptionsSnapshot options) {
+            this.tableOptions = options;
             return this;
         }
 
@@ -265,6 +287,9 @@ public final class WalEntryProcessor {
         void flushRow(ArrayList<Cell> rowBuffer, RowKeySlice currentSlice) {
             if (currentSlice == null || rowBuffer.isEmpty()) {
                 return;
+            }
+            if (tableOptions != null) {
+                saltObserver.observeRow(table, tableOptions, currentSlice.getLength());
             }
             final int processedCells = rowBuffer.size();
             counters.cellsSeen += processedCells;
@@ -463,7 +488,8 @@ public final class WalEntryProcessor {
     private void finalizeEntry(TableName table,
                                ProcessingCounters counters,
                                boolean filterActive,
-                               H2kConfig.CfFilterSnapshot cfSnapshot) {
+                               H2kConfig.CfFilterSnapshot cfSnapshot,
+                               H2kConfig.TableOptionsSnapshot tableOptions) {
         entriesProcessed.increment();
         long rowsSeen = (long) counters.rowsSent + (long) counters.rowsFiltered;
         if (rowsSeen > 0L) {
@@ -488,6 +514,7 @@ public final class WalEntryProcessor {
             capacityObserver.observe(table, capacityCandidate, rowsForCapacity);
         }
         cfFilterObserver.observe(table, rowsSeen, counters.rowsFiltered, filterActive, cfSnapshot);
+        tableOptionsObserver.observe(table, tableOptions, cfSnapshot);
     }
 
     /** Возвращает агрегированные счётчики обработанных записей WAL. */
