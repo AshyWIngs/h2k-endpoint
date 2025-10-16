@@ -19,7 +19,7 @@
     <slf4j.version>1.7.25</slf4j.version>
     <gson.version>2.8.9</gson.version>
     <lz4.version>1.6.0</lz4.version>
-    <avro.version>1.9.2</avro.version>
+    <avro.version>1.11.4</avro.version>
     <confluent.sr.version>5.3.8</confluent.sr.version>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <avro.mode>confluent</avro.mode>
