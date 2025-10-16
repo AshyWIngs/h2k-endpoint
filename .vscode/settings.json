@@ -1,4 +1,8 @@
-{ 
+{
+  "maven.view": "hierarchical",
+  "codacy.cli.cliVersion": "latest",
+  
+  // === НАСТРОЙКА JAVA 1.8 ===
   "java.configuration.runtimes": [
     {
       "name": "JavaSE-1.8",
@@ -6,34 +10,16 @@
       "default": true
     }
   ],
-  "terminal.integrated.env.osx": {
-    "JAVA_HOME": "/Library/Java/JavaVirtualMachines/zulu-8.jdk/Contents/Home",
-    "PATH": "/Library/Java/JavaVirtualMachines/zulu-8.jdk/Contents/Home/bin:${env:PATH}"
-  },
-  "maven.terminal.customEnv": [
-    {
-      "environmentVariable": "JAVA_HOME",
-      "value": "/Library/Java/JavaVirtualMachines/zulu-8.jdk/Contents/Home"
-    }
-  ],
-  "java.import.exclusions": [
-    "**/target/**"
-  ],
-  "java.project.sourcePaths": [
-    "endpoint/src/main/java",
-    "endpoint/src/test/java",
-    "benchmarks/src/main/java"
-  ],
-  "files.exclude": {
-    "**/target/**": true
-  },
-  "files.watcherExclude": {
-    "**/target/**": true
-  },
-  "search.exclude": {
-    "**/target/**": true
-  },
+  
+  // Отключаем проверки форматирования от Java Language Server
+  "java.completion.guessMethodArguments": "off",
+  "java.format.enabled": false,
+  "java.codeGeneration.hashCodeEquals.useJava7Objects": true,
+  "java.errors.incompleteClasspath.severity": "ignore",
   "java.compile.nullAnalysis.mode": "automatic",
-  "java.configuration.updateBuildConfiguration": "automatic",
-  "maven.view": "hierarchical"
+  "sonarlint.connectedMode.project": {
+    "connectionId": "ashywings",
+    "projectKey": "AshyWIngs_etl"
+  },
+  "java.configuration.updateBuildConfiguration": "automatic"
 }

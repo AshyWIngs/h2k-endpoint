@@ -1,0 +1,299 @@
+package kz.qazmarka.h2k.kafka.ensure;
+
+import java.lang.management.ManagementFactory;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Map;
+import java.util.Properties;
+
+import org.apache.kafka.clients.admin.AdminClient;
+import org.apache.kafka.clients.admin.AdminClientConfig;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import kz.qazmarka.h2k.config.H2kConfig;
+import kz.qazmarka.h2k.kafka.ensure.admin.KafkaTopicAdmin;
+import kz.qazmarka.h2k.kafka.ensure.admin.KafkaTopicAdminClient;
+import kz.qazmarka.h2k.kafka.ensure.config.TopicEnsureConfig;
+import kz.qazmarka.h2k.kafka.ensure.metrics.TopicEnsureState;
+
+/**
+ * Высокоуровневый фасад ensure-логики Kafka-топиков.
+ * Инкапсулирует {@link TopicEnsureService}, поставляя безопасный NOOP-экземпляр для сценариев,
+ * когда ensure отключён конфигурацией или отсутствуют настройки bootstrap. Благодаря этому
+ * вызывающий код не обязан проверять {@code null} и может работать с единым API.
+ */
+public final class TopicEnsurer implements AutoCloseable {
+    private static final Logger LOG = LoggerFactory.getLogger(TopicEnsurer.class);
+
+    private static final TopicEnsurer DISABLED = new TopicEnsurer();
+
+    private final TopicEnsureService service;
+    private final TopicEnsureExecutor executor;
+    private final TopicEnsureState state;
+    private final boolean disabledMode;
+    private final EnsureDelegate ensureDelegate;
+
+    private TopicEnsurer() {
+        this.service = null;
+        this.executor = null;
+        this.state = null;
+        this.disabledMode = true;
+        this.ensureDelegate = null;
+    }
+
+    TopicEnsurer(TopicEnsureService service,
+                         TopicEnsureExecutor executor,
+                         TopicEnsureState state) {
+        this.service = service;
+        this.executor = executor;
+        this.state = state;
+        this.disabledMode = false;
+        this.ensureDelegate = null;
+    }
+
+    private TopicEnsurer(EnsureDelegate delegate) {
+        this.service = null;
+        this.executor = null;
+        this.state = null;
+        this.disabledMode = false;
+        this.ensureDelegate = delegate;
+    }
+
+    /**
+     * Вспомогательная фабрика для тестов: позволяет собрать TopicEnsurer без reflection.
+     */
+    /** Фабрика для модульных тестов: позволяет заменить ensure-логику на простую заглушку без reflection. */
+    public static TopicEnsurer testingDelegate(EnsureDelegate delegate) {
+        if (delegate == null) {
+            throw new IllegalArgumentException("delegate == null");
+        }
+        return new TopicEnsurer(delegate);
+    }
+
+    /**
+     * Возвращает активный энсюрер при включённом {@code h2k.ensure.topics} и корректном bootstrap,
+     * либо NOOP-экземпляр в остальных случаях. В логах фиксируется причина отклонения.
+     */
+    public static TopicEnsurer createIfEnabled(H2kConfig cfg) {
+        if (!cfg.isEnsureTopics()) return disabled();
+        final String bootstrap = cfg.getBootstrap();
+        if (bootstrap == null || bootstrap.trim().isEmpty()) {
+            LOG.warn("TopicEnsurer: не задан bootstrap Kafka — ensureTopics будет отключён");
+            return disabled();
+        }
+        Properties props = cfg.kafkaAdminProps();
+        String baseId = props.getProperty(AdminClientConfig.CLIENT_ID_CONFIG, "h2k-admin");
+        String clientId = uniqueClientId(baseId);
+        props.put(AdminClientConfig.CLIENT_ID_CONFIG, clientId);
+        props.put(AdminClientConfig.REQUEST_TIMEOUT_MS_CONFIG, (int) cfg.getAdminTimeoutMs());
+        AdminClient adminClient = AdminClient.create(props);
+        KafkaTopicAdmin admin = new KafkaTopicAdminClient(adminClient);
+        TopicEnsureConfig config = TopicEnsureConfig.from(cfg);
+        
+        return EnsureComponentsBuilder.build(admin, config, clientId);
+    }
+
+    /**
+     * Builder для безопасного создания компонентов TopicEnsurer с автоматическим cleanup при ошибках.
+     */
+    private static final class EnsureComponentsBuilder implements AutoCloseable {
+        private TopicEnsureService service;
+        private TopicEnsureExecutor executor;
+        private boolean released;
+
+        private EnsureComponentsBuilder() {
+            this.released = false;
+        }
+
+        static TopicEnsurer build(KafkaTopicAdmin admin, TopicEnsureConfig config, String clientId) {
+            try (EnsureComponentsBuilder builder = new EnsureComponentsBuilder()) {
+                TopicEnsureState state = new TopicEnsureState();
+                builder.service = new TopicEnsureService(admin, config, state);
+                builder.executor = new TopicEnsureExecutor(builder.service, state, clientId + "-ensure");
+                builder.executor.start();
+                
+                // Успешное создание - передаём владение ресурсами TopicEnsurer
+                builder.released = true;
+                return new TopicEnsurer(builder.service, builder.executor, state);
+            }
+        }
+
+        @Override
+        public void close() {
+            if (released) {
+                // Ресурсы успешно переданы TopicEnsurer, не закрываем
+                return;
+            }
+            // Ошибка при создании - очищаем временные ресурсы
+            closeQuietly(executor);
+            closeQuietly(service);
+        }
+        
+        private static void closeQuietly(AutoCloseable closeable) {
+            if (closeable == null) {
+                return;
+            }
+            try {
+                closeable.close();
+            } catch (Exception ignored) {
+                // Игнорируем ошибки при закрытии в cleanup-блоке
+            }
+        }
+    }
+
+    /**
+     * Возвращает заранее созданный NOOP-экземпляр, который безопасно игнорирует все вызовы.
+     */
+    public static TopicEnsurer disabled() { return DISABLED; }
+
+    /**
+     * Инициирует ensure для одиночной темы; вызов безопасен, даже если ensure отключён (NOOP).
+     */
+    public void ensureTopic(String topic) {
+        if (ensureDelegate != null) {
+            ensureDelegate.ensureTopic(topic);
+            return;
+        }
+        if (disabledMode) {
+            return;
+        }
+        if (executor == null) {
+            service.ensureTopic(topic);
+            return;
+        }
+        executor.submit(topic);
+    }
+
+    /**
+     * Проверяет наличие темы и при необходимости инициирует ensure; возвращает true только после подтверждения.
+     */
+    public boolean ensureTopicOk(String topic) {
+        if (ensureDelegate != null) {
+            return ensureDelegate.ensureTopicOk(topic);
+        }
+        return !disabledMode && service.ensureTopicOk(topic);
+    }
+
+    /**
+     * Пакетный ensure для набора тем; NOOP в отключённом режиме.
+     */
+    public void ensureTopics(Collection<String> topics) {
+        if (ensureDelegate != null) {
+            ensureDelegate.ensureTopics(topics);
+            return;
+        }
+        if (disabledMode) {
+            return;
+        }
+        service.ensureTopics(topics);
+    }
+
+    /**
+     * Снимок внутренних метрик ensure-процесса; для NOOP-реализации возвращает пустую карту.
+     */
+    public Map<String, Long> getMetrics() {
+        if (ensureDelegate != null) {
+            return ensureDelegate.metrics();
+        }
+        if (disabledMode) {
+            return Collections.emptyMap();
+        }
+        Map<String, Long> base = service.getMetrics();
+        if (state == null) {
+            return base;
+        }
+        Map<String, Long> snapshot = new java.util.LinkedHashMap<>(base);
+        snapshot.put("state.ensured.count", (long) state.ensured.size());
+        return Collections.unmodifiableMap(snapshot);
+    }
+
+    public boolean isEnabled() { return ensureDelegate != null || !disabledMode; }
+
+    @Override
+    /**
+     * Закрывает обёрнутый {@link TopicEnsureService}; в режиме NOOP ничего не делает.
+     */
+    public void close() {
+        if (disabledMode) {
+            return;
+        }
+        if (ensureDelegate != null) {
+            ensureDelegate.close();
+            return;
+        }
+        if (executor != null) {
+            executor.close();
+        }
+        service.close();
+    }
+
+    @Override
+    public String toString() {
+        if (disabledMode) {
+            return "TopicEnsurer[disabled]";
+        }
+        if (ensureDelegate != null) {
+            return "TopicEnsurer[test]";
+        }
+        if (executor == null) {
+            return service.toString();
+        }
+        String base = service.toString();
+        int idx = base.lastIndexOf('}');
+        if (idx > 0) {
+            return base.substring(0, idx) + ", queued=" + executor.queuedTopics() + '}';
+        }
+        return base + ", queued=" + executor.queuedTopics();
+    }
+
+    /**
+     * Вспомогательный метод генерации уникального client.id для AdminClient.
+     * Используется для избежания конфликтов MBean AppInfo.
+     */
+    private static String uniqueClientId(String base) {
+        String host = "host";
+        try {
+            host = InetAddress.getLocalHost().getHostName();
+        } catch (UnknownHostException ignore) { /* no-op */ }
+        String pid = ManagementFactory.getRuntimeMXBean().getName();
+        int at = pid.indexOf('@');
+        if (at > 0) pid = pid.substring(0, at);
+        long ts = System.currentTimeMillis();
+        String prefix = (base == null || base.trim().isEmpty()) ? "h2k-admin" : base.trim();
+        return prefix + "-" + host + "-" + pid + "-" + ts;
+    }
+
+        /**
+         * Минимальный контракт ensure-логики для модульных тестов.
+         * Позволяет управлять поведением {@link TopicEnsurer} без доступа к внутренним финальным полям.
+         */
+        public interface EnsureDelegate extends AutoCloseable {
+            void ensureTopic(String topic);
+
+            default boolean ensureTopicOk(String topic) {
+                ensureTopic(topic);
+                return false;
+            }
+
+            default void ensureTopics(Collection<String> topics) {
+                if (topics == null || topics.isEmpty()) {
+                    return;
+                }
+                for (String topic : topics) {
+                    ensureTopic(topic);
+                }
+            }
+
+            default Map<String, Long> metrics() {
+                return Collections.emptyMap();
+            }
+
+            @Override
+            default void close() {
+                // no-op
+            }
+        }
+}

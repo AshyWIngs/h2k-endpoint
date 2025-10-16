@@ -60,9 +60,8 @@
 
 ## 6. Рекомендации по миграции (Roadmap)
 
-1. **Этап 0 (архив)** — legacy режимы (`payload.format`, `avro.mode`) выключены.
-2. **Этап 1** — единый горячий путь Avro Confluent, локальный реестр `.avsc` как кеш.
-3. **Этап 2** — эксплуатация: мониторинг SR, бэкап `_schemas`, нагрузочные тесты профиля BALANCED (см. `conf/add_peer_shell_balanced.txt`).
+1. **Этап 1** — единый горячий путь Avro Confluent, локальный реестр `.avsc` как кеш.
+2. **Этап 2** — эксплуатация: мониторинг SR, бэкап `_schemas`, нагрузочные тесты профиля BALANCED (см. `conf/add_peer_shell_balanced.txt`).
 
 Новая инсталляция пропускает этапы generic/JSON: сразу настраивайте Schema Registry и следите за подсказками `h2k.capacity.hints`.
 
@@ -74,23 +73,15 @@
 - Мониторинг: `GET /subjects`, `GET /subjects/<subj>/versions`, `GET /schemas/ids/<id>`.
 - Настройте алерты на 5xx/latency SR, ошибки совместимости, рост `_schemas`.
 
-Подробный пример конфигураций — см. [`docs/roadmap-avro.md`](roadmap-avro.md) (оставлен как архивный раздел, см. ниже).
+Подробный пример конфигураций — см. [`docs/schema-registry.md`](rschema-registry.md) .
 
 ## 8. Мониторинг и отладка
 
 - Включайте DEBUG для пакета `kz.qazmarka.h2k.payload.serializer.avro` и `...schema.registry` (см. runbook). Логи показывают путь к схеме, версию, результат регистрации.
-- Метрики `BatchSender`: `producer.batch.await.recommended`, `producer.batch.flush.latency.*` — следите за изменением задержки.
 - В логе `TopicManager` фиксируется `payload.format`/`serializer`.
 - Для ClickHouse используйте таск `SELECT * FROM kafka_table SETTINGS input_format_skip_unknown_fields=1` при тестах.
 
-## 9. Архивные документы
-
-Исторические заметки сохранены для совместимости ссылок:
-
-- [`docs/integration-avro.md`](integration-avro.md) — теперь содержит краткую ссылку на чеклист (этот раздел).
-- [`docs/roadmap-avro.md`](roadmap-avro.md) — сокращён до основных этапов (этот раздел).
-
-## 10. Связанные материалы
+## 9. Связанные материалы
 
 - Конфигурация: [`docs/config.md`](config.md)
 - Phoenix метаданные: [`docs/phoenix.md`](phoenix.md)

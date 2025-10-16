@@ -50,14 +50,14 @@ cfg['CONFIG'].select { |k,_| k.start_with?('h2k.') }
 
 1. **Подготовка** — скопируйте новый JAR на один RS, отключите peer на остальных.
 2. **Smoke-тест** — включите peer только на тестовых таблицах, убедитесь, что в Kafka появляются сообщения, а Schema Registry (если используется) регистрирует схему.
-3. **Наблюдение** — следите за метриками (`status 'replication'`, `WalEntryProcessor.metrics()`, метрики BatchSender/TopicEnsurer, SR).
+3. **Наблюдение** — следите за метриками (`status 'replication'`, `WalEntryProcessor.metrics()`, метрики TopicEnsurer, SR).
 4. **Массовый rollout** — разложите JAR на остальные RS и включайте peer поочерёдно.
 5. **Откат** — `disable_peer`, вернуть предыдущий JAR, перезапустить RegionServer.
 
 ## 5. Мониторинг
 
 - `status 'replication'` — `SizeOfLogQueue`, `AgeOfLastShippedOp`.
-- Метрики `TopicEnsurer` и `BatchSender` (через JMX или логи).
+- Метрики `TopicEnsurer` (через JMX или логи).
 - Schema Registry: `curl $SR/subjects`, latency, ошибки 4xx/5xx.
 - Лог `KafkaReplicationEndpoint` выводит throughput каждые 5 с (`Скорость WAL…`).
 

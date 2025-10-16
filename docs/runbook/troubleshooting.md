@@ -26,7 +26,7 @@ log4j.throwableRenderer=org.apache.log4j.EnhancedThrowableRenderer
 log4j.logger.kz.qazmarka.h2k=INFO,h2k_stdout
 log4j.additivity.kz.qazmarka.h2k=false
 
-# === DEBUG для всех модулей проекта (endpoint/kafka/payload/schema/config/utils) ===
+# === DEBUG для всех пакетов проекта (endpoint/kafka/payload/schema/config/utils) ===
 log4j.logger.kz.qazmarka.h2k.endpoint=DEBUG
 log4j.logger.kz.qazmarka.h2k.kafka.ensure=DEBUG
 log4j.logger.kz.qazmarka.h2k.kafka.ensure.admin=DEBUG
@@ -42,7 +42,6 @@ log4j.logger.kz.qazmarka.h2k.config=DEBUG
 
 # === При необходимости можно включить DEBUG точечно для отдельных классов ===
 log4j.logger.kz.qazmarka.h2k.endpoint.processing.WalEntryProcessor=DEBUG
-log4j.logger.kz.qazmarka.h2k.kafka.producer.batch.BatchSenderTuner=DEBUG
 log4j.logger.kz.qazmarka.h2k.kafka.ensure.TopicEnsureService=DEBUG
 log4j.logger.kz.qazmarka.h2k.payload.serializer.avro.ConfluentAvroPayloadSerializer=DEBUG
 log4j.logger.kz.qazmarka.h2k.schema.registry.avro.phoenix.AvroPhoenixSchemaRegistry=DEBUG
@@ -59,7 +58,7 @@ log4j.logger.org.apache.phoenix=WARN
 - `h2k_stdout` — выделенный консольный аппендер с шаблоном, который подхватывает journald; уровень `DEBUG`
   на аппендере позволяет не терять сообщения от точечных логгеров.
 - Пакет `kz.qazmarka.h2k` остаётся на `INFO`, поэтому рабочие логи не превращаются в «простыню».
-- DEBUG активирован для всех модулей проекта (`endpoint`, `kafka.ensure`, `kafka.producer.batch`, `payload`,
+- DEBUG активирован для всех пакетов проекта (`endpoint`, `kafka.ensure`, `kafka.producer.batch`, `payload`,
   `schema`, `config`, `support`). Дополнительные класс-ориентированные логгеры можно включать при необходимости
   для детального анализа конкретного узкого места.
 - Репликацию HBase можно вернуть на `INFO`, когда отладка завершена: оставьте строку, заменив `DEBUG → INFO`.

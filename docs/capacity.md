@@ -92,13 +92,6 @@ add_peer 'h2k_balanced',
   }
 ```
 
-### В `hbase-site.xml`
-```xml
-<property>
-  <name>h2k.capacity.hints</name>
-  <value>TBL_JTI_TRACE_CIS_HISTORY=32</value>
-</property>
-```
 Для таблиц из `DEFAULT` namespace используйте просто имя таблицы (без `DEFAULT.`).
 > Рекомендуемый способ — задать `"h2k.capacityHint"` прямо в `.avsc`. Конфигурационный ключ оставлен как фолбэк.
 
@@ -152,7 +145,7 @@ kafka-console-consumer.sh \
 - [ ] Учтены флаги метаполей: `include.meta`, `include.meta.wal`, `include.rowkey`.
 - [ ] Для salted таблиц задан корректный `h2k.salt.map`.
 - [ ] Значение ориентировано на **P95**, а не на max.
-- [ ] Значение продублировано в peer (или в `hbase-site.xml`) и проверено через `get_peer_config`.
+- [ ] Значение продублировано в peer и проверено через `get_peer_config`.
 
 ---
 

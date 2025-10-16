@@ -45,5 +45,19 @@ pom.xml.tag
 surefire-reports/
 failsafe-reports/
 
+# === Codacy / Code Quality ===
+.codacy.yml
+codacy-analyze.sh
+codacy-results.json
+codacy-results.sarif
+codacy-security.sarif
+*.sarif
+.codacy/
+
+# --- Автоматические инструкции и служебные каталоги ---
+.github/instructions/
+.github/appmod-java/
+.mvn/
+
 #Ignore vscode AI rules
 .github/instructions/codacy.instructions.md

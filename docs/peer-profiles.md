@@ -8,7 +8,7 @@
 
 - Формат: Avro binary через Confluent Schema Registry (`h2k.avro.sr.urls`, стратегия subject `table`).
 - Топик: `${table}`; метаданные таблиц (PK, соль, `capacityHint`) берутся из `.avsc`.
-- Kafka Producer: `acks=all`, `enable.idempotence=true`, `max.in.flight=5`, `linger.ms=100`, `batch.size=524288`, `compression.type=lz4`, `delivery.timeout.ms=300000`, `await.every=500`, `await.timeout.ms=300000`, `h2k.producer.batch.autotune.enabled=true`.
+- Kafka Producer: `acks=all`, `enable.idempotence=true`, `max.in.flight=5`, `linger.ms=100`, `batch.size=524288`, `compression.type=lz4`, `delivery.timeout.ms=300000`, `await.every=500`, `await.timeout.ms=300000`.
 - TopicEnsurer: `h2k.ensure.topics=true`, `h2k.topic.partitions=12`, `h2k.topic.replication=3`, `h2k.admin.timeout.ms=30000`.
 - Payload метаполя выключены (`include.meta`, `include.meta.wal`, `include.rowkey` = `false`).
 - Буферы/лимиты: `h2k.producer.buffer.memory=268435456`, `h2k.producer.max.request.size=2097152`.

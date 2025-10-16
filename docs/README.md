@@ -14,8 +14,7 @@
 
 ## Схемы, payload и интеграции
 - [`docs/avro.md`](avro.md) — работа с Avro (локальные `.avsc`, Confluent Schema Registry).
-- [`docs/integration-avro.md`](integration-avro.md) — практические сценарии интеграции через Avro.
-- [`docs/roadmap-avro.md`](roadmap-avro.md) — дорожная карта миграции на Avro.
+- [`docs/schema-registry.md`](schema-registry.md) — практические сценарии работы с Confluent Schema Registry.
 - [`docs/capacity.md`](capacity.md) — подсказки ёмкости JSON и рекомендации по `h2k.capacity.hints`.
 - [`docs/clickhouse.md`](clickhouse.md) — ingest JSONEachRow в ClickHouse.
 - [`docs/phoenix.md`](phoenix.md) — особенности Phoenix (PK, salt).

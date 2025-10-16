@@ -27,7 +27,7 @@ add_peer 'h2k_balanced',
   {
     'ENDPOINT_CLASSNAME' => 'kz.qazmarka.h2k.endpoint.KafkaReplicationEndpoint',
     'CONFIG' => {
-      # БАЗА: ключи читаются в Endpoint; peer-параметры перекрывают hbase-site.xml
+      # БАЗА: ключи читаются в Endpoint;
       'h2k.kafka.bootstrap.servers'         => '10.254.3.111:9092,10.254.3.112:9092,10.254.3.113:9092',
       # client.id не задаём — Endpoint сам сгенерирует уникальный id per-host (hostname/UUID)
       'h2k.topic.pattern'                   => '${table}',              # ${table}|${namespace}|${qualifier}
@@ -51,16 +51,6 @@ add_peer 'h2k_balanced',
       # Ожидание подтверждений внутри BatchSender
       'h2k.producer.await.every'            => '500',
       'h2k.producer.await.timeout.ms'       => '300000',
-      # Диагностика BatchSender (читается при старте)
-      'h2k.producer.batch.counters.enabled' => 'false',
-      'h2k.producer.batch.debug.on.failure' => 'false',
-      'h2k.producer.batch.autotune.enabled' => 'true',
-      # 'h2k.producer.batch.autotune.min'    => '250',
-      # 'h2k.producer.batch.autotune.max'    => '2000',
-      # 'h2k.producer.batch.autotune.latency.high.ms' => '150000',
-      # 'h2k.producer.batch.autotune.latency.low.ms'  => '50000',
-      # 'h2k.producer.batch.autotune.cooldown.ms'     => '30000',
-
       # --- Профиль BALANCED: компромисс скорость/надёжность ---
       # --- Профиль BALANCED (чуть быстрее): linger.ms=100, batch.size=524288; порядок и идемпотентность сохранены ---
       'h2k.producer.enable.idempotence'     => 'true',
@@ -121,8 +111,3 @@ show_peer_tableCFs 'h2k_balanced'  # опционально: покажет фи
 #
 # Наблюдаемость:
 #  - Включите DEBUG для 'kz.qazmarka.h2k.endpoint' при первичном пуске.
-#
-#  - Подсказки ёмкости и соль таблиц можно задавать в peer ИЛИ в hbase-site.xml.
-#    Приоритет: значение из peer перекрывает hbase-site.xml.
-#      Примеры (default-namespace без префикса):
-#        h2k.salt.map       = TBL_JTI_TRACE_CIS_HISTORY=1

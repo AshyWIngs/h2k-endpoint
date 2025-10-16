@@ -2,8 +2,6 @@
 
 Ниже — **строго соответствующие коду** (`src/main/java/kz/qazmarka/h2k/config/H2kConfig.java`) и примерам (`conf/add_peer_shell_*.txt`, `README.md`) ключи `h2k.*`. Без домыслов.
 
-> Приоритет источников: **CONFIG в peer** ⟶ `hbase-site.xml`. Любой ключ из `h2k.*`, заданный в peer, перекрывает одноимённый ключ в `hbase-site.xml`.
-
 ---
 
 ## Содержание
@@ -112,14 +110,6 @@
 | **`h2k.producer.max.in.flight`** | Упрощённая запись для Kafka‑ключа `max.in.flight.requests.per.connection` | В BALANCED используем `5`; при строгой потребности в порядке можно временно снизить до `1` |
 | **`h2k.producer.await.every`** | Каждые N записей ждать ACK (бэкпрешер) | Не Kafka‑ключ; внутренняя логика endpoint |
 | **`h2k.producer.await.timeout.ms`** | Таймаут ожидания ACK | Не Kafka‑ключ; внутренняя логика endpoint |
-| **`h2k.producer.batch.counters.enabled`** | Счётчики батчей | Не Kafka‑ключ |
-| **`h2k.producer.batch.debug.on.failure`** | Доп. диагностика при сбоях | Не Kafka‑ключ |
-| **`h2k.producer.batch.autotune.enabled`** | Включить автоподстройку `awaitEvery` по задержке и сброс к минимуму при ошибках ожидания | `true`/`false` (дефолт: `false`) |
-| **`h2k.producer.batch.autotune.min`** | Нижняя граница `awaitEvery` при автонастройке | `int` (0 — вычислить автоматически) |
-| **`h2k.producer.batch.autotune.max`** | Верхняя граница `awaitEvery` при автонастройке | `int` (0 — вычислить автоматически) |
-| **`h2k.producer.batch.autotune.latency.high.ms`** | Порог задержки (мс), при превышении которого порог снижается | `int` (0 — 50% от `await.timeout.ms`) |
-| **`h2k.producer.batch.autotune.latency.low.ms`** | Порог задержки (мс) для увеличения `awaitEvery` | `int` (0 — ~16% от `await.timeout.ms`) |
-| **`h2k.producer.batch.autotune.cooldown.ms`** | Минимальный интервал между решениями автонастройки | `int` (мс; дефолт `30000`) |
 
 > Актуальные значения поддерживаемого профиля — в README и `docs/peer-profiles.md`.
 
