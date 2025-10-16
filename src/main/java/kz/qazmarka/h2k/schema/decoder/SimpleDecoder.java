@@ -44,11 +44,8 @@ import org.apache.hadoop.hbase.TableName;
  */
 public final class SimpleDecoder implements Decoder {
 
-    private static final String MSG_TABLE_REQUIRED = "Аргумент 'table' (имя таблицы) не может быть null";
-    private static final String MSG_QUALIFIER_REQUIRED = "Аргумент 'qualifier' (имя колонки) не может быть null";
-
     /** Единственный экземпляр декодера — переиспользуйте его повсюду. */
-    public static final Decoder INSTANCE = new SimpleDecoder();
+    public static final SimpleDecoder INSTANCE = new SimpleDecoder();
 
     /** Закрытый конструктор — экземпляры создаются только внутри класса. */
     private SimpleDecoder() {
@@ -70,8 +67,8 @@ public final class SimpleDecoder implements Decoder {
     @Override
     public Object decode(TableName unusedTable, String unusedQualifier, byte[] value) {
         // Валидация обязательных параметров согласно контракту Decoder.
-    Objects.requireNonNull(unusedTable, MSG_TABLE_REQUIRED);
-    Objects.requireNonNull(unusedQualifier, MSG_QUALIFIER_REQUIRED);
+        Objects.requireNonNull(unusedTable, Decoder.MSG_TABLE_REQUIRED);
+        Objects.requireNonNull(unusedQualifier, Decoder.MSG_QUALIFIER_REQUIRED);
         return value;
     }
 
@@ -86,8 +83,8 @@ public final class SimpleDecoder implements Decoder {
      */
     @Override
     public Object decode(TableName table, byte[] qual, byte[] value) {
-    Objects.requireNonNull(table, MSG_TABLE_REQUIRED);
-    Objects.requireNonNull(qual, MSG_QUALIFIER_REQUIRED);
+        Objects.requireNonNull(table, Decoder.MSG_TABLE_REQUIRED);
+        Objects.requireNonNull(qual, Decoder.MSG_QUALIFIER_REQUIRED);
         return value;
     }
 
@@ -111,8 +108,8 @@ public final class SimpleDecoder implements Decoder {
      */
     @Override
     public Object decode(TableName table, byte[] qual, int qOff, int qLen, byte[] value, int vOff, int vLen) {
-    Objects.requireNonNull(table, MSG_TABLE_REQUIRED);
-    Objects.requireNonNull(qual, MSG_QUALIFIER_REQUIRED);
+        Objects.requireNonNull(table, Decoder.MSG_TABLE_REQUIRED);
+        Objects.requireNonNull(qual, Decoder.MSG_QUALIFIER_REQUIRED);
         if (value == null) {
             return null;
         }

@@ -8,6 +8,8 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericData;
@@ -48,7 +50,7 @@ import kz.qazmarka.h2k.util.RowKeySlice;
 /**
  * Интеграционный тест горячего пути WAL → PayloadBuilder → Kafka (Confluent Avro).
  */
-class KafkaReplicationEndpointConfluentITest {
+class KafkaReplicationEndpointIntegrationTest {
 
     private static final Path SCHEMA_DIR = Paths.get("src", "test", "resources", "avro").toAbsolutePath();
 
@@ -184,23 +186,34 @@ class KafkaReplicationEndpointConfluentITest {
         SchemaRegistryClientFactory factory = (urls, clientConfig, identityMapCapacity) -> new MockSchemaRegistryClient();
         PayloadBuilder builder = new PayloadBuilder(decoder, config, factory);
 
-        TopicEnsurer failingEnsurer = makeFailingEnsurer();
-        TopicManager topicManager = new TopicManager(config, failingEnsurer);
+        AtomicInteger ensureAttempts = new AtomicInteger();
+        AtomicReference<RuntimeException> ensureFailure = new AtomicReference<>();
         MockProducer<byte[], byte[]> producer = new MockProducer<>(true, new ByteArraySerializer(), new ByteArraySerializer());
-        WalEntryProcessor processor = new WalEntryProcessor(builder, topicManager, producer, config);
 
-        TableName table = TableName.valueOf("INT_TEST_TABLE");
-        byte[] row = Bytes.toBytes("rk-ensure");
-        long ts = 123L;
-        List<Cell> cells = new ArrayList<>();
-        cells.add(new KeyValue(row, Bytes.toBytes("d"), Bytes.toBytes("value_long"), ts, Bytes.toBytes(1L)));
-        Entry entry = walEntry(table, row, cells);
+        try (TopicEnsurer failingEnsurer = makeFailingEnsurer(ensureAttempts, ensureFailure)) {
+            TopicManager topicManager = new TopicManager(config, failingEnsurer);
+            WalEntryProcessor processor = new WalEntryProcessor(builder, topicManager, producer, config);
 
-        try (BatchSender sender = new BatchSender(1, 5_000)) {
-            processor.process(entry, sender, false);
+            TableName table = TableName.valueOf("INT_TEST_TABLE");
+            byte[] row = Bytes.toBytes("rk-ensure");
+            long ts = 123L;
+            List<Cell> cells = new ArrayList<>();
+            cells.add(new KeyValue(row, Bytes.toBytes("d"), Bytes.toBytes("value_long"), ts, Bytes.toBytes(1L)));
+            Entry entry = walEntry(table, row, cells);
+
+            try (BatchSender sender = new BatchSender(1, 5_000)) {
+                processor.process(entry, sender, false);
+            }
+
+            assertEquals(1, producer.history().size(), "Сообщение должно быть отправлено несмотря на ошибку ensure");
         }
 
-        assertEquals(1, producer.history().size(), "Сообщение должно быть отправлено несмотря на ошибку ensure");
+    assertTrue(ensureAttempts.get() > 0, "ensureTopic обязан вызываться хотя бы один раз");
+        RuntimeException failure = ensureFailure.get();
+        assertNotNull(failure, "Исключение ensureTopic должно фиксироваться для контроля обработчика");
+        assertTrue(failure instanceof IllegalStateException, "Тип исключения ensureTopic должен оставаться IllegalStateException");
+        assertTrue(failure.getMessage().contains("Симуляция сбоя ensure топика"),
+                "Сообщение исключения должно помогать диагностировать проблему ensure");
     }
 
     private static Entry walEntry(TableName table, byte[] row, List<Cell> cells) {
@@ -269,9 +282,24 @@ class KafkaReplicationEndpointConfluentITest {
         };
     }
 
-    private static TopicEnsurer makeFailingEnsurer() {
-        EnsureDelegate failingDelegate = topic -> {
-            throw new IllegalStateException("Симуляция сбоя create топика");
+    /**
+     * Фабрика заглушки ensure, которая всегда бросает {@link IllegalStateException} и фиксирует факт вызова.
+     * Это позволяет тесту проверять, что обработчик WAL не проглатывает ошибку ensure молча.
+     */
+    private static TopicEnsurer makeFailingEnsurer(AtomicInteger ensureAttempts,
+                                                   AtomicReference<RuntimeException> failureRef) {
+        EnsureDelegate failingDelegate = new EnsureDelegate() {
+            @Override
+            public void ensureTopic(String topic) {
+                if (ensureAttempts != null) {
+                    ensureAttempts.incrementAndGet();
+                }
+                IllegalStateException failure = new IllegalStateException("Симуляция сбоя ensure топика: " + topic);
+                if (failureRef != null) {
+                    failureRef.set(failure);
+                }
+                throw failure;
+            }
         };
         return TopicEnsurer.testingDelegate(failingDelegate);
     }

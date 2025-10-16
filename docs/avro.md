@@ -73,20 +73,19 @@
 - Мониторинг: `GET /subjects`, `GET /subjects/<subj>/versions`, `GET /schemas/ids/<id>`.
 - Настройте алерты на 5xx/latency SR, ошибки совместимости, рост `_schemas`.
 
-Подробный пример конфигураций — см. [`docs/schema-registry.md`](rschema-registry.md) .
+Подробный пример конфигураций — см. [`docs/schema-registry.md`](schema-registry.md).
 
 ## 8. Мониторинг и отладка
 
 - Включайте DEBUG для пакета `kz.qazmarka.h2k.payload.serializer.avro` и `...schema.registry` (см. runbook). Логи показывают путь к схеме, версию, результат регистрации.
 - В логе `TopicManager` фиксируется `payload.format`/`serializer`.
-- Для ClickHouse используйте таск `SELECT * FROM kafka_table SETTINGS input_format_skip_unknown_fields=1` при тестах.
+- Для быстрой проверки схем воспользуйтесь `kafka-avro-console-consumer` (Confluent 5.3.8) или любым тестовым потребителем Avro Confluent.
 
 ## 9. Связанные материалы
 
 - Конфигурация: [`docs/config.md`](config.md)
 - Phoenix метаданные: [`docs/phoenix.md`](phoenix.md)
 - Подсказки ёмкости: [`docs/capacity.md`](capacity.md)
-- ClickHouse ingest: [`docs/clickhouse.md`](clickhouse.md)
 - Runbook: [`docs/runbook/operations.md`](runbook/operations.md), [`docs/runbook/troubleshooting.md`](runbook/troubleshooting.md)
 
 Следите за актуальностью `.avsc` — добавление колонок в Phoenix требует обновить схему, пересчитать `capacityHint` и перезапустить peer.

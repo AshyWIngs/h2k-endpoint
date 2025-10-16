@@ -1,8 +1,7 @@
-package kz.qazmarka.h2k.kafka.ensure.util;
+package kz.qazmarka.h2k.kafka.ensure;
 
 /**
- * Утилита проверки имён Kafka‑топиков. Выделена из TopicEnsureService, чтобы упростить будущий
- * рефактор и повторное использование правил в тестах/других компонентах.
+ * Утилита проверки имён Kafka‑топиков. Используется сервисом ensure и юнит-тестами.
  */
 public final class TopicNameValidator {
 

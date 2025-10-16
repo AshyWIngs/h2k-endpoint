@@ -168,7 +168,7 @@ h2k.topic.pattern=${table}
 - [Подсказки ёмкости и метаданные](docs/capacity.md)
 - [HBase shell / ZooKeeper / операции](docs/hbase.md) и runbook: [операции](docs/runbook/operations.md), [troubleshooting](docs/runbook/troubleshooting.md)
 - [Avro (локальные/Confluent)](docs/avro.md)
-- [Подробная инструкция по Condluent Schema Registry](docs/schema-registry.md)
+- [Подробная инструкция по Confluent Schema Registry](docs/schema-registry.md)
 - [Профили peer](docs/peer-profiles.md)
 
 ## Обновление версии проекта
@@ -243,13 +243,13 @@ Endpoint публикует события в формате Avro (Confluent Sch
 - `kz.qazmarka.h2k.endpoint` — точка входа `KafkaReplicationEndpoint`, инициализация и публичный API.
 - `kz.qazmarka.h2k.endpoint.internal` — `TopicManager`, метрики, вспомогательные сервисы endpoint’а.
 - `kz.qazmarka.h2k.endpoint.processing` — горячий путь WAL→Kafka: группировка строк, фильтрация CF, построение payload, счётчики.
-- `kz.qazmarka.h2k.kafka.ensure` — автоматическое создание/согласование топиков (подпакеты `admin`, `planner`, `state`, `metrics`, `config`).
+- `kz.qazmarka.h2k.kafka.ensure` — автоматическое создание/согласование топиков (ядро `TopicEnsureService`, фоновой `TopicEnsureExecutor`, управление бэкоффом `TopicBackoffManager`; подпакеты `admin`, `config`).
 - `kz.qazmarka.h2k.kafka.producer.batch` — минимальный буфер Kafka Futures с пороговым `flush`.
 - `kz.qazmarka.h2k.kafka.support` — общие Kafka-утилиты (например, `BackoffPolicy`).
 - `kz.qazmarka.h2k.payload.builder` — сборка Avro payload’ов и расчёт ёмкости.
 - `kz.qazmarka.h2k.payload.serializer` — сериализация Avro и интеграция с Schema Registry.
 - `kz.qazmarka.h2k.schema.decoder` — декодирование значений Phoenix; `schema.registry.*` — резолверы Avro-схем (локальные, Phoenix, Confluent).
 - `kz.qazmarka.h2k.config` — чтение и валидация конфигурации (`H2kConfig`, секции, builder’ы).
-- `kz.qazmarka.h2k.util` — низкоуровневые утилиты (Bytes, JsonWriter, Parsers, RowKeySlice).
+- `kz.qazmarka.h2k.util` — низкоуровневые утилиты (Bytes, Parsers, RowKeySlice).
 - Репозиторий содержит production‑код и тесты в стандартной структуре Maven (`src/main`, `src/test`).
 - `docs/` и `conf/` — эксплуатационная документация, профили peer и сопутствующие скрипты.

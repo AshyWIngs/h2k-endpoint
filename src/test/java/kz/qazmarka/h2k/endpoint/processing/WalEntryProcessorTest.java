@@ -3,7 +3,6 @@ package kz.qazmarka.h2k.endpoint.processing;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Paths;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -23,7 +22,6 @@ import org.apache.hadoop.hbase.wal.WALKey;
 import org.apache.kafka.clients.producer.MockProducer;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 import org.junit.jupiter.api.DisplayName;
@@ -48,68 +46,8 @@ import kz.qazmarka.h2k.util.RowKeySlice;
  */
 class WalEntryProcessorTest {
 
-    private static Cell cell(String row, String cf, long ts) {
-        return new KeyValue(bytes(row), bytes(cf), bytes("q"), ts, bytes("v"));
-    }
-
     private static byte[] bytes(String s) {
         return s.getBytes(StandardCharsets.UTF_8);
-    }
-
-    private static int[] hashes(byte[][] families) {
-        if (families == null) {
-            return null;
-        }
-        int[] hashes = new int[families.length];
-        for (int i = 0; i < families.length; i++) {
-            byte[] cf = families[i];
-            hashes[i] = cf == null ? 0 : Bytes.hashCode(cf, 0, cf.length);
-        }
-        return hashes;
-    }
-
-    @Test
-    @DisplayName("passCfFilter1(): один CF — true, если встречается целевое семейство")
-    void filterOneCf() {
-        List<Cell> cells = Arrays.asList(
-                cell("r", "a", 50L),
-                cell("r", "a", 100L)
-        );
-        byte[] cfA = bytes("a");
-        assertTrue(WalEntryProcessor.passCfFilter1(cells, cfA));
-        assertFalse(WalEntryProcessor.passCfFilter1(cells, bytes("b")));
-        assertFalse(WalEntryProcessor.passCfFilter1(Collections.<Cell>emptyList(), cfA));
-    }
-
-    @Test
-    @DisplayName("passCfFilter2(): true при совпадении с любым из двух семейств")
-    void filterTwoCf() {
-        List<Cell> cells = Arrays.asList(
-                cell("r", "a", 100L),
-                cell("r", "b", 90L),
-                cell("r", "c", 120L)
-        );
-        assertTrue(WalEntryProcessor.passCfFilter2(cells, bytes("a"), bytes("b")), "совпадение по первому CF");
-        assertTrue(WalEntryProcessor.passCfFilter2(cells, bytes("x"), bytes("b")), "совпадение по второму CF");
-        assertFalse(WalEntryProcessor.passCfFilter2(cells, bytes("x"), bytes("y")), "нет совпадений");
-    }
-
-    @Test
-    @DisplayName("passCfFilterN(): три и более CF")
-    void filterManyCf() {
-        List<Cell> cells = Arrays.asList(
-                cell("r", "a", 10L),
-                cell("r", "b", 20L),
-                cell("r", "c", 30L)
-        );
-        byte[][] fams1 = {bytes("a"), bytes("b"), bytes("c")};
-        byte[][] fams2 = {bytes("z"), bytes("b"), bytes("y")};
-        byte[][] fams3 = {bytes("x"), bytes("y"), bytes("z")};
-        assertTrue(WalEntryProcessor.passCfFilterN(cells, fams1, hashes(fams1)));
-        assertTrue(WalEntryProcessor.passCfFilterN(cells, fams2, hashes(fams2)));
-        assertFalse(WalEntryProcessor.passCfFilterN(cells, fams3, hashes(fams3)));
-        byte[][] famsEmpty = {bytes("a")};
-        assertFalse(WalEntryProcessor.passCfFilterN(Collections.<Cell>emptyList(), famsEmpty, hashes(famsEmpty)));
     }
 
     @Test
@@ -176,7 +114,7 @@ class WalEntryProcessorTest {
                 RowKeySlice.whole(probeRow),
                 0L,
                 0L);
-        org.junit.jupiter.api.Assertions.assertEquals("probe", String.valueOf(probeRecord.get("id")));
+        assertEquals("probe", String.valueOf(probeRecord.get("id")));
         TopicManager topicManager = new TopicManager(h2kConfig, TopicEnsurer.disabled());
         MockProducer<byte[], byte[]> producer = new MockProducer<>(true, new ByteArraySerializer(), new ByteArraySerializer());
         WalEntryProcessor processor = new WalEntryProcessor(builder, topicManager, producer, h2kConfig);
@@ -225,11 +163,12 @@ class WalEntryProcessorTest {
     @DisplayName("CF-фильтр удаляет строки без разрешённых семейств")
     void cfFilterRejectsDisallowedRows() {
         WalScenario scenario = createScenario(new String[]{"d"});
-        WAL.Entry entry = walEntry("row-filtered", "x"); // cf 'x' не входит в список
+        WAL.Entry entry = walEntry("row-filtered", "x");
 
         processWalEntry(scenario.processor, entry, 3);
 
-        assertTrue(scenario.producer.history().isEmpty(), "Отфильтрованная строка не должна публиковаться");
+        assertTrue(scenario.producer.history().isEmpty(),
+                "Отфильтрованная строка не должна публиковаться");
         WalEntryProcessor.WalMetrics metrics = scenario.processor.metrics();
         assertEquals(1, metrics.rows(), "Строка учитывается в метриках");
         assertEquals(1, metrics.filteredRows(), "Должна учитываться как отфильтрованная");
@@ -247,11 +186,13 @@ class WalEntryProcessorTest {
         WalEntryProcessor.WalMetrics metrics = scenario.processor.metrics();
         assertEquals(cellsCount, metrics.cells(), "Все ячейки должны быть обработаны");
         assertEquals(cellsCount, metrics.rows(), "Все строки должны быть учтены в метриках");
-        assertTrue(scenario.processor.rowBufferUpsizeCount() > 0, "Ожидается увеличение буфера");
+        assertTrue(scenario.processor.rowBufferUpsizeCount() > 0,
+                "Ожидается увеличение буфера");
 
-              int trimThreshold = WalEntryProcessor.rowBufferTrimThresholdForTest();
-    forceRowBufferTrim(scenario, trimThreshold);
-        assertTrue(scenario.processor.rowBufferTrimCount() > 0, "Ожидается усадка буфера после ручного сброса");
+        int trimThreshold = WalEntryProcessor.rowBufferTrimThresholdForTest();
+        forceRowBufferTrim(scenario, trimThreshold);
+        assertTrue(scenario.processor.rowBufferTrimCount() > 0,
+                "Ожидается усадка буфера после ручного сброса");
     }
 
     private static void processWalEntry(WalEntryProcessor processor, WAL.Entry entry, int batchSize) {

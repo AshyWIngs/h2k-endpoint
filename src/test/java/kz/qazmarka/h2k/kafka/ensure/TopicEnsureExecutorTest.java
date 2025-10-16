@@ -30,7 +30,6 @@ import org.junit.jupiter.api.Test;
 
 import kz.qazmarka.h2k.kafka.ensure.admin.KafkaTopicAdmin;
 import kz.qazmarka.h2k.kafka.ensure.config.TopicEnsureConfig;
-import kz.qazmarka.h2k.kafka.ensure.metrics.TopicEnsureState;
 
 /**
  * Тесты для {@link TopicEnsureExecutor}: проверяем, что задачи исполняются асинхронно,
@@ -103,14 +102,14 @@ class TopicEnsureExecutorTest {
     return TopicEnsureConfig.builder()
         .topicNameMaxLen(249)
         .topicSanitizer(UnaryOperator.identity())
-                .topicPartitions(3)
-                .topicReplication((short) 1)
-                .topicConfigs(Collections.<String, String>emptyMap())
-                .ensureIncreasePartitions(false)
-                .ensureDiffConfigs(false)
-                .adminTimeoutMs(100L)
-                .unknownBackoffMs(50L)
-                .build();
+        .topicPartitions(3)
+        .topicReplication((short) 1)
+        .topicConfigs(Collections.<String, String>emptyMap())
+        .ensureIncreasePartitions(false)
+        .ensureDiffConfigs(false)
+        .adminTimeoutMs(100L)
+        .unknownBackoffMs(50L)
+        .build();
     }
 
     private static final class SimpleAdmin implements KafkaTopicAdmin {

@@ -7,12 +7,15 @@ package kz.qazmarka.h2k.schema.decoder;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 
 import org.apache.hadoop.hbase.TableName;
+
 import kz.qazmarka.h2k.schema.phoenix.PhoenixColumnTypeRegistry;
+import kz.qazmarka.h2k.schema.phoenix.PhoenixColumnTypeRegistry.PhoenixType;
 import kz.qazmarka.h2k.schema.phoenix.PhoenixPkParser;
 import kz.qazmarka.h2k.schema.phoenix.PhoenixValueNormalizer;
-import kz.qazmarka.h2k.schema.phoenix.PhoenixColumnTypeRegistry.PhoenixType;
 import kz.qazmarka.h2k.schema.registry.SchemaRegistry;
 import kz.qazmarka.h2k.util.RowKeySlice;
 
@@ -57,6 +60,7 @@ public final class ValueCodecPhoenix implements Decoder {
     private final SchemaRegistry registry;
     private final PhoenixColumnTypeRegistry types;
     private final PhoenixPkParser pkParser;
+    private final ConcurrentMap<PhoenixType, TypeDecoder> decoderCache = new ConcurrentHashMap<>(32);
 
     public ValueCodecPhoenix(SchemaRegistry registry) {
         this.registry = Objects.requireNonNull(registry, "registry");
@@ -114,24 +118,8 @@ public final class ValueCodecPhoenix implements Decoder {
                                   int vOff,
                                   int vLen) {
         final PhoenixType type = types.resolve(table, qualifier);
-
-        final Integer expectedSize = type.byteSize();
-        if (expectedSize != null && expectedSize != vLen) {
-            throw new IllegalStateException(
-                "Несоответствие длины значения для " + table + "." + qualifier
-                        + ": тип=" + type + " ожидает " + expectedSize + " байт(а), получено " + vLen
-            );
-        }
-
-        final Object obj;
-        try {
-            obj = type.toObject(value, vOff, vLen);
-        } catch (RuntimeException e) {
-            throw new IllegalStateException(
-                "Не удалось преобразовать значение через Phoenix: " + table + "." + qualifier + ", тип=" + type,
-                e
-            );
-        }
+        final TypeDecoder decoder = decoderCache.computeIfAbsent(type, ValueCodecPhoenix::selectDecoder);
+        final Object obj = decoder.decode(table, qualifier, type, value, vOff, vLen);
         return PhoenixValueNormalizer.normalizeValue(obj, table, qualifier);
     }
 
@@ -173,5 +161,63 @@ public final class ValueCodecPhoenix implements Decoder {
                              int saltBytes,
                              Map<String, Object> out) {
         pkParser.decodeRowKey(table, rk, saltBytes, out);
+    }
+
+    private static TypeDecoder selectDecoder(PhoenixType type) {
+        Integer expected = type.byteSize();
+        if (expected == null) {
+            return ValueCodecPhoenix::safeToObject;
+        }
+        return new FixedLengthDecoder(expected);
+    }
+
+    private static Object safeToObject(TableName table,
+                                       String qualifier,
+                                       PhoenixType type,
+                                       byte[] value,
+                                       int offset,
+                                       int length) {
+        try {
+            return type.toObject(value, offset, length);
+        } catch (RuntimeException e) {
+            throw new IllegalStateException(
+                "Не удалось преобразовать значение через Phoenix: " + table + "." + qualifier + ", тип=" + type,
+                e
+            );
+        }
+    }
+
+    @FunctionalInterface
+    private interface TypeDecoder {
+        Object decode(TableName table,
+                      String qualifier,
+                      PhoenixType type,
+                      byte[] value,
+                      int offset,
+                      int length);
+    }
+
+    private static final class FixedLengthDecoder implements TypeDecoder {
+        private final int expectedSize;
+
+        FixedLengthDecoder(int expectedSize) {
+            this.expectedSize = expectedSize;
+        }
+
+        @Override
+        public Object decode(TableName table,
+                             String qualifier,
+                             PhoenixType type,
+                             byte[] value,
+                             int offset,
+                             int length) {
+            if (length != expectedSize) {
+                throw new IllegalStateException(
+                    "Несоответствие длины значения для " + table + "." + qualifier
+                            + ": тип=" + type + " ожидает " + expectedSize + " байт(а), получено " + length
+                );
+            }
+            return safeToObject(table, qualifier, type, value, offset, length);
+        }
     }
 }

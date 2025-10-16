@@ -7,6 +7,7 @@
 - [`docs/config.md`](config.md) — полный справочник по ключам `h2k.*`.
 - [`docs/peer-profiles.md`](peer-profiles.md) — готовые профили peer и матрица параметров.
 - [`docs/hbase.md`](hbase.md) — команды HBase shell, управление таблицами и ZooKeeper.
+	В разделе *Автосоздание/администрирование тем* описаны актуальные параметры ensure (`h2k.ensure.*`, `h2k.topic.config.*`).
 
 ## Эксплуатация и диагностика
 - [`docs/runbook/operations.md`](runbook/operations.md) — ежедневные операции: требования окружения, добавление/редактирование peers, сбор метрик.
@@ -16,7 +17,6 @@
 - [`docs/avro.md`](avro.md) — работа с Avro (локальные `.avsc`, Confluent Schema Registry).
 - [`docs/schema-registry.md`](schema-registry.md) — практические сценарии работы с Confluent Schema Registry.
 - [`docs/capacity.md`](capacity.md) — подсказки ёмкости JSON и рекомендации по `h2k.capacity.hints`.
-- [`docs/clickhouse.md`](clickhouse.md) — ingest JSONEachRow в ClickHouse.
 - [`docs/phoenix.md`](phoenix.md) — особенности Phoenix (PK, salt).
 
 ## Дополнительно

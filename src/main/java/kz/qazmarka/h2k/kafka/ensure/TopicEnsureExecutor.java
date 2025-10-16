@@ -11,7 +11,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import kz.qazmarka.h2k.kafka.ensure.metrics.TopicEnsureState;
 
 /**
  * Простой исполнитель ensure-задач: одна очередь с задержкой, один рабочий поток.
@@ -52,17 +51,13 @@ final class TopicEnsureExecutor implements AutoCloseable {
      * Ставит тему в очередь ensure. Возвращает true, если задача действительно была добавлена.
      */
     boolean submit(String topic) {
-        if (!running.get()) {
+        if (!isRunning()) {
             return false;
         }
-        if (topic == null || topic.isEmpty()) {
+        if (isBlank(topic) || topicAlreadyEnsured(topic)) {
             return false;
         }
-        if (state.ensured.contains(topic)) {
-            return false;
-        }
-        long readyAt = computeReadyAt(topic);
-        return schedule(topic, readyAt);
+        return schedule(topic, computeReadyAt(topic));
     }
 
     /**
@@ -73,7 +68,7 @@ final class TopicEnsureExecutor implements AutoCloseable {
     }
 
     private void runLoop() {
-        while (running.get()) {
+        while (isRunning()) {
             try {
                 EnsureTask task = queue.take();
                 if (shouldSkipTask(task)) {
@@ -87,10 +82,10 @@ final class TopicEnsureExecutor implements AutoCloseable {
     }
 
     private boolean shouldSkipTask(EnsureTask task) {
-        if (!running.get() && task == null) {
+        if (task == null) {
             return true;
         }
-        return !scheduled.remove(task.topic, task) || state.ensured.contains(task.topic);
+        return !scheduled.remove(task.topic, task) || topicAlreadyEnsured(task.topic);
     }
 
     private void processTask(EnsureTask task) {
@@ -123,7 +118,7 @@ final class TopicEnsureExecutor implements AutoCloseable {
     }
 
     private void rescheduleIfNeeded(String topic) {
-        if (state.ensured.contains(topic)) {
+        if (topicAlreadyEnsured(topic)) {
             return;
         }
         Long nextDeadline = state.getUnknownDeadline(topic);
@@ -133,7 +128,7 @@ final class TopicEnsureExecutor implements AutoCloseable {
     }
 
     private void handleInterruption() {
-        if (!running.get()) {
+        if (!isRunning()) {
             Thread.currentThread().interrupt();
         }
     }
@@ -141,20 +136,16 @@ final class TopicEnsureExecutor implements AutoCloseable {
     private long computeReadyAt(String topic) {
         Long deadline = state.getUnknownDeadline(topic);
         long now = System.nanoTime();
-        if (deadline == null || deadline <= now) {
-            return now;
-        }
-        return deadline;
+        return (deadline == null || deadline <= now) ? now : deadline;
     }
 
     private boolean schedule(String topic, long readyAtNs) {
-        if (!running.get()) {
+        if (!isRunning()) {
             return false;
         }
         long now = System.nanoTime();
-        long normalized = readyAtNs <= now ? now : readyAtNs;
+        long normalized = Math.max(readyAtNs, now);
         EnsureTask candidate = new EnsureTask(topic, normalized);
-        
         return addOrReplaceTask(topic, candidate, normalized);
     }
 
@@ -162,7 +153,7 @@ final class TopicEnsureExecutor implements AutoCloseable {
         while (true) {
             EnsureTask existing = scheduled.putIfAbsent(topic, candidate);
             if (existing == null) {
-                return offerToQueue(topic, candidate);
+                return enqueueTask(topic, candidate);
             }
             if (existing.readyAtNs <= normalized) {
                 return false;
@@ -173,21 +164,12 @@ final class TopicEnsureExecutor implements AutoCloseable {
         }
     }
 
-    private boolean offerToQueue(String topic, EnsureTask candidate) {
-        boolean offered = queue.offer(candidate);
-        if (!offered) {
-            LOG.warn("Не удалось добавить задачу в очередь для топика '{}'", topic);
-            scheduled.remove(topic, candidate);
-        }
-        return offered;
-    }
-
     private boolean replaceExistingTask(String topic, EnsureTask existing, EnsureTask candidate) {
         if (!scheduled.replace(topic, existing, candidate)) {
             return false;
         }
         removeOldTask(topic, existing);
-        return offerToQueue(topic, candidate);
+        return enqueueTask(topic, candidate);
     }
 
     private void removeOldTask(String topic, EnsureTask existing) {
@@ -195,6 +177,27 @@ final class TopicEnsureExecutor implements AutoCloseable {
         if (!removed && LOG.isDebugEnabled()) {
             LOG.debug("Не удалось удалить старую задачу из очереди для топика '{}'", topic);
         }
+    }
+
+    private boolean enqueueTask(String topic, EnsureTask candidate) {
+        if (queue.offer(candidate)) {
+            return true;
+        }
+        LOG.warn("Не удалось добавить задачу в очередь для топика '{}'", topic);
+        scheduled.remove(topic, candidate);
+        return false;
+    }
+
+    private boolean isRunning() {
+        return running.get();
+    }
+
+    private boolean topicAlreadyEnsured(String topic) {
+        return state.ensured.contains(topic);
+    }
+
+    private static boolean isBlank(String topic) {
+        return topic == null || topic.isEmpty();
     }
 
     @Override

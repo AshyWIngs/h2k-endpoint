@@ -1,6 +1,7 @@
 package kz.qazmarka.h2k.payload.builder;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -13,7 +14,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericData;
 import org.apache.hadoop.hbase.Cell;
-import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.slf4j.Logger;
@@ -42,6 +42,7 @@ final class RowPayloadAssembler {
     private final QualifierCache qualifierCache = new QualifierCache();
     private final Set<String> tableOptionsLogged = ConcurrentHashMap.newKeySet();
     private final TablePlanCache tablePlans;
+    private static final CellActionResolver CELL_ACTIONS = new CellActionResolver();
 
     RowPayloadAssembler(Decoder decoder, H2kConfig cfg, AvroSchemaRegistry schemaRegistry) {
         this.decoder = Objects.requireNonNull(decoder, "decoder");
@@ -65,69 +66,138 @@ final class RowPayloadAssembler {
         pkCollector.bind(avroRecord);
         decodePrimaryKey(table, rowKey, plan, pkCollector);
 
-        long maxTimestamp = Long.MIN_VALUE;
-        boolean hasDelete = false;
-
+        RowAssemblyState state = new RowAssemblyState(table, plan, avroRecord);
         if (cells != null) {
             for (Cell cell : cells) {
-                maxTimestamp = Math.max(maxTimestamp, cell.getTimestamp());
-                if (CellUtil.isDelete(cell)) {
-                    hasDelete = true;
-                } else {
-                    writeCellValue(table, plan, avroRecord, cell);
+                if (cell == null) {
+                    continue;
                 }
+                state.accept(cell);
             }
         }
-
-        if (plan.eventTsIndex >= 0 && maxTimestamp != Long.MIN_VALUE) {
-            avroRecord.put(plan.eventTsIndex, maxTimestamp);
-        }
-        if (plan.deleteIndex >= 0 && hasDelete) {
-            avroRecord.put(plan.deleteIndex, Boolean.TRUE);
-        }
+        state.applyFlags();
 
         plan.applyWalMetadata(avroRecord, walSeq, walWriteTime);
 
         return avroRecord;
     }
 
-    private void writeCellValue(TableName table,
-                                TablePlan plan,
-                                GenericData.Record avroRecord,
-                                Cell cell) {
-        FieldPlan field = resolveField(plan, cell);
-        if (field == null) {
-            return;
+    /**
+     * Состояние сборки строки: аккумулирует метаданные и делегирует обработку ячеек стратегиям.
+     */
+    private final class RowAssemblyState {
+        private final TableName table;
+        private final TablePlan plan;
+        private final GenericData.Record avroRecord;
+        private long maxTimestamp = Long.MIN_VALUE;
+        private boolean hasDelete;
+
+        RowAssemblyState(TableName table, TablePlan plan, GenericData.Record avroRecord) {
+            this.table = table;
+            this.plan = plan;
+            this.avroRecord = avroRecord;
         }
 
-        Object decodedValue = decoder.decode(
-                table,
-                cell.getQualifierArray(),
-                cell.getQualifierOffset(),
-                cell.getQualifierLength(),
-                cell.getValueArray(),
-                cell.getValueOffset(),
-                cell.getValueLength());
+        void accept(Cell cell) {
+            long ts = cell.getTimestamp();
+            if (ts > maxTimestamp) {
+                maxTimestamp = ts;
+            }
+            CELL_ACTIONS.resolve(cell).apply(this, cell);
+        }
 
-        Object valueToWrite = decodedValue;
-        if (valueToWrite == null && cell.getValueLength() > 0) {
-            valueToWrite = BinarySlice.of(
+        void handleDelete(Cell cell) {
+            Objects.requireNonNull(cell, "cell");
+            hasDelete = true;
+        }
+
+        void handleValue(Cell cell) {
+            String column = qualifierCache.intern(
+                    cell.getQualifierArray(),
+                    cell.getQualifierOffset(),
+                    cell.getQualifierLength());
+            FieldPlan field = plan.field(column);
+            if (field == null) {
+                return;
+            }
+
+            Object decodedValue = decoder.decode(
+                    table,
+                    cell.getQualifierArray(),
+                    cell.getQualifierOffset(),
+                    cell.getQualifierLength(),
                     cell.getValueArray(),
                     cell.getValueOffset(),
                     cell.getValueLength());
+
+            Object valueToWrite = decodedValue;
+            if (valueToWrite == null && cell.getValueLength() > 0) {
+                valueToWrite = BinarySlice.of(
+                        cell.getValueArray(),
+                        cell.getValueOffset(),
+                        cell.getValueLength());
+            }
+
+            if (valueToWrite != null) {
+                field.write(avroRecord, valueToWrite);
+            }
         }
 
-        if (valueToWrite != null) {
-            field.write(avroRecord, valueToWrite);
+        void applyFlags() {
+            if (plan.eventTsIndex >= 0 && maxTimestamp != Long.MIN_VALUE) {
+                avroRecord.put(plan.eventTsIndex, maxTimestamp);
+            }
+            if (plan.deleteIndex >= 0 && hasDelete) {
+                avroRecord.put(plan.deleteIndex, Boolean.TRUE);
+            }
         }
     }
 
-    private FieldPlan resolveField(TablePlan plan, Cell cell) {
-        String column = qualifierCache.intern(
-                cell.getQualifierArray(),
-                cell.getQualifierOffset(),
-                cell.getQualifierLength());
-        return plan.field(column);
+    private enum CellAction {
+        UPSERT {
+            @Override
+            void apply(RowAssemblyState state, Cell cell) {
+                state.handleValue(cell);
+            }
+        },
+        DELETE {
+            @Override
+            void apply(RowAssemblyState state, Cell cell) {
+                state.handleDelete(cell);
+            }
+        };
+
+        abstract void apply(RowAssemblyState state, Cell cell);
+    }
+
+    /**
+     * Быстрая таблица действий для типов ячеек WAL, чтобы избежать повторного ветвления в горячем цикле.
+     */
+    private static final class CellActionResolver {
+        private final CellAction[] lookup;
+
+        CellActionResolver() {
+            this.lookup = initLookup();
+        }
+
+        CellAction resolve(Cell cell) {
+            byte type = cell.getTypeByte();
+            return lookup[type & 0xFF];
+        }
+
+        private static CellAction[] initLookup() {
+            CellAction[] arr = new CellAction[256];
+            Arrays.fill(arr, CellAction.UPSERT);
+            markDelete(arr, org.apache.hadoop.hbase.KeyValue.Type.Delete);
+            markDelete(arr, org.apache.hadoop.hbase.KeyValue.Type.DeleteColumn);
+            markDelete(arr, org.apache.hadoop.hbase.KeyValue.Type.DeleteFamily);
+            markDelete(arr, org.apache.hadoop.hbase.KeyValue.Type.DeleteFamilyVersion);
+            return arr;
+        }
+
+        private static void markDelete(CellAction[] arr, org.apache.hadoop.hbase.KeyValue.Type type) {
+            arr[type.getCode() & 0xFF] = CellAction.DELETE;
+        }
     }
 
     private void decodePrimaryKey(TableName table,

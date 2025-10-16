@@ -35,7 +35,6 @@ import org.junit.jupiter.api.Test;
 
 import kz.qazmarka.h2k.kafka.ensure.admin.KafkaTopicAdmin;
 import kz.qazmarka.h2k.kafka.ensure.config.TopicEnsureConfig;
-import kz.qazmarka.h2k.kafka.ensure.metrics.TopicEnsureState;
 
 /**
  * Набор юнит‑тестов для {@link TopicEnsurer}.
@@ -53,9 +52,9 @@ import kz.qazmarka.h2k.kafka.ensure.metrics.TopicEnsureState;
  *    изолированным и предсказуемым.
  *  • Для Future'ов — {@link KafkaFutureImpl}: управляем завершением (успех/исключение) или намеренно
  *    оставляем незавершённым (для эмуляции таймаута).
- *  • Экземпляр {@link TopicEnsurer} собираем через пакетную фабрику
- *    {@link TopicEnsurerTestHooks#testingInstance(TopicEnsureService, TopicEnsureExecutor, TopicEnsureState)},
- *    что исключает необходимость использования reflection.
+ *  • Экземпляр {@link TopicEnsurer} создаётся через пакетный конструктор
+ *    {@link TopicEnsurer#TopicEnsurer(TopicEnsureService, TopicEnsureExecutor, TopicEnsureState)},
+ *    поэтому тесты не используют reflection и остаются изолированными от внутренних деталей.
  *
  * Производительность тестов:
  *  • Таймауты в тестах малы (10–25 мс), внешних сетевых вызовов нет — запуск быстрый и «дешёвый» для CI.
@@ -260,7 +259,7 @@ class TopicEnsurerTest {
         TopicEnsureState state = new TopicEnsureState();
         TopicEnsureService service = new TopicEnsureService(fa, config, state);
 
-        return TopicEnsurerTestHooks.testingInstance(service, null, state);
+        return new TopicEnsurer(service, null, state);
     }
 
     /**

@@ -30,8 +30,7 @@ log4j.additivity.kz.qazmarka.h2k=false
 log4j.logger.kz.qazmarka.h2k.endpoint=DEBUG
 log4j.logger.kz.qazmarka.h2k.kafka.ensure=DEBUG
 log4j.logger.kz.qazmarka.h2k.kafka.ensure.admin=DEBUG
-log4j.logger.kz.qazmarka.h2k.kafka.ensure.planner=DEBUG
-log4j.logger.kz.qazmarka.h2k.kafka.ensure.state=DEBUG
+log4j.logger.kz.qazmarka.h2k.kafka.ensure.TopicBackoffManager=DEBUG
 log4j.logger.kz.qazmarka.h2k.kafka.producer.batch=DEBUG
 log4j.logger.kz.qazmarka.h2k.kafka.support=DEBUG
 log4j.logger.kz.qazmarka.h2k.payload=DEBUG
@@ -103,10 +102,11 @@ log4j.logger.org.apache.phoenix=WARN
   - Проверить h2k.topic.replication и h2k.topic.partitions.
   - Проверить h2k.admin.timeout.ms и h2k.ensure.unknown.backoff.ms.
   - В логах TopicEnsureService ищите метрики `ensure.*`, `exists.*`, `create.*` — они показываются при DEBUG и
-    доступны через `TopicEnsurer#getMetrics()`. Поле `unknown.backoff.size` отражает размер очереди ожидания без
+    доступны через `TopicManager.getMetrics()`. Поле `unknown.backoff.size` отражает размер очереди ожидания без
     лишних копий.
-  - Для детального анализа backoff воспользуйтесь `TopicEnsurer#getBackoffSnapshot()`: метод возвращает
-    неизменяемую карту `topic → миллисекунды до повторной попытки` (отрицательные значения уже обнуляются).
+  - Для детального анализа backoff включите DEBUG для `kz.qazmarka.h2k.kafka.ensure.TopicBackoffManager` — в логах
+    будет указан дедлайн повторной попытки. Дополнительно можно сериализовать `TopicManager.getMetrics()` в JMX и
+    следить за `ensure.*`/`create.*`/`unknown.backoff.size` в реальном времени.
 
 ## Инструменты быстрой диагностики
 - `status 'replication'` в HBase shell — показывает статус пиров.

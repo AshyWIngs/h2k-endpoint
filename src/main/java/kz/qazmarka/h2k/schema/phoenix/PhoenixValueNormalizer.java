@@ -8,10 +8,14 @@ import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.function.UnaryOperator;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.function.BiFunction;
+import java.util.function.ToIntFunction;
 
 import org.apache.hadoop.hbase.TableName;
 import org.apache.phoenix.schema.types.PhoenixArray;
@@ -21,7 +25,10 @@ import org.apache.phoenix.schema.types.PhoenixArray;
  */
 public final class PhoenixValueNormalizer {
 
-    private static final Map<Class<?>, UnaryOperator<Object>> TEMP_NORMALIZERS = buildTemporalNormalizers();
+    private static final ValueTransformer IDENTITY = (value, table, qualifier) -> value;
+    private static final Map<Class<?>, ValueTransformer> BASE_TRANSFORMERS = buildBaseTransformers();
+    private static final Map<Class<?>, ValueTransformer> TEMP_TRANSFORMERS = buildTemporalTransformers();
+    private static final ConcurrentMap<Class<?>, ValueTransformer> TRANSFORMER_CACHE = new ConcurrentHashMap<>(8);
     private static final Map<Class<?>, PrimitiveArrayBoxer> PRIMITIVE_BOXERS = buildPrimitiveBoxers();
 
     private PhoenixValueNormalizer() {
@@ -37,26 +44,35 @@ public final class PhoenixValueNormalizer {
      */
     public static Object normalizeValue(Object value, TableName table, String qualifier) {
         if (value == null) return null;
-        Object temporal = normalizeTemporal(value);
-        if (temporal instanceof PhoenixArray) {
-            return toListFromPhoenixArray((PhoenixArray) temporal, table, qualifier);
-        }
-        return temporal;
+        ValueTransformer transformer = findTransformer(value.getClass());
+        return transformer.apply(value, table, qualifier);
     }
 
     /** Преобразует временные типы Phoenix (Timestamp/Date/Time) в epoch millis. */
     static Object normalizeTemporal(Object valueObj) {
         if (valueObj == null) return null;
-        UnaryOperator<Object> f = TEMP_NORMALIZERS.get(valueObj.getClass());
-        return (f != null) ? f.apply(valueObj) : valueObj;
+        ValueTransformer transformer = TEMP_TRANSFORMERS.get(valueObj.getClass());
+        if (transformer == null) {
+            return valueObj;
+        }
+        return transformer.apply(valueObj, null, null);
     }
 
-    private static Map<Class<?>, UnaryOperator<Object>> buildTemporalNormalizers() {
-        java.util.HashMap<Class<?>, UnaryOperator<Object>> m = new java.util.HashMap<>(4);
-        m.put(Timestamp.class, v -> ((Timestamp) v).getTime());
-        m.put(Date.class, v -> ((Date) v).getTime());
-        m.put(Time.class, v -> ((Time) v).getTime());
-        return Collections.unmodifiableMap(m);
+    private static Map<Class<?>, ValueTransformer> buildBaseTransformers() {
+        Map<Class<?>, ValueTransformer> map = new HashMap<>(8);
+        map.put(Timestamp.class, (value, table, qualifier) -> ((Timestamp) value).getTime());
+        map.put(Date.class, (value, table, qualifier) -> ((Date) value).getTime());
+        map.put(Time.class, (value, table, qualifier) -> ((Time) value).getTime());
+        map.put(PhoenixArray.class, (value, table, qualifier) -> toListFromPhoenixArray((PhoenixArray) value, table, qualifier));
+        return Collections.unmodifiableMap(map);
+    }
+
+    private static Map<Class<?>, ValueTransformer> buildTemporalTransformers() {
+        Map<Class<?>, ValueTransformer> map = new HashMap<>(4);
+        map.put(Timestamp.class, BASE_TRANSFORMERS.get(Timestamp.class));
+        map.put(Date.class, BASE_TRANSFORMERS.get(Date.class));
+        map.put(Time.class, BASE_TRANSFORMERS.get(Time.class));
+        return Collections.unmodifiableMap(map);
     }
 
     private static List<Object> toListFromPhoenixArray(PhoenixArray pa, TableName table, String qualifier) {
@@ -92,76 +108,74 @@ public final class PhoenixValueNormalizer {
     }
 
     private static Map<Class<?>, PrimitiveArrayBoxer> buildPrimitiveBoxers() {
-        java.util.HashMap<Class<?>, PrimitiveArrayBoxer> m = new java.util.HashMap<>(8);
-        m.put(Integer.TYPE, a -> boxIntArray((int[]) a));
-        m.put(Long.TYPE, a -> boxLongArray((long[]) a));
-        m.put(Double.TYPE, a -> boxDoubleArray((double[]) a));
-        m.put(Float.TYPE, a -> boxFloatArray((float[]) a));
-        m.put(Short.TYPE, a -> boxShortArray((short[]) a));
-        m.put(Byte.TYPE, a -> boxByteArray((byte[]) a));
-        m.put(Boolean.TYPE, a -> boxBooleanArray((boolean[]) a));
-        m.put(Character.TYPE, a -> boxCharArray((char[]) a));
+        Map<Class<?>, PrimitiveArrayBoxer> m = new HashMap<>(8);
+        m.put(Integer.TYPE, boxer(a -> ((int[]) a).length, (a, i) -> ((int[]) a)[i]));
+        m.put(Long.TYPE, boxer(a -> ((long[]) a).length, (a, i) -> ((long[]) a)[i]));
+        m.put(Double.TYPE, boxer(a -> ((double[]) a).length, (a, i) -> ((double[]) a)[i]));
+        m.put(Float.TYPE, boxer(a -> ((float[]) a).length, (a, i) -> ((float[]) a)[i]));
+        m.put(Short.TYPE, boxer(a -> ((short[]) a).length, (a, i) -> ((short[]) a)[i]));
+        m.put(Byte.TYPE, boxer(a -> ((byte[]) a).length, (a, i) -> ((byte[]) a)[i]));
+        m.put(Boolean.TYPE, boxer(a -> ((boolean[]) a).length, (a, i) -> ((boolean[]) a)[i]));
+        m.put(Character.TYPE, boxer(a -> ((char[]) a).length, (a, i) -> ((char[]) a)[i]));
         return Collections.unmodifiableMap(m);
     }
 
-    private static List<Object> boxIntArray(int[] a) {
-        if (a.length == 0) return Collections.emptyList();
-        ArrayList<Object> list = new ArrayList<>(a.length);
-        for (int v : a) list.add(v);
-        return list;
+    private static PrimitiveArrayBoxer boxer(ToIntFunction<Object> lengthFn,
+                                             BiFunction<Object, Integer, Object> elementFn) {
+        return array -> {
+            int length = lengthFn.applyAsInt(array);
+            if (length == 0) {
+                return Collections.emptyList();
+            }
+            ArrayList<Object> list = new ArrayList<>(length);
+            for (int i = 0; i < length; i++) {
+                list.add(elementFn.apply(array, i));
+            }
+            return list;
+        };
     }
 
-    private static List<Object> boxLongArray(long[] a) {
-        if (a.length == 0) return Collections.emptyList();
-        ArrayList<Object> list = new ArrayList<>(a.length);
-        for (long v : a) list.add(v);
-        return list;
+    private static ValueTransformer findTransformer(Class<?> type) {
+        return TRANSFORMER_CACHE.computeIfAbsent(type, PhoenixValueNormalizer::resolveTransformer);
     }
 
-    private static List<Object> boxDoubleArray(double[] a) {
-        if (a.length == 0) return Collections.emptyList();
-        ArrayList<Object> list = new ArrayList<>(a.length);
-        for (double v : a) list.add(v);
-        return list;
+    private static ValueTransformer resolveTransformer(Class<?> type) {
+        Class<?> current = type;
+        while (current != null) {
+            ValueTransformer direct = BASE_TRANSFORMERS.get(current);
+            if (direct != null) {
+                return direct;
+            }
+            ValueTransformer nested = searchInterfaces(current.getInterfaces());
+            if (nested != null) {
+                return nested;
+            }
+            current = current.getSuperclass();
+        }
+        return IDENTITY;
     }
 
-    private static List<Object> boxFloatArray(float[] a) {
-        if (a.length == 0) return Collections.emptyList();
-        ArrayList<Object> list = new ArrayList<>(a.length);
-        for (float v : a) list.add(v);
-        return list;
-    }
-
-    private static List<Object> boxShortArray(short[] a) {
-        if (a.length == 0) return Collections.emptyList();
-        ArrayList<Object> list = new ArrayList<>(a.length);
-        for (short v : a) list.add(v);
-        return list;
-    }
-
-    private static List<Object> boxByteArray(byte[] a) {
-        if (a.length == 0) return Collections.emptyList();
-        ArrayList<Object> list = new ArrayList<>(a.length);
-        for (byte v : a) list.add(v);
-        return list;
-    }
-
-    private static List<Object> boxBooleanArray(boolean[] a) {
-        if (a.length == 0) return Collections.emptyList();
-        ArrayList<Object> list = new ArrayList<>(a.length);
-        for (boolean v : a) list.add(v);
-        return list;
-    }
-
-    private static List<Object> boxCharArray(char[] a) {
-        if (a.length == 0) return Collections.emptyList();
-        ArrayList<Object> list = new ArrayList<>(a.length);
-        for (char v : a) list.add(v);
-        return list;
+    private static ValueTransformer searchInterfaces(Class<?>[] interfaces) {
+        for (Class<?> iface : interfaces) {
+            ValueTransformer direct = BASE_TRANSFORMERS.get(iface);
+            if (direct != null) {
+                return direct;
+            }
+            ValueTransformer nested = searchInterfaces(iface.getInterfaces());
+            if (nested != null) {
+                return nested;
+            }
+        }
+        return null;
     }
 
     @FunctionalInterface
     private interface PrimitiveArrayBoxer {
         List<Object> box(Object array);
+    }
+
+    @FunctionalInterface
+    private interface ValueTransformer {
+        Object apply(Object value, TableName table, String qualifier);
     }
 }

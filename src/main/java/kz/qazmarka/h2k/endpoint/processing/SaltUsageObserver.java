@@ -37,6 +37,16 @@ final class SaltUsageObserver {
         return new SaltUsageObserver(false);
     }
 
+    /**
+     * @return сколько таблиц накопили статистику; используется в модульных тестах.
+     */
+    int observedTablesCountForTest() {
+        if (!enabled) {
+            return 0;
+        }
+        return statsByTable.size();
+    }
+
     /** Позволяет временно подменить логгер для модульных тестов. */
     static AutoCloseable withLoggerForTest(Logger testLogger) {
         if (testLogger == null) {

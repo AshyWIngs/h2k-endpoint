@@ -1,4 +1,4 @@
-package kz.qazmarka.h2k.kafka.ensure.metrics;
+package kz.qazmarka.h2k.kafka.ensure;
 
 import java.util.Map;
 import java.util.Set;
@@ -8,7 +8,7 @@ import java.util.concurrent.atomic.LongAdder;
 
 /**
  * Потокобезопасное состояние ensure-процесса: кеш подтверждённых тем, дедлайны повторных
- * попыток и счётчики диагностики. Используется только внутри пакета ensure.
+ * попыток и счётчики диагностики. Используется в сервисе и исполнителе ensure.
  */
 public final class TopicEnsureState {
     public final Set<String> ensured = ConcurrentHashMap.newKeySet();
@@ -45,9 +45,7 @@ public final class TopicEnsureState {
 
     /**
      * Возвращает текущий размер backoff-очереди «неизвестных» топиков.
-     * Константная сложность {@code O(1)}. Метод потокобезопасен, так как
-     * {@link #unknownUntil} — это {@code ConcurrentMap}, размер которого
-     * запрашивается без внешней синхронизации.
+     * Константная сложность {@code O(1)}.
      *
      * @return количество элементов в очереди backoff
      */

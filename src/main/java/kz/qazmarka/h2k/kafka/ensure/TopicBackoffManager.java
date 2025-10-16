@@ -1,15 +1,13 @@
-package kz.qazmarka.h2k.kafka.ensure.state;
+package kz.qazmarka.h2k.kafka.ensure;
 
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 
-import kz.qazmarka.h2k.kafka.ensure.metrics.TopicEnsureState;
 import kz.qazmarka.h2k.kafka.support.BackoffPolicy;
 
 /**
  * Управляет backoff-циклами при повторных ensure-операциях: хранит дедлайны по темам,
  * рассчитывает задержки через {@link BackoffPolicy} и снимает блокировки после успеха.
- * Предназначен исключительно для внутреннего использования ensure-сервиса.
  */
 public final class TopicBackoffManager {
 
@@ -18,8 +16,7 @@ public final class TopicBackoffManager {
     private final long baseDelayNs;
 
     public TopicBackoffManager(TopicEnsureState state, long baseDelayMs) {
-        this(state, baseDelayMs,
-                new BackoffPolicy(TimeUnit.MILLISECONDS.toNanos(1), 20));
+        this(state, baseDelayMs, new BackoffPolicy(TimeUnit.MILLISECONDS.toNanos(1), 20));
     }
 
     public TopicBackoffManager(TopicEnsureState state, long baseDelayMs, BackoffPolicy policy) {

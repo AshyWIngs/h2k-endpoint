@@ -17,7 +17,6 @@ import kz.qazmarka.h2k.config.H2kConfig;
 import kz.qazmarka.h2k.kafka.ensure.admin.KafkaTopicAdmin;
 import kz.qazmarka.h2k.kafka.ensure.admin.KafkaTopicAdminClient;
 import kz.qazmarka.h2k.kafka.ensure.config.TopicEnsureConfig;
-import kz.qazmarka.h2k.kafka.ensure.metrics.TopicEnsureState;
 
 /**
  * Высокоуровневый фасад ensure-логики Kafka-топиков.
@@ -44,9 +43,14 @@ public final class TopicEnsurer implements AutoCloseable {
         this.ensureDelegate = null;
     }
 
+    /**
+     * Пакетный конструктор для модульных тестов и внутренних сборок.
+     * Позволяет напрямую подставлять {@link TopicEnsureService}, {@link TopicEnsureExecutor}
+     * и {@link TopicEnsureState} без создания AdminClient.
+     */
     TopicEnsurer(TopicEnsureService service,
-                         TopicEnsureExecutor executor,
-                         TopicEnsureState state) {
+                 TopicEnsureExecutor executor,
+                 TopicEnsureState state) {
         this.service = service;
         this.executor = executor;
         this.state = state;
@@ -63,9 +67,8 @@ public final class TopicEnsurer implements AutoCloseable {
     }
 
     /**
-     * Вспомогательная фабрика для тестов: позволяет собрать TopicEnsurer без reflection.
+     * Фабрика для модульных тестов: позволяет заменить ensure-логику на простую заглушку без reflection.
      */
-    /** Фабрика для модульных тестов: позволяет заменить ensure-логику на простую заглушку без reflection. */
     public static TopicEnsurer testingDelegate(EnsureDelegate delegate) {
         if (delegate == null) {
             throw new IllegalArgumentException("delegate == null");
@@ -78,21 +81,21 @@ public final class TopicEnsurer implements AutoCloseable {
      * либо NOOP-экземпляр в остальных случаях. В логах фиксируется причина отклонения.
      */
     public static TopicEnsurer createIfEnabled(H2kConfig cfg) {
-        if (!cfg.isEnsureTopics()) return disabled();
-        final String bootstrap = cfg.getBootstrap();
+        if (!cfg.isEnsureTopics()) {
+            return disabled();
+        }
+        String bootstrap = cfg.getBootstrap();
         if (bootstrap == null || bootstrap.trim().isEmpty()) {
             LOG.warn("TopicEnsurer: не задан bootstrap Kafka — ensureTopics будет отключён");
             return disabled();
         }
         Properties props = cfg.kafkaAdminProps();
-        String baseId = props.getProperty(AdminClientConfig.CLIENT_ID_CONFIG, "h2k-admin");
-        String clientId = uniqueClientId(baseId);
-        props.put(AdminClientConfig.CLIENT_ID_CONFIG, clientId);
+        String clientId = prepareClientId(props);
         props.put(AdminClientConfig.REQUEST_TIMEOUT_MS_CONFIG, (int) cfg.getAdminTimeoutMs());
         AdminClient adminClient = AdminClient.create(props);
         KafkaTopicAdmin admin = new KafkaTopicAdminClient(adminClient);
         TopicEnsureConfig config = TopicEnsureConfig.from(cfg);
-        
+
         return EnsureComponentsBuilder.build(admin, config, clientId);
     }
 
@@ -153,11 +156,11 @@ public final class TopicEnsurer implements AutoCloseable {
      * Инициирует ensure для одиночной темы; вызов безопасен, даже если ensure отключён (NOOP).
      */
     public void ensureTopic(String topic) {
-        if (ensureDelegate != null) {
-            ensureDelegate.ensureTopic(topic);
+        if (!isEnabled()) {
             return;
         }
-        if (disabledMode) {
+        if (ensureDelegate != null) {
+            ensureDelegate.ensureTopic(topic);
             return;
         }
         if (executor == null) {
@@ -171,21 +174,24 @@ public final class TopicEnsurer implements AutoCloseable {
      * Проверяет наличие темы и при необходимости инициирует ensure; возвращает true только после подтверждения.
      */
     public boolean ensureTopicOk(String topic) {
+        if (!isEnabled()) {
+            return false;
+        }
         if (ensureDelegate != null) {
             return ensureDelegate.ensureTopicOk(topic);
         }
-        return !disabledMode && service.ensureTopicOk(topic);
+        return service.ensureTopicOk(topic);
     }
 
     /**
      * Пакетный ensure для набора тем; NOOP в отключённом режиме.
      */
     public void ensureTopics(Collection<String> topics) {
-        if (ensureDelegate != null) {
-            ensureDelegate.ensureTopics(topics);
+        if (!isEnabled()) {
             return;
         }
-        if (disabledMode) {
+        if (ensureDelegate != null) {
+            ensureDelegate.ensureTopics(topics);
             return;
         }
         service.ensureTopics(topics);
@@ -195,11 +201,11 @@ public final class TopicEnsurer implements AutoCloseable {
      * Снимок внутренних метрик ensure-процесса; для NOOP-реализации возвращает пустую карту.
      */
     public Map<String, Long> getMetrics() {
+        if (!isEnabled()) {
+            return Collections.emptyMap();
+        }
         if (ensureDelegate != null) {
             return ensureDelegate.metrics();
-        }
-        if (disabledMode) {
-            return Collections.emptyMap();
         }
         Map<String, Long> base = service.getMetrics();
         if (state == null) {
@@ -217,7 +223,7 @@ public final class TopicEnsurer implements AutoCloseable {
      * Закрывает обёрнутый {@link TopicEnsureService}; в режиме NOOP ничего не делает.
      */
     public void close() {
-        if (disabledMode) {
+        if (!isEnabled()) {
             return;
         }
         if (ensureDelegate != null) {
@@ -232,7 +238,7 @@ public final class TopicEnsurer implements AutoCloseable {
 
     @Override
     public String toString() {
-        if (disabledMode) {
+        if (!isEnabled()) {
             return "TopicEnsurer[disabled]";
         }
         if (ensureDelegate != null) {
@@ -254,16 +260,35 @@ public final class TopicEnsurer implements AutoCloseable {
      * Используется для избежания конфликтов MBean AppInfo.
      */
     private static String uniqueClientId(String base) {
-        String host = "host";
-        try {
-            host = InetAddress.getLocalHost().getHostName();
-        } catch (UnknownHostException ignore) { /* no-op */ }
-        String pid = ManagementFactory.getRuntimeMXBean().getName();
-        int at = pid.indexOf('@');
-        if (at > 0) pid = pid.substring(0, at);
+        String host = safeHostname();
+        String pid = runtimePid();
         long ts = System.currentTimeMillis();
         String prefix = (base == null || base.trim().isEmpty()) ? "h2k-admin" : base.trim();
         return prefix + "-" + host + "-" + pid + "-" + ts;
+    }
+
+    private static String prepareClientId(Properties props) {
+        String baseId = props.getProperty(AdminClientConfig.CLIENT_ID_CONFIG, "h2k-admin");
+        String clientId = uniqueClientId(baseId);
+        props.put(AdminClientConfig.CLIENT_ID_CONFIG, clientId);
+        return clientId;
+    }
+
+    private static String safeHostname() {
+        try {
+            return InetAddress.getLocalHost().getHostName();
+        } catch (UnknownHostException ignore) {
+            return "host";
+        }
+    }
+
+    private static String runtimePid() {
+        String pid = ManagementFactory.getRuntimeMXBean().getName();
+        int at = pid.indexOf('@');
+        if (at > 0) {
+            return pid.substring(0, at);
+        }
+        return pid;
     }
 
         /**
