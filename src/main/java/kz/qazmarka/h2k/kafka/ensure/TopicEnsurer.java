@@ -6,6 +6,7 @@ import java.net.UnknownHostException;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Properties;
 
 import org.apache.kafka.clients.admin.AdminClient;
@@ -13,7 +14,8 @@ import org.apache.kafka.clients.admin.AdminClientConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import kz.qazmarka.h2k.config.H2kConfig;
+import kz.qazmarka.h2k.config.EnsureSettings;
+import kz.qazmarka.h2k.config.TopicNamingSettings;
 import kz.qazmarka.h2k.kafka.ensure.admin.KafkaTopicAdmin;
 import kz.qazmarka.h2k.kafka.ensure.admin.KafkaTopicAdminClient;
 import kz.qazmarka.h2k.kafka.ensure.config.TopicEnsureConfig;
@@ -77,24 +79,36 @@ public final class TopicEnsurer implements AutoCloseable {
     }
 
     /**
-     * Возвращает активный энсюрер при включённом {@code h2k.ensure.topics} и корректном bootstrap,
-     * либо NOOP-экземпляр в остальных случаях. В логах фиксируется причина отклонения.
+     * Возвращает активный энсюрер, используя плоские DTO конфигурации.
+     * Упрощает тестирование и отделяет ensure-цепочку от громоздкого {@code H2kConfig}.
      */
-    public static TopicEnsurer createIfEnabled(H2kConfig cfg) {
-        if (!cfg.isEnsureTopics()) {
+    public static TopicEnsurer createIfEnabled(EnsureSettings ensureSettings,
+                                               TopicNamingSettings topicSettings,
+                                               String bootstrap,
+                                               Properties adminProps) {
+        Objects.requireNonNull(ensureSettings, "EnsureSettings не может быть null");
+        Objects.requireNonNull(topicSettings, "TopicNamingSettings не может быть null");
+        if (!ensureSettings.isEnsureTopics()) {
             return disabled();
         }
-        String bootstrap = cfg.getBootstrap();
-        if (bootstrap == null || bootstrap.trim().isEmpty()) {
+        String trimmedBootstrap = bootstrap == null ? "" : bootstrap.trim();
+        if (trimmedBootstrap.isEmpty()) {
             LOG.warn("TopicEnsurer: не задан bootstrap Kafka — ensureTopics будет отключён");
             return disabled();
         }
-        Properties props = cfg.kafkaAdminProps();
+        Properties props = new Properties();
+        if (adminProps != null && !adminProps.isEmpty()) {
+            props.putAll(adminProps);
+        }
+        props.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, trimmedBootstrap);
+        props.put(AdminClientConfig.CLIENT_ID_CONFIG, ensureSettings.getAdminSpec().getClientId());
         String clientId = prepareClientId(props);
-        props.put(AdminClientConfig.REQUEST_TIMEOUT_MS_CONFIG, (int) cfg.getAdminTimeoutMs());
+        long timeoutMs = ensureSettings.getAdminSpec().getTimeoutMs();
+        int timeout = timeoutMs > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) Math.max(timeoutMs, 1L);
+        props.put(AdminClientConfig.REQUEST_TIMEOUT_MS_CONFIG, timeout);
         AdminClient adminClient = AdminClient.create(props);
         KafkaTopicAdmin admin = new KafkaTopicAdminClient(adminClient);
-        TopicEnsureConfig config = TopicEnsureConfig.from(cfg);
+        TopicEnsureConfig config = TopicEnsureConfig.from(ensureSettings, topicSettings);
 
         return EnsureComponentsBuilder.build(admin, config, clientId);
     }

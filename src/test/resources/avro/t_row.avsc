@@ -27,6 +27,16 @@
       "h2k.phoenixType": "VARBINARY"
     },
     {
+      "name": "skip_me",
+      "type": [
+        "null",
+        "string"
+      ],
+      "default": null,
+      "h2k.phoenixType": "VARCHAR",
+      "h2k.payload.skip": true
+    },
+    {
       "name": "_event_ts",
       "type": [
         "null",

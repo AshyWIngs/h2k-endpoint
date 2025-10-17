@@ -11,7 +11,8 @@ import org.apache.hadoop.hbase.TableName;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import kz.qazmarka.h2k.config.H2kConfig;
+import kz.qazmarka.h2k.config.TableOptionsSnapshot;
+import kz.qazmarka.h2k.config.TableValueSource;
 
 /**
  * Фиксирует использование соли Phoenix (h2k.saltBytes) на горячем пути.
@@ -38,6 +39,13 @@ final class SaltUsageObserver {
     }
 
     /**
+     * Тестовый индикатор: сообщает, включён ли сбор статистики.
+     */
+    boolean isEnabledForTest() {
+        return enabled;
+    }
+
+    /**
      * @return сколько таблиц накопили статистику; используется в модульных тестах.
      */
     int observedTablesCountForTest() {
@@ -57,7 +65,7 @@ final class SaltUsageObserver {
     }
 
     void observeRow(TableName table,
-                    H2kConfig.TableOptionsSnapshot tableOpts,
+                    TableOptionsSnapshot tableOpts,
                     int rowKeyLength) {
         if (!enabled) {
             return;
@@ -78,7 +86,7 @@ final class SaltUsageObserver {
 
     private static final class SaltStats {
         private volatile int saltBytes;
-        private volatile H2kConfig.ValueSource saltSource;
+        private volatile TableValueSource saltSource;
         private final LongAdder rows = new LongAdder();
         private final LongAdder pkBytesTotal = new LongAdder();
         private final AtomicInteger minPk = new AtomicInteger(Integer.MAX_VALUE);
@@ -89,7 +97,7 @@ final class SaltUsageObserver {
 
         void capture(TableName table,
                      int newSaltBytes,
-                     H2kConfig.ValueSource newSaltSource,
+                     TableValueSource newSaltSource,
                      int rowKeyLength) {
             refreshSaltMetadata(newSaltBytes, newSaltSource);
 
@@ -107,7 +115,7 @@ final class SaltUsageObserver {
 
             if (rowKeyLength <= saltBytes) {
                 shortRows.increment();
-                if (warnIssued.compareAndSet(false, true) && logger.isWarnEnabled()) {
+                if (logger.isWarnEnabled() && warnIssued.compareAndSet(false, true)) {
                     logger.warn("Соль Phoenix таблицы {}: обнаружены строки длиной {} байт (saltBytes={}). Проверьте конфигурацию Avro.",
                             table,
                             rowKeyLength,
@@ -118,10 +126,12 @@ final class SaltUsageObserver {
             long total = rows.sum();
             long previous = lastInfoLogged.get();
             long delta = total - previous;
-            if (total >= LOG_THRESHOLD
-                    && delta >= LOG_THRESHOLD
-                    && lastInfoLogged.compareAndSet(previous, total)
-                    && logger.isInfoEnabled()) {
+            boolean reachedThreshold = total >= LOG_THRESHOLD;
+            boolean farEnoughFromLast = delta >= LOG_THRESHOLD;
+            if (logger.isInfoEnabled()
+                    && reachedThreshold
+                    && farEnoughFromLast
+                    && lastInfoLogged.compareAndSet(previous, total)) {
                 long pkSum = pkBytesTotal.sum();
                 double avgPk = total == 0L ? 0.0d : pkSum / (double) total;
                 int min = minPkValue();
@@ -140,7 +150,7 @@ final class SaltUsageObserver {
             }
         }
 
-        private void refreshSaltMetadata(int newSaltBytes, H2kConfig.ValueSource newSaltSource) {
+        private void refreshSaltMetadata(int newSaltBytes, TableValueSource newSaltSource) {
             if (saltBytes == newSaltBytes && saltSource == newSaltSource) {
                 return;
             }
@@ -180,7 +190,10 @@ final class SaltUsageObserver {
             return value == Integer.MAX_VALUE ? 0 : value;
         }
 
-        private static String label(H2kConfig.ValueSource source) {
+        /**
+         * Возвращает пояснение источника значения соли для логирования.
+         */
+        private static String label(TableValueSource source) {
             return source == null ? "" : source.label();
         }
 

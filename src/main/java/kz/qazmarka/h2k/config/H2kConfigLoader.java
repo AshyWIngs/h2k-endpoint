@@ -38,7 +38,7 @@ final class H2kConfigLoader {
         ProducerBatchSection batch = ProducerBatchSection.from(cfg);
         Map<String, String> topicConfigs = Parsers.readWithPrefix(cfg, H2kConfig.Keys.TOPIC_CONFIG_PREFIX);
 
-        H2kConfig.Builder builder = new H2kConfig.Builder(sanitizedBootstrap);
+        H2kConfigBuilder builder = new H2kConfigBuilder(sanitizedBootstrap);
 
         builder.topic()
                 .pattern(topic.topicPattern)

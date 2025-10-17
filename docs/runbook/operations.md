@@ -54,6 +54,52 @@ cfg['CONFIG'].select { |k,_| k.start_with?('h2k.') }
 4. **Массовый rollout** — разложите JAR на остальные RS и включайте peer поочерёдно.
 5. **Откат** — `disable_peer`, вернуть предыдущий JAR, перезапустить RegionServer.
 
+### 4.1 Стендовый прогон после обновлений Jackson/Guava
+
+- **Контроль версий** — убедитесь, что на стенде разложен JAR, собранный с `jackson-*-2.17.2` и `guava-24.1.1-jre` (`java -jar h2k-endpoint-*.jar --version` выводит список шейдженных библиотек в логах при старте RS).
+- **Schema Registry** — выполните повторную регистрацию схемы по тестовой таблице (`KafkaReplicationEndpointIntegrationTest` сценарий на стенде: `produce int_test_table`). Логи `ConfluentAvroPayloadSerializer` не должны содержать `No schema registered under subject!` после первой успешной регистрации.
+- **WAL hot-path** — прогоните нагрузочный сценарий (5–10 минут WAL репликации) и сравните метрики `WalCounterService` и `TopicEnsureService` с предыдущими запусками; всплесков ошибок сериализации быть не должно.
+- **Kafka потребители** — на тестовом consumer убедитесь, что гуавовские структуры (например, `ImmutableMap` в payload) корректно сериализуются и читаются. При необходимости запустите smoke-консьюмер `kafka-console-consumer` и проверьте, что сообщения десериализуются avro-tools без ошибок.
+- **Регресс при ensure** — проверьте, что ensure-топики создаются с прежними параметрами, задержек `slowCreate`/таймаутов не прибавилось.
+- **Фиксация результатов** — если все проверки прошли, отметьте выполнение пункта 13 в [`refactor-progress.instructions.md`](../../.github/instructions/refactor-progress.instructions.md) и сохраните ссылку на Grafana/логи в вики команды.
+
+#### 4.1.1 Подготовка перед прогоном
+
+- Снимите baseline метрики (`WalCounterService.entriesTotal`, `TopicEnsurer.ensure.success`) за последний успешный релиз.
+- Обновите стенд до артефакта, собранного с `mvn -DskipTests clean package` после локальных `mvn test`.
+- Проверьте доступность всех узлов Schema Registry (`curl -sf $URL/config`).
+- Очистите тестовые топики (`kafka-topics --bootstrap-server ... --delete --topic <test-topic>`) при необходимости, чтобы исключить старые сообщения.
+- Зафиксируйте commit hash и версию JAR в журнале сопровождения.
+
+#### 4.1.2 Пошаговый сценарий
+
+1. **Smoke до старта** — на одном RS отключите peer, очистите кэш Confluent (`schema-registry-cli subjects delete --hard default:INT_TEST_TABLE`) и выполните тестовую публикацию `bin/h2k-smoke.sh int_test_table`.
+2. **Регистрация схемы** — убедитесь по логам `ConfluentAvroPayloadSerializer` в качестве INFO-сообщения, что идентификатор схемы получен и fingerprint совпадает (`fingerprint` WARN отсутствует).
+3. **Нагрузочный прогон** — включите peer на стенде, подайте WAL-нагрузку `h2k-wal-driver` минимум на 10 минут. Следите, что `schema.registry.register.failures` не растёт.
+4. **Валидация потребителей** — запустите `kafka-console-consumer` (или боевого consumer в dry-run) и `avro-tools frombinary` для нескольких сообщений.
+5. **Ensure контроль** — запросите `TopicEnsurer` метрики (`/metrics` или JMX), проверьте отсутствие повторных попыток создания топиков.
+6. **Завершение** — верните peer в исходное состояние, задокументируйте результаты в журнале.
+
+#### 4.1.3 Шаблон фиксации результатов
+
+```
+Дата: 2025-10-__
+Commit/JAR: <hash> / h2k-endpoint-<version>.jar
+SR URLs: http://...
+Smoke тест: ok (schema id=___, fingerprint match=yes/no)
+Нагрузка 10 мин: ok (entries/s=___, ошибок=___)
+Consumer проверка: ok (avro-tools / console)
+Ensure: ok (create retries=0)
+Примечания: <ссылки на Grafana/логи>
+Ответственный: <ФИО>
+```
+
+#### 4.1.4 Локальная репетиция перед стендом
+
+- Выполните локально `mvn test` и `mvn -DskipTests clean package` — убедитесь, что `KafkaReplicationEndpointIntegrationTest` проходит.
+- Прогоните `./codacy-analyze.sh` и убедитесь в отсутствии замечаний.
+- При необходимости перегенерируйте тестовые схемы командой `./scripts/refresh-test-avro.sh` (если схема менялась).
+
 ## 5. Мониторинг
 
 - `status 'replication'` — `SizeOfLogQueue`, `AgeOfLastShippedOp`.

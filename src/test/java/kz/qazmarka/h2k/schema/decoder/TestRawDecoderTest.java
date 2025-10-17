@@ -17,7 +17,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 /**
- * Консолидированный набор юнит‑тестов для {@link SimpleDecoder}.
+ * Консолидированный набор юнит‑тестов для {@link TestRawDecoder}.
  *
  * Цели:
  *  1) Позитив: zero‑copy контракт, null/empty, удобные перегрузки.
@@ -28,9 +28,9 @@ import org.junit.jupiter.api.Test;
  *  - JUnit 5 (Jupiter); совместимо с Java 8 — без 'var' и API Java 9+.
  *  - Без файлового ввода/вывода и сетевых зависимостей; тесты быстрые и детерминированные.
  */
-class SimpleDecoderTest {
+class TestRawDecoderTest {
 
-    private static final Decoder DEC = SimpleDecoder.INSTANCE;
+    private static final Decoder DEC = TestRawDecoder.INSTANCE;
     private static final TableName TBL = TableName.valueOf("DEFAULT", "DUMMY");
     private static final String Q = "q";
 

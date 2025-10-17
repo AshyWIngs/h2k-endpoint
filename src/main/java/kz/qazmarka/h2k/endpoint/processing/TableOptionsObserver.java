@@ -7,7 +7,9 @@ import org.apache.hadoop.hbase.TableName;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import kz.qazmarka.h2k.config.H2kConfig;
+import kz.qazmarka.h2k.config.CfFilterSnapshot;
+import kz.qazmarka.h2k.config.TableOptionsSnapshot;
+import kz.qazmarka.h2k.config.TableValueSource;
 
 /**
  * Отслеживает использование табличных опций (соль, capacityHint, cf.list) и логирует изменения.
@@ -15,7 +17,7 @@ import kz.qazmarka.h2k.config.H2kConfig;
  */
 final class TableOptionsObserver {
 
-    private static final AtomicReference<Logger> LOG = new AtomicReference<>(LoggerFactory.getLogger(TableOptionsObserver.class));
+    private static final AtomicReference<Logger> LOGGER = new AtomicReference<>(LoggerFactory.getLogger(TableOptionsObserver.class));
 
     private final ConcurrentHashMap<TableName, TableState> stateByTable = new ConcurrentHashMap<>();
     private final boolean enabled;
@@ -33,6 +35,13 @@ final class TableOptionsObserver {
     }
 
     /**
+     * Хук для тестов: возвращает признак активности наблюдателя.
+     */
+    boolean isEnabledForTest() {
+        return enabled;
+    }
+
+    /**
      * Сохраняет снимок табличных опций и логирует его при первом появлении или изменении.
      *
      * @param table       таблица Phoenix/HBase
@@ -40,8 +49,8 @@ final class TableOptionsObserver {
      * @param cfSnapshot  снимок CF-фильтра
      */
     void observe(TableName table,
-                 H2kConfig.TableOptionsSnapshot tableOpts,
-                 H2kConfig.CfFilterSnapshot cfSnapshot) {
+                 TableOptionsSnapshot tableOpts,
+                 CfFilterSnapshot cfSnapshot) {
         if (!enabled) {
             return;
         }
@@ -56,22 +65,22 @@ final class TableOptionsObserver {
         private static final int UNINITIALIZED = Integer.MIN_VALUE;
 
         private int saltBytes = UNINITIALIZED;
-        private H2kConfig.ValueSource saltSource;
+        private TableValueSource saltSource;
         private int capacityHint = UNINITIALIZED;
-        private H2kConfig.ValueSource capacitySource;
+        private TableValueSource capacitySource;
         private String cfCsv;
-        private H2kConfig.ValueSource cfSource;
+        private TableValueSource cfSource;
 
-        void updateAndLog(TableName table,
-                          H2kConfig.TableOptionsSnapshot tableOpts,
-                          H2kConfig.CfFilterSnapshot cfSnapshot) {
+                void updateAndLog(TableName table,
+                                                    TableOptionsSnapshot tableOpts,
+                                                    CfFilterSnapshot cfSnapshot) {
             synchronized (this) {
                 int newSalt = tableOpts.saltBytes();
-                H2kConfig.ValueSource newSaltSource = tableOpts.saltSource();
+                TableValueSource newSaltSource = tableOpts.saltSource();
                 int newCapacity = tableOpts.capacityHint();
-                H2kConfig.ValueSource newCapacitySource = tableOpts.capacitySource();
+                TableValueSource newCapacitySource = tableOpts.capacitySource();
                 String newCfCsv = safeCsv(cfSnapshot);
-                H2kConfig.ValueSource newCfSource = (cfSnapshot == null) ? H2kConfig.ValueSource.DEFAULT : cfSnapshot.source();
+                TableValueSource newCfSource = (cfSnapshot == null) ? TableValueSource.DEFAULT : cfSnapshot.source();
 
                 boolean changed = (saltBytes != newSalt)
                         || (saltSource != newSaltSource)
@@ -91,9 +100,9 @@ final class TableOptionsObserver {
                 cfCsv = newCfCsv;
                 cfSource = newCfSource;
 
-                Logger logger = LOG.get();
-                if (logger.isInfoEnabled()) {
-                    logger.info("Таблица {}: saltBytes={} ({}), capacityHint={} ({}), cf.list='{}' ({})",
+                Logger log = LOGGER.get();
+                if (log.isInfoEnabled()) {
+                    log.info("Таблица {}: saltBytes={} ({}), capacityHint={} ({}), cf.list='{}' ({})",
                             table,
                             newSalt,
                             label(newSaltSource),
@@ -112,11 +121,14 @@ final class TableOptionsObserver {
             return !cfCsv.equals(candidate);
         }
 
-        private static String label(H2kConfig.ValueSource source) {
+        /**
+         * Возвращает источник значения табличной опции для логирования.
+         */
+        private static String label(TableValueSource source) {
             return source == null ? "" : source.label();
         }
 
-        private static String safeCsv(H2kConfig.CfFilterSnapshot snapshot) {
+        private static String safeCsv(CfFilterSnapshot snapshot) {
             if (snapshot == null) {
                 return "";
             }
@@ -126,7 +138,7 @@ final class TableOptionsObserver {
     }
 
     static AutoCloseable withLoggerForTest(Logger testLogger) {
-        Logger previous = LOG.getAndSet(testLogger);
-        return () -> LOG.set(previous);
+        Logger previous = LOGGER.getAndSet(testLogger);
+        return () -> LOGGER.set(previous);
     }
 }

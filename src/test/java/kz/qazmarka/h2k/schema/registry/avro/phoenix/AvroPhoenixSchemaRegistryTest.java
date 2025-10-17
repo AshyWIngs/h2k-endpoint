@@ -27,6 +27,8 @@ import org.slf4j.helpers.FormattingTuple;
 import org.slf4j.helpers.MessageFormatter;
 
 import kz.qazmarka.h2k.config.H2kConfig;
+import kz.qazmarka.h2k.config.TableOptionsSnapshot;
+import kz.qazmarka.h2k.config.TableValueSource;
 import kz.qazmarka.h2k.schema.registry.PhoenixTableMetadataProvider;
 import kz.qazmarka.h2k.schema.registry.SchemaRegistry;
 import kz.qazmarka.h2k.schema.registry.avro.local.AvroSchemaRegistry;
@@ -74,7 +76,7 @@ class AvroPhoenixSchemaRegistryTest {
         com.fasterxml.jackson.databind.JsonNode invalidNode = mapper.readTree("{\"family\":\"data\"}");
         AvroPhoenixSchemaRegistry registry = registryWithTestSchemas();
 
-    try (WarnCapture capture = WarnCapture.capture()) {
+        try (WarnCapture capture = WarnCapture.capture()) {
             String[] families = registry.sanitizeCfFromJson(invalidNode, table);
             assertArrayEquals(SchemaRegistry.EMPTY, families);
             assertTrue(capture.warnCount() > 0, "WARN должен быть зафиксирован");
@@ -87,7 +89,7 @@ class AvroPhoenixSchemaRegistryTest {
     @Test
     void shouldWarnAndFallbackWhenCfCsvHasNoValidValues() {
         AvroPhoenixSchemaRegistry registry = registryWithTestSchemas();
-       TableName table = TableName.valueOf("T_AVRO_BAD_CF_CSV");
+        TableName table = TableName.valueOf("T_AVRO_BAD_CF_CSV");
 
         try (WarnCapture capture = WarnCapture.capture()) {
             String[] families = registry.columnFamilies(table);
@@ -96,6 +98,54 @@ class AvroPhoenixSchemaRegistryTest {
             assertTrue(capture.contains("T_AVRO_BAD_CF_CSV"), "WARN должен ссылаться на имя таблицы");
             assertTrue(capture.contains("не содержит валидных имён"),
                     "WARN должен описывать фильтр без валидных значений");
+        }
+    }
+
+    @Test
+    void shouldNormalizeAndDeduplicateJsonCfList() {
+        TableName table = TableName.valueOf("T_AVRO_GOOD_CF_JSON");
+        com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        com.fasterxml.jackson.databind.node.ArrayNode node = mapper.createArrayNode();
+        node.add(" data ");
+        node.addNull();
+        node.add("data");
+        node.add("");
+        node.add("meta");
+        node.add(" meta ");
+        AvroPhoenixSchemaRegistry registry = registryWithTestSchemas();
+
+        try (WarnCapture capture = WarnCapture.capture()) {
+            String[] families = registry.sanitizeCfFromJson(node, table);
+            assertArrayEquals(new String[]{"data", "meta"}, families);
+            assertEquals(0, capture.warnCount(), "Корректный массив не должен генерировать WARN");
+        }
+    }
+
+    @Test
+    void shouldNormalizeCsvCfList(@TempDir Path tempDir) throws Exception {
+        TableName table = TableName.valueOf("T_META_CF");
+        Path schemaPath = tempDir.resolve("t_meta_cf.avsc");
+        Files.write(schemaPath, schemaJson("T_META_CF", null, null, " cf1 , cf2 , cf1 ").getBytes(StandardCharsets.UTF_8));
+
+        AvroPhoenixSchemaRegistry registry = new AvroPhoenixSchemaRegistry(new AvroSchemaRegistry(tempDir));
+        try (WarnCapture capture = WarnCapture.capture()) {
+            String[] families = registry.columnFamilies(table);
+            assertArrayEquals(new String[]{"cf1", "cf2"}, families);
+            assertEquals(0, capture.warnCount(), "Корректный CSV не должен генерировать WARN");
+        }
+    }
+
+    @Test
+    void shouldParseLegacyJsonCfListFromAvroSchema(@TempDir Path tempDir) throws Exception {
+        TableName table = TableName.valueOf("T_META_CF_JSON");
+        Path schemaPath = tempDir.resolve("t_meta_cf_json.avsc");
+        Files.write(schemaPath, schemaJsonRawCf("T_META_CF_JSON", null, null, "[\"data\", \" meta \", \"\", \"data\"]").getBytes(StandardCharsets.UTF_8));
+
+        AvroPhoenixSchemaRegistry registry = new AvroPhoenixSchemaRegistry(new AvroSchemaRegistry(tempDir));
+        try (WarnCapture capture = WarnCapture.capture()) {
+            String[] families = registry.columnFamilies(table);
+            assertArrayEquals(new String[]{"data", "meta"}, families);
+            assertEquals(0, capture.warnCount(), "Корректный JSON-массив не должен генерировать WARN");
         }
     }
 
@@ -113,11 +163,11 @@ class AvroPhoenixSchemaRegistryTest {
         cfg.set("h2k.capacity.hints.DEFAULT:T_META_POS", "999"); // legacy конфиг игнорируется
 
         H2kConfig config = H2kConfig.from(cfg, "mock:9092", registry);
-        H2kConfig.TableOptionsSnapshot snapshot = config.describeTableOptions(table);
+    TableOptionsSnapshot snapshot = config.describeTableOptions(table);
         assertEquals(1, snapshot.saltBytes());
-        assertEquals(H2kConfig.ValueSource.AVRO, snapshot.saltSource());
+    assertEquals(TableValueSource.AVRO, snapshot.saltSource());
         assertEquals(12, snapshot.capacityHint());
-        assertEquals(H2kConfig.ValueSource.AVRO, snapshot.capacitySource());
+    assertEquals(TableValueSource.AVRO, snapshot.capacitySource());
     }
 
     @Test
@@ -135,12 +185,12 @@ class AvroPhoenixSchemaRegistryTest {
             assertTrue(capture.contains("h2k.capacityHint"), "WARN должен упоминать h2k.capacityHint");
         }
 
-        H2kConfig config = H2kConfig.from(new Configuration(false), "mock:9092", registry);
-        H2kConfig.TableOptionsSnapshot snapshot = config.describeTableOptions(table);
+    H2kConfig config = H2kConfig.from(new Configuration(false), "mock:9092", registry);
+    TableOptionsSnapshot snapshot = config.describeTableOptions(table);
         assertEquals(0, snapshot.saltBytes());
-        assertEquals(H2kConfig.ValueSource.DEFAULT, snapshot.saltSource());
+    assertEquals(TableValueSource.DEFAULT, snapshot.saltSource());
         assertEquals(0, snapshot.capacityHint());
-        assertEquals(H2kConfig.ValueSource.DEFAULT, snapshot.capacitySource());
+    assertEquals(TableValueSource.DEFAULT, snapshot.capacitySource());
     }
 
     @Test
@@ -156,15 +206,27 @@ class AvroPhoenixSchemaRegistryTest {
             assertEquals(0, capture.warnCount(), "Отсутствие свойств не должно генерировать WARN");
         }
 
-        H2kConfig config = H2kConfig.from(new Configuration(false), "mock:9092", registry);
-        H2kConfig.TableOptionsSnapshot snapshot = config.describeTableOptions(table);
+    H2kConfig config = H2kConfig.from(new Configuration(false), "mock:9092", registry);
+    TableOptionsSnapshot snapshot = config.describeTableOptions(table);
         assertEquals(0, snapshot.saltBytes());
-        assertEquals(H2kConfig.ValueSource.DEFAULT, snapshot.saltSource());
+    assertEquals(TableValueSource.DEFAULT, snapshot.saltSource());
         assertEquals(0, snapshot.capacityHint());
-        assertEquals(H2kConfig.ValueSource.DEFAULT, snapshot.capacitySource());
+    assertEquals(TableValueSource.DEFAULT, snapshot.capacitySource());
     }
 
     private static String schemaJson(String recordName, Integer saltBytes, Integer capacityHint) {
+        return schemaJson(recordName, saltBytes, capacityHint, null);
+    }
+
+    private static String schemaJson(String recordName, Integer saltBytes, Integer capacityHint, String cfList) {
+        return schemaJsonInternal(recordName, saltBytes, capacityHint, cfList == null ? null : "\"" + cfList + "\"");
+    }
+
+    private static String schemaJsonRawCf(String recordName, Integer saltBytes, Integer capacityHint, String cfRawJson) {
+        return schemaJsonInternal(recordName, saltBytes, capacityHint, cfRawJson);
+    }
+
+    private static String schemaJsonInternal(String recordName, Integer saltBytes, Integer capacityHint, String cfValueLiteral) {
         StringBuilder sb = new StringBuilder();
         sb.append("{\n");
         sb.append("  \"type\": \"record\",\n");
@@ -175,6 +237,9 @@ class AvroPhoenixSchemaRegistryTest {
         }
         if (capacityHint != null) {
             sb.append("  \"h2k.capacityHint\": ").append(capacityHint).append(",\n");
+        }
+        if (cfValueLiteral != null) {
+            sb.append("  \"h2k.cf.list\": ").append(cfValueLiteral).append(",\n");
         }
         sb.append("  \"h2k.pk\": [\"id\"],\n");
         sb.append("  \"fields\": [\n");

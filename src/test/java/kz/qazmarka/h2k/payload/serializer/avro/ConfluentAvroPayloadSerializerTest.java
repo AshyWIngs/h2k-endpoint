@@ -1,12 +1,5 @@
 package kz.qazmarka.h2k.payload.serializer.avro;
 
-import static org.junit.jupiter.api.Assertions.assertArrayEquals;
-import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -26,18 +19,25 @@ import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.util.Bytes;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import io.confluent.kafka.schemaregistry.client.MockSchemaRegistryClient;
 import io.confluent.kafka.schemaregistry.client.SchemaMetadata;
-import io.confluent.kafka.serializers.AbstractKafkaAvroSerDeConfig;
 import io.confluent.kafka.schemaregistry.client.rest.exceptions.RestClientException;
+import io.confluent.kafka.serializers.AbstractKafkaAvroSerDeConfig;
 import kz.qazmarka.h2k.config.H2kConfig;
+import kz.qazmarka.h2k.config.H2kConfigBuilder;
 import kz.qazmarka.h2k.payload.builder.PayloadBuilder;
-import kz.qazmarka.h2k.schema.registry.avro.local.AvroSchemaRegistry;
 import kz.qazmarka.h2k.schema.decoder.Decoder;
-import kz.qazmarka.h2k.schema.decoder.SimpleDecoder;
+import kz.qazmarka.h2k.schema.decoder.TestRawDecoder;
+import kz.qazmarka.h2k.schema.registry.avro.local.AvroSchemaRegistry;
 import kz.qazmarka.h2k.util.RowKeySlice;
 
 /**
@@ -57,7 +57,7 @@ class ConfluentAvroPayloadSerializerTest {
             return mockClient;
         };
 
-        H2kConfig cfg = new H2kConfig.Builder("mock:9092")
+    H2kConfig cfg = new H2kConfigBuilder("mock:9092")
                 .avro()
                 .schemaDir(SCHEMA_DIR.toString())
                 .schemaRegistryUrls(Collections.singletonList("http://mock-sr"))
@@ -66,7 +66,10 @@ class ConfluentAvroPayloadSerializerTest {
                 .build();
 
         AvroSchemaRegistry localRegistry = new AvroSchemaRegistry(SCHEMA_DIR);
-        ConfluentAvroPayloadSerializer serializer = new ConfluentAvroPayloadSerializer(cfg, factory, localRegistry);
+    ConfluentAvroPayloadSerializer serializer = new ConfluentAvroPayloadSerializer(
+        cfg.getAvroSettings(),
+        factory,
+        localRegistry);
 
         Schema tableSchema = localRegistry.getByTable("INT_TEST_TABLE");
         GenericData.Record avroRecord = new GenericData.Record(tableSchema);
@@ -125,7 +128,7 @@ class ConfluentAvroPayloadSerializerTest {
             return new MockSchemaRegistryClient();
         };
 
-        H2kConfig cfg = new H2kConfig.Builder("mock:9092")
+    H2kConfig cfg = new H2kConfigBuilder("mock:9092")
                 .avro()
                 .schemaDir(SCHEMA_DIR.toString())
                 .schemaRegistryUrls(Collections.singletonList("http://mock-sr"))
@@ -135,7 +138,10 @@ class ConfluentAvroPayloadSerializerTest {
                 .build();
 
         AvroSchemaRegistry localRegistry = new AvroSchemaRegistry(SCHEMA_DIR);
-        ConfluentAvroPayloadSerializer created = new ConfluentAvroPayloadSerializer(cfg, factory, localRegistry);
+    ConfluentAvroPayloadSerializer created = new ConfluentAvroPayloadSerializer(
+        cfg.getAvroSettings(),
+        factory,
+        localRegistry);
         assertNotNull(created.metrics(), "метрики сериализатора должны быть доступны");
 
         assertEquals("USER_INFO", capturedConfig.get(AbstractKafkaAvroSerDeConfig.BASIC_AUTH_CREDENTIALS_SOURCE));
@@ -155,8 +161,8 @@ class ConfluentAvroPayloadSerializerTest {
         client.setLatestMetadata(table.getNameWithNamespaceInclAsString(),
                 new SchemaMetadata(42, 3, tableSchema.toString(false)));
 
-        ConfluentAvroPayloadSerializer serializer =
-                new ConfluentAvroPayloadSerializer(cfg, constantFactory(client), localRegistry);
+    ConfluentAvroPayloadSerializer serializer =
+        new ConfluentAvroPayloadSerializer(cfg.getAvroSettings(), constantFactory(client), localRegistry);
 
         GenericData.Record avroRecord = new GenericData.Record(tableSchema);
         avroRecord.put("id", "rk-1");
@@ -186,8 +192,8 @@ class ConfluentAvroPayloadSerializerTest {
         TableName table = TableName.valueOf("INT_TEST_TABLE");
         Schema tableSchema = localRegistry.getByTable(table.getQualifierAsString());
 
-        ConfluentAvroPayloadSerializer serializer =
-                new ConfluentAvroPayloadSerializer(cfg, constantFactory(client), localRegistry);
+    ConfluentAvroPayloadSerializer serializer =
+        new ConfluentAvroPayloadSerializer(cfg.getAvroSettings(), constantFactory(client), localRegistry);
 
         GenericData.Record avroRecord = new GenericData.Record(tableSchema);
         avroRecord.put("id", "rk-err");
@@ -216,8 +222,8 @@ class ConfluentAvroPayloadSerializerTest {
         client.setLatestMetadata(table.getNameWithNamespaceInclAsString(),
                 new SchemaMetadata(10, 1, schema.toString(false)));
 
-        ConfluentAvroPayloadSerializer serializer =
-                new ConfluentAvroPayloadSerializer(cfg, constantFactory(client), localRegistry);
+    ConfluentAvroPayloadSerializer serializer =
+        new ConfluentAvroPayloadSerializer(cfg.getAvroSettings(), constantFactory(client), localRegistry);
 
         GenericData.Record original = new GenericData.Record(schema);
         original.put("id", "rk-ok");
@@ -250,8 +256,8 @@ class ConfluentAvroPayloadSerializerTest {
         client.setLatestMetadata(table.getNameWithNamespaceInclAsString(),
                 new SchemaMetadata(11, 4, schema.toString(false)));
 
-        ConfluentAvroPayloadSerializer serializer =
-                new ConfluentAvroPayloadSerializer(cfg, constantFactory(client), localRegistry);
+    ConfluentAvroPayloadSerializer serializer =
+        new ConfluentAvroPayloadSerializer(cfg.getAvroSettings(), constantFactory(client), localRegistry);
 
         GenericData.Record broken = new GenericData.Record(schema);
         broken.put("id", 123); // ожидалась строка
@@ -274,7 +280,7 @@ class ConfluentAvroPayloadSerializerTest {
     @DisplayName("serialize(): BinarySlice из RowPayloadAssembler сериализуется как bytes union без ошибок")
     void serializeHandlesBinarySliceFromAssembler() {
         RecordingSchemaRegistryClient client = new RecordingSchemaRegistryClient();
-        H2kConfig cfg = new H2kConfig.Builder("mock:9092")
+    H2kConfig cfg = new H2kConfigBuilder("mock:9092")
                 .avro()
                 .schemaDir(SCHEMA_DIR.toString())
                 .schemaRegistryUrls(Collections.singletonList("http://mock-sr"))
@@ -287,7 +293,7 @@ class ConfluentAvroPayloadSerializerTest {
                 if ("payload".equalsIgnoreCase(qualifier)) {
                     return null; // заставить RowPayloadAssembler использовать BinarySlice
                 }
-                return SimpleDecoder.INSTANCE.decode(table, qualifier, value);
+                return TestRawDecoder.INSTANCE.decode(table, qualifier, value);
             }
 
             @Override
@@ -302,7 +308,7 @@ class ConfluentAvroPayloadSerializerTest {
                 if ("payload".equalsIgnoreCase(name)) {
                     return null;
                 }
-                return SimpleDecoder.INSTANCE.decode(table, qual, qOff, qLen, value, vOff, vLen);
+                return TestRawDecoder.INSTANCE.decode(table, qual, qOff, qLen, value, vOff, vLen);
             }
 
             @Override
@@ -311,7 +317,7 @@ class ConfluentAvroPayloadSerializerTest {
             }
         };
 
-        PayloadBuilder builder = new PayloadBuilder(decoder, cfg, constantFactory(client));
+    PayloadBuilder builder = new PayloadBuilder(decoder, cfg, constantFactory(client));
         TableName table = TableName.valueOf("default", "T_ROW");
         byte[] row = Bytes.toBytes("rk-1");
         byte[] family = Bytes.toBytes("data");
@@ -337,7 +343,7 @@ class ConfluentAvroPayloadSerializerTest {
     private static H2kConfig configWithCacheCapacity(int capacity) {
         Map<String, String> props = new HashMap<>();
         props.put("client.cache.capacity", Integer.toString(capacity));
-        return new H2kConfig.Builder("mock:9092")
+    return new H2kConfigBuilder("mock:9092")
                 .avro()
                 .schemaDir(SCHEMA_DIR.toString())
                 .schemaRegistryUrls(Collections.singletonList("http://mock-sr"))

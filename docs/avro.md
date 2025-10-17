@@ -26,6 +26,9 @@
 - Для каждой колонки:
   - `"h2k.phoenixType"` — точный Phoenix-тип (например, `UNSIGNED_INT`, `TIMESTAMP`).
   - `"h2k.jsonName"` (опц.) — если имя в JSON должно отличаться от колонки.
+  - `"h2k.payload.skip"` (опц.) — если колонку нужно полностью исключить из Avro-перегонки (ячейки игнорируются, декодер не вызывается).
+
+> Парсинг метаданных выполняется только через Jackson 2.x (`com.fasterxml.jackson`). Наследие `org.codehaus.jackson` больше не поддерживается и должно быть удалено из схем и окружения.
 
 > Подробности по вычислению capacity и salt — в [`docs/capacity.md`](capacity.md) и [`docs/phoenix.md`](phoenix.md).
 

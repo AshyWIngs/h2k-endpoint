@@ -1,14 +1,14 @@
 package kz.qazmarka.h2k.endpoint.processing;
 
+import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.hbase.TableName;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-
-import org.apache.hadoop.conf.Configuration;
-import org.apache.hadoop.hbase.TableName;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import kz.qazmarka.h2k.config.CfFilterSnapshot;
 import kz.qazmarka.h2k.config.H2kConfig;
 import kz.qazmarka.h2k.schema.registry.PhoenixTableMetadataProvider;
 
@@ -41,8 +41,8 @@ class CfFilterObserverTest {
         H2kConfig h2kConfig = H2kConfig.from(configuration, "mock:9092", provider);
         CfFilterObserver observer = CfFilterObserver.create();
 
-        TableName effective = TableName.valueOf("ns", "effective");
-        H2kConfig.CfFilterSnapshot effectiveSnapshot = h2kConfig.describeCfFilter(effective);
+    TableName effective = TableName.valueOf("ns", "effective");
+    CfFilterSnapshot effectiveSnapshot = h2kConfig.describeCfFilter(effective);
         for (int i = 0; i < 3; i++) {
             observer.observe(effective, 200, 100, true, effectiveSnapshot);
         }
@@ -51,8 +51,8 @@ class CfFilterObserverTest {
         assertNotNull(effectiveStats, "Ожидаем статистику по таблице");
         assertEquals(600L, effectiveStats.rowsTotal.sum(), "Накопленное количество строк должно совпадать");
 
-        TableName ineffective = TableName.valueOf("ns", "ineffective");
-        H2kConfig.CfFilterSnapshot ineffectiveSnapshot = h2kConfig.describeCfFilter(ineffective);
+    TableName ineffective = TableName.valueOf("ns", "ineffective");
+    CfFilterSnapshot ineffectiveSnapshot = h2kConfig.describeCfFilter(ineffective);
         for (int i = 0; i < 5; i++) {
             observer.observe(ineffective, 120, 0, true, ineffectiveSnapshot);
         }

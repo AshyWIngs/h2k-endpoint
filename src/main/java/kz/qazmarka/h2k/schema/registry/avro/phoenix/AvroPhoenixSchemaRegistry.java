@@ -143,11 +143,12 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
         if (raw instanceof JsonNode) {
             return sanitizeCfFromJson((JsonNode) raw, table);
         }
-        if (isLegacyJacksonNode(raw)) {
-            return sanitizeCfFromLegacy(raw, table);
-        }
         if (raw instanceof java.util.List<?>) {
             return sanitizeCfFromList((java.util.List<?>) raw);
+        }
+        if (!(raw instanceof CharSequence)) {
+            logger().warn("Avro-схема {}: h2k.cf.list имеет неподдерживаемый тип {} — значение будет обработано как CSV-строка",
+                    table.getNameAsString(), raw.getClass().getName());
         }
         String text = String.valueOf(raw);
         return sanitizeCfCsv(text, table);
@@ -170,40 +171,6 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
             }
         }
         return deduplicate(values);
-    }
-
-    private String[] sanitizeCfFromLegacy(Object node, TableName table) {
-        try {
-            java.lang.reflect.Method isArray = node.getClass().getMethod("isArray");
-            if (!Boolean.TRUE.equals(isArray.invoke(node))) {
-                logger().warn("Avro-схема {}: h2k.cf.list legacy Jackson значение не является массивом — проигнорировано", table.getNameAsString());
-                return SchemaRegistry.EMPTY;
-            }
-            java.lang.reflect.Method sizeMethod = node.getClass().getMethod("size");
-            int size = ((Number) sizeMethod.invoke(node)).intValue();
-            java.util.List<String> values = new java.util.ArrayList<>(size);
-            java.lang.reflect.Method getMethod = node.getClass().getMethod("get", int.class);
-            for (int i = 0; i < size; i++) {
-                Object element = getMethod.invoke(node, i);
-                if (element == null) {
-                    continue;
-                }
-                java.lang.reflect.Method asText = element.getClass().getMethod("asText");
-                String text = (String) asText.invoke(element);
-                String normalized = normalizeCfName(text);
-                if (normalized != null) {
-                    values.add(normalized);
-                }
-            }
-            return deduplicate(values);
-        } catch (ReflectiveOperationException ex) {
-            Logger logger = logger();
-            logger.warn("Avro-схема {}: не удалось прочитать legacy JSON h2k.cf.list — значение проигнорировано", table.getNameAsString());
-            if (logger.isDebugEnabled()) {
-                logger.debug("Трассировка чтения legacy h2k.cf.list", ex);
-            }
-            return SchemaRegistry.EMPTY;
-        }
     }
 
     private String[] sanitizeCfFromList(java.util.List<?> list) {
@@ -302,12 +269,21 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
         if (raw instanceof com.fasterxml.jackson.databind.JsonNode) {
             return readPkFromJsonNode((com.fasterxml.jackson.databind.JsonNode) raw);
         }
-        if (isLegacyJacksonNode(raw)) {
-            return readPkFromLegacyJsonNode(raw);
-        }
         if (raw instanceof java.util.List<?>) {
             java.util.List<?> list = (java.util.List<?>) raw;
             return copyPkFromList(list);
+        }
+        if (raw != null && !(raw instanceof CharSequence)) {
+            Logger logger = logger();
+            logger.warn("Avro-схема {}: h2k.pk имеет неподдерживаемый тип {} — значение будет проигнорировано",
+                    schema.getFullName(), raw.getClass().getName());
+            return SchemaRegistry.EMPTY;
+        }
+        if (raw instanceof CharSequence) {
+            String text = raw.toString().trim();
+            if (!text.isEmpty()) {
+                return readPkFromString(text);
+            }
         }
         String json = schema.getProp(PROP_PK);
         if (json != null && !json.trim().isEmpty()) {
@@ -378,48 +354,6 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
         String[] trimmed = new String[size];
         System.arraycopy(pk, 0, trimmed, 0, size);
         return trimmed;
-    }
-
-    private static boolean isLegacyJacksonNode(Object raw) {
-        if (raw == null) {
-            return false;
-        }
-        String name = raw.getClass().getName();
-        return name.startsWith("org.codehaus.jackson.");
-    }
-
-    private static String[] readPkFromLegacyJsonNode(Object node) {
-        try {
-            java.lang.reflect.Method isArray = node.getClass().getMethod("isArray");
-            if (!Boolean.TRUE.equals(isArray.invoke(node))) {
-                return SchemaRegistry.EMPTY;
-            }
-            java.lang.reflect.Method sizeMethod = node.getClass().getMethod("size");
-            int size = ((Number) sizeMethod.invoke(node)).intValue();
-            String[] pk = new String[size];
-            java.lang.reflect.Method getMethod = node.getClass().getMethod("get", int.class);
-            int idx = 0;
-            for (int i = 0; i < size; i++) {
-                Object element = getMethod.invoke(node, i);
-                if (element == null) {
-                    continue;
-                }
-                java.lang.reflect.Method asText = element.getClass().getMethod("asText");
-                String text = (String) asText.invoke(element);
-                String v = normalizePkEntry(text);
-                if (v != null) {
-                    pk[idx++] = v;
-                }
-            }
-            return trimPkArray(pk, idx);
-        } catch (ReflectiveOperationException e) {
-            Logger logger = logger();
-            logger.warn("Не удалось прочитать h2k.pk из legacy Jackson: {}", e.toString());
-            if (logger.isDebugEnabled()) {
-                logger.debug("Трассировка legacy Jackson", e);
-            }
-            return SchemaRegistry.EMPTY;
-        }
     }
 
     private static Object firstNonNull(Object a, Object b) {

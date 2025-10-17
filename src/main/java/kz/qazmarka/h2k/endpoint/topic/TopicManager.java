@@ -12,19 +12,19 @@ import org.apache.hadoop.hbase.TableName;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import kz.qazmarka.h2k.config.H2kConfig;
+import kz.qazmarka.h2k.config.TopicNamingSettings;
 import kz.qazmarka.h2k.kafka.ensure.TopicEnsurer;
 
 /**
  * Отвечает за разрешение имён Kafka-топиков и ленивые ensure-вызовы.
- * Использует {@link H2kConfig#topicFor(org.apache.hadoop.hbase.TableName)} для кеширования имён,
+ * Использует {@link TopicNamingSettings#resolve(TableName)} для кеширования с учётом шаблона,
  * а также {@link TopicEnsurer} в режиме NOOP/active — вызывающий код не проверяет конфигурацию.
  */
 public final class TopicManager {
 
     private static final Logger LOG = LoggerFactory.getLogger(TopicManager.class);
 
-    private final H2kConfig cfg;
+    private final TopicNamingSettings topicSettings;
     private final TopicEnsurer topicEnsurer;
     /**
      * Кеш разрешённых имён топиков. Потокобезопасный {@link ConcurrentMap}, чтобы несколько потоков
@@ -32,8 +32,8 @@ public final class TopicManager {
      */
     private final ConcurrentMap<String, String> topicCache = new ConcurrentHashMap<>(8);
     private final ConcurrentMap<String, LongSupplier> extraMetrics = new ConcurrentHashMap<>(8);
-    public TopicManager(H2kConfig cfg, TopicEnsurer topicEnsurer) {
-        this.cfg = Objects.requireNonNull(cfg, "конфигурация h2k");
+    public TopicManager(TopicNamingSettings topicSettings, TopicEnsurer topicEnsurer) {
+        this.topicSettings = Objects.requireNonNull(topicSettings, "настройки топиков h2k");
         this.topicEnsurer = topicEnsurer == null ? TopicEnsurer.disabled() : topicEnsurer;
     }
 
@@ -48,7 +48,7 @@ public final class TopicManager {
         if (cached != null) {
             return cached;
         }
-        String resolved = cfg.topicFor(table);
+        String resolved = topicSettings.resolve(table);
         String race = topicCache.putIfAbsent(cacheKey, resolved);
         return race != null ? race : resolved;
     }

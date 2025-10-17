@@ -27,7 +27,7 @@ import io.confluent.kafka.schemaregistry.client.SchemaMetadata;
 import io.confluent.kafka.schemaregistry.client.SchemaRegistryClient;
 import io.confluent.kafka.schemaregistry.client.rest.exceptions.RestClientException;
 import io.confluent.kafka.serializers.AbstractKafkaAvroSerDeConfig;
-import kz.qazmarka.h2k.config.H2kConfig;
+import kz.qazmarka.h2k.config.AvroSettings;
 import kz.qazmarka.h2k.schema.registry.avro.local.AvroSchemaRegistry;
 
 /**
@@ -59,14 +59,19 @@ public final class ConfluentAvroPayloadSerializer {
     private final ConcurrentHashMap<String, SchemaInfo> cache = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, RemoteSchemaFingerprint> remoteFingerprints = new ConcurrentHashMap<>();
 
-    public ConfluentAvroPayloadSerializer(H2kConfig cfg,
+    /**
+     * @param avroSettings неизменяемые настройки Avro и Schema Registry
+     * @param factory      фабрика клиентов Schema Registry
+     * @param localRegistry локальный реестр Avro-схем
+     */
+    public ConfluentAvroPayloadSerializer(AvroSettings avroSettings,
                                           SchemaRegistryClientFactory factory,
                                           AvroSchemaRegistry localRegistry) {
         this.localRegistry = Objects.requireNonNull(localRegistry, "localRegistry");
-        Objects.requireNonNull(cfg, "cfg");
+        Objects.requireNonNull(avroSettings, "avroSettings");
         Objects.requireNonNull(factory, "schemaRegistryClientFactory");
 
-        List<String> urls = cfg.getAvroSchemaRegistryUrls();
+        List<String> urls = avroSettings.getRegistryUrls();
         if (urls == null || urls.isEmpty()) {
             throw new IllegalStateException("Avro: не заданы адреса Schema Registry (h2k.avro.sr.urls)");
         }
@@ -86,8 +91,8 @@ public final class ConfluentAvroPayloadSerializer {
         }
         this.registryUrls = Collections.unmodifiableList(normalized);
 
-        Map<String, String> auth = cfg.getAvroSrAuth();
-        Map<String, String> avroProps = cfg.getAvroProps();
+        Map<String, String> auth = avroSettings.getRegistryAuth();
+        Map<String, String> avroProps = avroSettings.getProperties();
         this.subjectStrategy = prop(avroProps, "subject.strategy", STRATEGY_TABLE);
         this.subjectPrefix = prop(avroProps, "subject.prefix", "");
         this.subjectSuffix = prop(avroProps, "subject.suffix", "");

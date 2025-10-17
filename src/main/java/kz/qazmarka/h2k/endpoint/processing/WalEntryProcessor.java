@@ -15,7 +15,9 @@ import org.apache.kafka.clients.producer.Producer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import kz.qazmarka.h2k.config.H2kConfig;
+import kz.qazmarka.h2k.config.CfFilterSnapshot;
+import kz.qazmarka.h2k.config.TableMetadataView;
+import kz.qazmarka.h2k.config.TableOptionsSnapshot;
 import kz.qazmarka.h2k.endpoint.topic.TopicManager;
 import kz.qazmarka.h2k.kafka.producer.batch.BatchSender;
 import kz.qazmarka.h2k.payload.builder.PayloadBuilder;
@@ -38,7 +40,7 @@ public final class WalEntryProcessor {
     private static final int ROW_BUFFER_TRIM_THRESHOLD = 4_096;
 
     private final TopicManager topicManager;
-    private final H2kConfig config;
+    private final TableMetadataView metadata;
     private final ArrayList<Cell> rowBuffer = new ArrayList<>(ROW_BUFFER_BASE_CAPACITY);
     private final LongAdder rowBufferUpsize = new LongAdder();
     private final LongAdder rowBufferTrim = new LongAdder();
@@ -53,11 +55,11 @@ public final class WalEntryProcessor {
     public WalEntryProcessor(PayloadBuilder payloadBuilder,
                              TopicManager topicManager,
                              Producer<byte[], byte[]> producer,
-                             H2kConfig config) {
+                             TableMetadataView metadata) {
         this.topicManager = topicManager;
-        this.config = config;
+        this.metadata = Objects.requireNonNull(metadata, "метаданные таблиц");
         this.rowDispatcher = new WalRowDispatcher(payloadBuilder, producer);
-        this.observers = WalObserverHub.create(config);
+        this.observers = WalObserverHub.create(metadata);
         this.rowProcessor = new WalRowProcessor(rowDispatcher, observers);
     }
 
@@ -71,8 +73,8 @@ public final class WalEntryProcessor {
             throws InterruptedException, ExecutionException, TimeoutException {
         List<Cell> cells = entry.getEdit().getCells();
         TableName table = entry.getKey().getTablename();
-        H2kConfig.TableOptionsSnapshot tableOptions = config.describeTableOptions(table);
-        H2kConfig.CfFilterSnapshot cfSnapshot = config.describeCfFilter(table);
+        TableOptionsSnapshot tableOptions = metadata.describeTableOptions(table);
+        CfFilterSnapshot cfSnapshot = metadata.describeCfFilter(table);
         boolean filterConfigured = cfSnapshot.enabled();
 
         if (skipEmptyEntry(entry, cells, filterConfigured)) {
@@ -252,8 +254,8 @@ public final class WalEntryProcessor {
     private void finalizeEntry(TableName table,
                                WalCounterService.EntryCounters counters,
                                boolean filterActive,
-                               H2kConfig.CfFilterSnapshot cfSnapshot,
-                               H2kConfig.TableOptionsSnapshot tableOptions) {
+                               CfFilterSnapshot cfSnapshot,
+                               TableOptionsSnapshot tableOptions) {
         WalCounterService.EntrySummary summary = counterService.completeEntry(counters);
         observers.finalizeEntry(table, summary, filterActive, cfSnapshot, tableOptions);
     }

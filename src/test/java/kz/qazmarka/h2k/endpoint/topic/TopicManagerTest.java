@@ -12,6 +12,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import kz.qazmarka.h2k.config.H2kConfig;
+import kz.qazmarka.h2k.config.TopicNamingSettings;
 import kz.qazmarka.h2k.kafka.ensure.TopicEnsurer;
 
 class TopicManagerTest {
@@ -65,8 +66,8 @@ class TopicManagerTest {
     @Test
     @DisplayName("ensureTopicIfNeeded подавляет исключения TopicEnsurer")
     void ensureTopicSwallowsExceptions() {
-        TopicEnsurer throwingEnsurer = enabledEnsurerWithNullService();
-        TopicManager manager = new TopicManager(h2kConfig(), throwingEnsurer);
+    TopicEnsurer throwingEnsurer = enabledEnsurerWithNullService();
+    TopicManager manager = new TopicManager(topicSettings(), throwingEnsurer);
 
         manager.ensureTopicIfNeeded("valid-topic"); // NPE внутри TopicEnsurer.ensureTopic() не должен выплыть
         assertTrue(manager.ensureEnabled(), "Ensure должен считаться включённым для кастомного энсюрера");
@@ -78,12 +79,12 @@ class TopicManagerTest {
         TopicManager disabled = topicManager();
         assertFalse(disabled.ensureEnabled(), "Для TopicEnsurer.disabled() ensureEnabled=false");
 
-        TopicManager enabled = new TopicManager(h2kConfig(), enabledEnsurerWithNullService());
+    TopicManager enabled = new TopicManager(topicSettings(), enabledEnsurerWithNullService());
         assertTrue(enabled.ensureEnabled(), "Кастомный TopicEnsurer с disabledMode=false должен считаться активным");
     }
 
     private static TopicManager topicManager() {
-        return new TopicManager(h2kConfig(), TopicEnsurer.disabled());
+    return new TopicManager(topicSettings(), TopicEnsurer.disabled());
     }
 
     private static H2kConfig h2kConfig() {
@@ -91,6 +92,10 @@ class TopicManagerTest {
         cfg.set("h2k.kafka.bootstrap.servers", "mock:9092");
         cfg.set("h2k.topic.pattern", "${namespace}.${qualifier}");
         return H2kConfig.from(cfg, "mock:9092");
+    }
+
+    private static TopicNamingSettings topicSettings() {
+        return h2kConfig().getTopicSettings();
     }
 
     private static TopicEnsurer enabledEnsurerWithNullService() {

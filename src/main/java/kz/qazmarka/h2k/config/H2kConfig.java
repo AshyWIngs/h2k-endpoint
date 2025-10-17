@@ -1,10 +1,7 @@
 package kz.qazmarka.h2k.config;
 
-import java.nio.charset.StandardCharsets;
-import java.util.Collections;
-import java.util.HashMap;
 import java.util.Map;
-import java.util.Properties;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
@@ -27,7 +24,7 @@ import kz.qazmarka.h2k.util.Parsers;
  *
  * Все поля неизменяемые (иммутабельные).
  */
-public final class H2kConfig {
+public final class H2kConfig implements TableMetadataView {
     /**
      * Дефолтный лимит длины имени Kafka‑топика (символов).
      * Значение 249 совместимо со старыми версиями брокеров Kafka.
@@ -115,33 +112,13 @@ public final class H2kConfig {
 
     // ==== Базовые ====
     private final String bootstrap;
-    private final String topicPattern;
-    private final int topicMaxLength;
-
-    private final String avroSchemaDir;
-    private final java.util.List<String> avroSchemaRegistryUrls;
-    private final Map<String, String> avroSrAuth;
-    private final Map<String, String> avroProps;
+    private final TopicNamingSettings topicSettings;
+    private final AvroSettings avroSettings;
 
     // ==== Автосоздание топиков ====
-    private final boolean ensureTopics;
-    /** Разрешено ли увеличение партиций при ensureTopics. */
-    private final boolean ensureIncreasePartitions;
-    /** Разрешено ли дифф‑применение topic‑конфигов при ensureTopics. */
-    private final boolean ensureDiffConfigs;
-    private final int topicPartitions;
-    private final short topicReplication;
-    private final long adminTimeoutMs;
-    /** client.id для AdminClient (для фильтрации в логах брокеров). */
-    private final String adminClientId;
-    /** Backoff (мс) при неопределённом ответе от AdminClient (UNKNOWN/таймаут/сеть). */
-    private final long unknownBackoffMs;
-    /** Каждые N отправок ожидаем подтверждения (батчевое ожидание). */
-    private final int awaitEvery;
-    /** Таймаут ожидания подтверждений батча, мс. */
-    private final int awaitTimeoutMs;
-    /** Произвольные конфиги топика, собранные из h2k.topic.config.* */
-    private final Map<String, String> topicConfigs;
+    private final EnsureSettings ensureSettings;
+    /** Настройки ожиданий Kafka Producer. */
+    private final ProducerAwaitSettings producerSettings;
     /** Внешний поставщик табличных метаданных (например, Avro-схемы). */
     private final PhoenixTableMetadataProvider tableMetadataProvider;
     /** Включены ли наблюдатели TableCapacity/CfFilter. */
@@ -173,277 +150,36 @@ public final class H2kConfig {
     }
 
     /**
-     * Приватный конструктор: вызывается только билдером для инициализации
-     * всех final‑полей за один проход. Сохраняет иммутабельность и избегает
-     * длинного конструктора с множеством параметров.
+     * Приватный конструктор: используется коллекцией параметров {@link H2kConfigData},
+     * которую формирует внешний билдер {@link H2kConfigBuilder}. Позволяет централизованно
+     * инициализировать все final‑поля за один проход и сохранить иммутабельность без длинного
+     * конструктора с десятками параметров.
      */
-    private H2kConfig(Builder b) {
-        this.bootstrap = b.bootstrap;
-        this.topicPattern = b.topicPattern;
-        this.topicMaxLength = b.topicMaxLength;
-        this.avroSchemaDir = b.avroSchemaDir;
-        this.avroSchemaRegistryUrls = Collections.unmodifiableList(new java.util.ArrayList<>(b.avroSchemaRegistryUrls));
-        this.avroSrAuth = Collections.unmodifiableMap(new HashMap<>(b.avroSrAuth));
-        this.avroProps = Collections.unmodifiableMap(new HashMap<>(b.avroProps));
-        this.ensureTopics = b.ensureTopics;
-        this.ensureIncreasePartitions = b.ensureIncreasePartitions;
-        this.ensureDiffConfigs = b.ensureDiffConfigs;
-        this.topicPartitions = b.topicPartitions;
-        this.topicReplication = b.topicReplication;
-        this.adminTimeoutMs = b.adminTimeoutMs;
-        this.adminClientId = b.adminClientId;
-        this.unknownBackoffMs = b.unknownBackoffMs;
-        this.awaitEvery = b.awaitEvery;
-        this.awaitTimeoutMs = b.awaitTimeoutMs;
-        this.topicConfigs = Collections.unmodifiableMap(new HashMap<>(b.topicConfigs));
-        this.tableMetadataProvider = b.tableMetadataProvider;
-        this.observersEnabled = b.observersEnabled;
+    private H2kConfig(H2kConfigData data) {
+        if (data == null) {
+            throw new IllegalArgumentException("Параметры конфигурации не могут быть null");
+        }
+
+    // Проверяем, что все секции заполнены загрузчиком, иначе выдаём понятные сообщения ещё до запуска endpoint.
+    this.bootstrap = Objects.requireNonNull(data.bootstrap, "Адреса bootstrap не могут быть null");
+
+    this.topicSettings = Objects.requireNonNull(data.topic, "Секция topic не может быть null");
+    this.avroSettings = Objects.requireNonNull(data.avro, "Секция avro не может быть null");
+    this.ensureSettings = Objects.requireNonNull(data.ensure, "Секция ensure не может быть null");
+    this.producerSettings = Objects.requireNonNull(data.producer, "Секция producer не может быть null");
+        PhoenixTableMetadataProvider provider = (data.metadataProvider == null)
+                ? PhoenixTableMetadataProvider.NOOP
+                : data.metadataProvider;
+        this.tableMetadataProvider = provider;
+        this.observersEnabled = data.observersEnabled;
     }
 
     /**
-     * Билдер для пошаговой сборки иммутабельной конфигурации без громоздкого конструктора.
-     * Удобнее читать, безопаснее изменять, удовлетворяет правилу Sonar S107 (ограничение числа параметров).
-     * Все поля имеют разумные значения по умолчанию; сеттеры возвращают this для чейнинга.
+     * Пакетная фабрика: создаёт {@link H2kConfig} на основе заранее подготовленных данных.
+     * Вынесена отдельно, чтобы внешний билдер не раскрывал детали конструктора.
      */
-    public static final class Builder {
-        /** Обязательный адрес(а) Kafka bootstrap.servers. */
-        private String bootstrap;
-        /** Шаблон имени топика (см. {@link H2kConfig#K_TOPIC_PATTERN}). */
-        private String topicPattern = PLACEHOLDER_TABLE;
-        /** Ограничение длины имени топика (символов). */
-        private int topicMaxLength = DEFAULT_TOPIC_MAX_LENGTH;
-        /** Каталог локальных Avro-схем. */
-        private String avroSchemaDir = DEFAULT_AVRO_SCHEMA_DIR;
-        /** Список URL Schema Registry. */
-        private java.util.List<String> avroSchemaRegistryUrls = Collections.emptyList();
-        /** Авторизационные параметры для Schema Registry. */
-        private Map<String, String> avroSrAuth = Collections.emptyMap();
-        /** Доп. AVRO-настройки (минимальный набор ключей, см. from()). */
-        private Map<String, String> avroProps = Collections.emptyMap();
-        /** Автоматически создавать недостающие топики. */
-        private boolean ensureTopics = true;
-        /** Разрешено ли автоматическое увеличение числа партиций. */
-        private boolean ensureIncreasePartitions = DEFAULT_ENSURE_INCREASE_PARTITIONS;
-        /** Разрешено ли дифф‑применение конфигов топика. */
-        private boolean ensureDiffConfigs = DEFAULT_ENSURE_DIFF_CONFIGS;
-        /** Целевое число партиций создаваемого топика. */
-        private int topicPartitions = DEFAULT_TOPIC_PARTITIONS;
-        /** Целевой фактор репликации создаваемого топика. */
-        private short topicReplication = DEFAULT_TOPIC_REPLICATION;
-        /** Таймаут операций AdminClient при ensureTopics (мс). */
-        private long adminTimeoutMs = DEFAULT_ADMIN_TIMEOUT_MS;
-        /** Значение client.id для AdminClient. */
-        private String adminClientId = DEFAULT_ADMIN_CLIENT_ID;
-        /** Базовый backoff между повторами при неопределённых ошибках (мс). */
-        private long unknownBackoffMs = DEFAULT_UNKNOWN_BACKOFF_MS;
-
-        /** Каждые N отправок ожидать подтверждение. */
-        private int awaitEvery = DEFAULT_AWAIT_EVERY;
-        /** Таймаут ожидания подтверждения батча (мс). */
-        private int awaitTimeoutMs = DEFAULT_AWAIT_TIMEOUT_MS;
-
-        /** Дополнительные конфиги топика, собранные из префикса h2k.topic.config.* */
-        private Map<String, String> topicConfigs = Collections.emptyMap();
-        /** Внешний поставщик табличных метаданных (Avro и т.п.). */
-        private PhoenixTableMetadataProvider tableMetadataProvider = PhoenixTableMetadataProvider.NOOP;
-        /** Флаг включения наблюдателей таблиц. */
-        private boolean observersEnabled = DEFAULT_OBSERVERS_ENABLED;
-        public Builder tableMetadataProvider(PhoenixTableMetadataProvider provider) {
-            this.tableMetadataProvider = (provider == null) ? PhoenixTableMetadataProvider.NOOP : provider;
-            return this;
-        }
-
-        /**
-         * Включить наблюдатели TableCapacity/CfFilter.
-         * @param v true — включить наблюдателей
-         * @return this
-         */
-        public Builder observersEnabled(boolean v) {
-            this.observersEnabled = v;
-            return this;
-        }
-
-        /**
-         * Создаёт билдер с обязательным адресом Kafka bootstrap.servers.
-         * @param bootstrap список Kafka‑узлов в формате host:port[,host2:port2]
-         */
-        public Builder(String bootstrap) {
-            this.bootstrap = bootstrap;
-        }
-
-        /**
-         * Устанавливает шаблон имени Kafka‑топика. Поддерживаются плейсхолдеры
-         * ${table}, ${namespace}, ${qualifier}.
-         * @param v шаблон, например "${namespace}.${qualifier}"
-         * @return this
-         */
-        public Builder topicPattern(String v) { this.topicPattern = v; return this; }
-        /**
-         * Ограничение длины имени топика (символов).
-         * @param v максимальная длина (≥1)
-         * @return this
-         */
-        public Builder topicMaxLength(int v) { this.topicMaxLength = v; return this; }
-        /**
-         * Автоматически создавать недостающие топики при старте.
-         * @param v true — создавать при необходимости
-         * @return this
-         */
-        public Builder ensureTopics(boolean v) { this.ensureTopics = v; return this; }
-
-        /**
-         * Каталог локальных Avro-схем.
-         * @param v путь до каталога
-         * @return this
-         */
-        public Builder avroSchemaDir(String v) {
-            this.avroSchemaDir = (v == null || v.trim().isEmpty()) ? DEFAULT_AVRO_SCHEMA_DIR : v.trim();
-            return this;
-        }
-
-        /**
-         * Список URL Schema Registry.
-         * @param v список URL
-         * @return this
-         */
-        public Builder avroSchemaRegistryUrls(java.util.List<String> v) {
-            this.avroSchemaRegistryUrls = (v == null) ? Collections.emptyList() : v;
-            return this;
-        }
-
-        /**
-         * Авторизационные параметры Schema Registry.
-         * @param v карта ключей после префикса h2k.avro.sr.auth.
-         * @return this
-         */
-        public Builder avroSrAuth(Map<String, String> v) { this.avroSrAuth = (v == null) ? Collections.emptyMap() : v; return this; }
-
-        /**
-         * AVRO-настройки (минимальный набор известных ключей).
-         * @param v карта свойств
-         * @return this
-         */
-        public Builder avroProps(Map<String, String> v) { this.avroProps = (v == null) ? Collections.emptyMap() : v; return this; }
-        /**
-         * Разрешить автоматическое увеличение числа партиций при ensureTopics.
-         * @param v true — увеличивать партиции при необходимости
-         * @return this
-         */
-        public Builder ensureIncreasePartitions(boolean v) { this.ensureIncreasePartitions = v; return this; }
-        /**
-         * Разрешить дифф‑применение конфигов топика (incrementalAlterConfigs) при ensureTopics.
-         * @param v true — сравнивать и применять отличия конфигов
-         * @return this
-         */
-        public Builder ensureDiffConfigs(boolean v) { this.ensureDiffConfigs = v; return this; }
-        /**
-         * Число партиций создаваемого топика (если ensureTopics=true).
-         * @param v количество партиций (≥1)
-         * @return this
-         */
-        public Builder topicPartitions(int v) { this.topicPartitions = v; return this; }
-        /**
-         * Фактор репликации создаваемого топика.
-         * @param v фактор репликации (≥1)
-         * @return this
-         */
-        public Builder topicReplication(short v) { this.topicReplication = v; return this; }
-        /**
-         * Таймаут операций AdminClient при ensureTopics, мс.
-         * @param v таймаут в миллисекундах
-         * @return this
-         */
-        public Builder adminTimeoutMs(long v) { this.adminTimeoutMs = v; return this; }
-        /**
-         * Значение client.id для AdminClient (удобно для фильтрации логов брокера).
-         * @param v идентификатор клиента
-         * @return this
-         */
-        public Builder adminClientId(String v) { this.adminClientId = v; return this; }
-        /**
-         * Backoff (мс) между повторами при неопределённом результате (UNKNOWN/timeout/сетевые ошибки).
-         * @param v пауза между повторами в миллисекундах
-         * @return this
-         */
-        public Builder unknownBackoffMs(long v) { this.unknownBackoffMs = v; return this; }
-
-        /**
-         * Каждые N отправок ждать подтверждения (батчевое ожидание).
-         * @param v размер батча N (≥1)
-         * @return this
-         */
-        public Builder awaitEvery(int v) { this.awaitEvery = v; return this; }
-        /**
-         * Таймаут ожидания подтверждений батча.
-         * @param v таймаут в миллисекундах (≥1)
-         * @return this
-         */
-        public Builder awaitTimeoutMs(int v) { this.awaitTimeoutMs = v; return this; }
-
-        /**
-         * Произвольные конфиги топика из префикса h2k.topic.config.* (см. {@link Parsers#readTopicConfigs(Configuration, String)}).
-         * @param v карта ключ‑значение конфигураций топика
-         * @return this
-         */
-        public Builder topicConfigs(Map<String, String> v) { this.topicConfigs = v; return this; }
-
-        /** @return сгруппированные настройки топика (pattern, CF, дополнительные конфиги). */
-        public TopicOptions topic() { return new TopicOptions(); }
-
-        /** @return сгруппированные настройки payload и Avro. */
-        public AvroOptions avro() { return new AvroOptions(); }
-
-        /** @return сгруппированные настройки ensure/topics. */
-        public EnsureOptions ensure() { return new EnsureOptions(); }
-
-        /** @return сгруппированные настройки ожиданий и batch‑поведения. */
-        public ProducerOptions producer() { return new ProducerOptions(); }
-
-        /**
-         * Собирает неизменяемый объект конфигурации с текущими значениями билдера.
-         *
-         * Возвращаемый экземпляр {@link H2kConfig} иммутабелен и фиксирует копии/снимки переданных карт и массивов там, где это требуется.
-         * @return готовый {@link H2kConfig}
-         */
-        public H2kConfig build() { return new H2kConfig(this); }
-
-        /** Опции, относящиеся к шаблону топика. */
-        public final class TopicOptions {
-            public TopicOptions pattern(String v) { Builder.this.topicPattern(v); return this; }
-            public TopicOptions maxLength(int v) { Builder.this.topicMaxLength(v); return this; }
-            public TopicOptions configs(Map<String, String> v) { Builder.this.topicConfigs(v); return this; }
-            public Builder done() { return Builder.this; }
-        }
-
-        /** Опции payload/Avro. */
-        public final class AvroOptions {
-            public AvroOptions schemaDir(String dir) { Builder.this.avroSchemaDir(dir); return this; }
-            public AvroOptions schemaRegistryUrls(java.util.List<String> urls) { Builder.this.avroSchemaRegistryUrls(urls); return this; }
-            public AvroOptions schemaRegistryAuth(Map<String, String> auth) { Builder.this.avroSrAuth(auth); return this; }
-            public AvroOptions properties(Map<String, String> props) { Builder.this.avroProps(props); return this; }
-            public Builder done() { return Builder.this; }
-        }
-
-        /** Опции ensure/topics. */
-        public final class EnsureOptions {
-            public EnsureOptions enabled(boolean v) { Builder.this.ensureTopics(v); return this; }
-            public EnsureOptions allowIncreasePartitions(boolean v) { Builder.this.ensureIncreasePartitions(v); return this; }
-            public EnsureOptions allowDiffConfigs(boolean v) { Builder.this.ensureDiffConfigs(v); return this; }
-            public EnsureOptions partitions(int v) { Builder.this.topicPartitions(v); return this; }
-            public EnsureOptions replication(short v) { Builder.this.topicReplication(v); return this; }
-            public EnsureOptions adminTimeoutMs(long v) { Builder.this.adminTimeoutMs(v); return this; }
-            public EnsureOptions adminClientId(String v) { Builder.this.adminClientId(v); return this; }
-            public EnsureOptions unknownBackoffMs(long v) { Builder.this.unknownBackoffMs(v); return this; }
-            public Builder done() { return Builder.this; }
-        }
-
-        /** Опции ожиданий/продьюсера. */
-        public final class ProducerOptions {
-            public ProducerOptions awaitEvery(int v) { Builder.this.awaitEvery(v); return this; }
-            public ProducerOptions awaitTimeoutMs(int v) { Builder.this.awaitTimeoutMs(v); return this; }
-            public Builder done() { return Builder.this; }
-        }
-
+    static H2kConfig fromData(H2kConfigData data) {
+        return new H2kConfig(data);
     }
 
     /**
@@ -476,17 +212,7 @@ public final class H2kConfig {
      * @return корректное имя Kafka‑топика
      */
     public String topicFor(TableName table) {
-        String ns = table.getNamespaceAsString();
-        String qn = table.getQualifierAsString();
-        // для namespace "default" префикс не пишем
-        String tableAtom = HBASE_DEFAULT_NS.equals(ns) ? qn : (ns + "_" + qn);
-        String nsAtom = HBASE_DEFAULT_NS.equals(ns) ? "" : ns;
-        String base = topicPattern
-                .replace(PLACEHOLDER_TABLE, tableAtom)
-                .replace(PLACEHOLDER_NAMESPACE, nsAtom)
-                .replace(PLACEHOLDER_QUALIFIER, qn);
-
-        return sanitizeTopic(base);
+        return topicSettings.resolve(table);
     }
 
     /**
@@ -503,22 +229,7 @@ public final class H2kConfig {
      * @return корректное имя Kafka‑топика, соответствующее ограничениям брокера
      */
     public String sanitizeTopic(String raw) {
-        String base = (raw == null) ? "" : raw;
-        // убрать ведущие и повторные разделители
-        String s = Parsers.topicCollapseRepeatedDelimiters(
-                Parsers.topicStripLeadingDelimiters(base));
-        // санитизация под допустимые символы Kafka
-        String sanitized = Parsers.topicSanitizeKafkaChars(s);
-
-        // защита от ".", ".." и пустой строки — используем универсальный безопасный placeholder
-        if (sanitized.equals(".") || sanitized.equals("..") || sanitized.isEmpty()) {
-            sanitized = "topic";
-        }
-
-        // обрезка по максимальной длине
-        return (sanitized.length() > topicMaxLength)
-                ? sanitized.substring(0, topicMaxLength)
-                : sanitized;
+        return topicSettings.sanitize(raw);
     }
 
 
@@ -526,76 +237,76 @@ public final class H2kConfig {
     /** @return список Kafka bootstrap.servers */
     public String getBootstrap() { return bootstrap; }
     /** @return шаблон имени Kafka‑топика с плейсхолдерами */
-    public String getTopicPattern() { return topicPattern; }
+    public String getTopicPattern() { return topicSettings.getPattern(); }
     /** @return максимальная допустимая длина имени топика */
-    public int getTopicMaxLength() { return topicMaxLength; }
+    public int getTopicMaxLength() { return topicSettings.getMaxLength(); }
     /** @return каталог локальных Avro-схем */
-    public String getAvroSchemaDir() { return avroSchemaDir; }
+    public String getAvroSchemaDir() { return avroSettings.getSchemaDir(); }
     /** @return неизменяемый список URL Schema Registry */
-    public java.util.List<String> getAvroSchemaRegistryUrls() { return avroSchemaRegistryUrls; }
+    public java.util.List<String> getAvroSchemaRegistryUrls() { return avroSettings.getRegistryUrls(); }
     /** @return карта авторизационных свойств для Schema Registry */
-    public Map<String, String> getAvroSrAuth() { return avroSrAuth; }
+    public Map<String, String> getAvroSrAuth() { return avroSettings.getRegistryAuth(); }
     /** @return неизменяемая карта AVRO-свойств */
-    public Map<String, String> getAvroProps() { return avroProps; }
+    public Map<String, String> getAvroProps() { return avroSettings.getProperties(); }
+    /** @return имя Avro-свойства, помечающего поле для пропуска при построении payload */
+    public String getPayloadSkipProperty() { return AvroSchemaProperties.PAYLOAD_SKIP; }
 
     /** @return создавать ли недостающие топики автоматически */
-    public boolean isEnsureTopics() { return ensureTopics; }
+    public boolean isEnsureTopics() { return ensureSettings.isEnsureTopics(); }
     /**
      * Разрешено ли автоматическое увеличение числа партиций при ensureTopics.
      * По умолчанию false; управляется ключом h2k.ensure.increase.partitions.
      */
-    public boolean isEnsureIncreasePartitions() { return ensureIncreasePartitions; }
+    public boolean isEnsureIncreasePartitions() { return ensureSettings.isAllowIncreasePartitions(); }
     /**
      * Разрешено ли дифф‑применение конфигов топика (incrementalAlterConfigs) при ensureTopics.
      * По умолчанию false; управляется ключом h2k.ensure.diff.configs.
      */
-    public boolean isEnsureDiffConfigs() { return ensureDiffConfigs; }
+    public boolean isEnsureDiffConfigs() { return ensureSettings.isAllowDiffConfigs(); }
     /**
      * Число партиций для создаваемых Kafka-тем.
      * Значение нормализуется при построении конфигурации: минимум 1.
      */
-    public int getTopicPartitions() { return topicPartitions; }
+    public int getTopicPartitions() { return ensureSettings.getTopicSpec().getPartitions(); }
     /**
      * Фактор репликации для создаваемых Kafka-тем.
      * Значение нормализуется при построении конфигурации: минимум 1.
      */
-    public short getTopicReplication() { return topicReplication; }
+    public short getTopicReplication() { return ensureSettings.getTopicSpec().getReplication(); }
     /** @return таймаут операций AdminClient при ensureTopics, мс */
-    public long getAdminTimeoutMs() { return adminTimeoutMs; }
+    public long getAdminTimeoutMs() { return ensureSettings.getAdminSpec().getTimeoutMs(); }
 
     /**
      * Таймаут как int для API, принимающих миллисекунды 32‑битным целым.
      * Возвращает {@code Integer.MAX_VALUE}, если значение выходит за пределы int.
      */
     public int getAdminTimeoutMsAsInt() {
-        long v = this.adminTimeoutMs;
+        long v = getAdminTimeoutMs();
         return (v > Integer.MAX_VALUE) ? Integer.MAX_VALUE : (int) v;
     }
 
-    /**
-     * Готовые свойства для Kafka AdminClient.
-     * Содержит как минимум bootstrap.servers и client.id.
-     * Значения таймаутов намеренно не устанавливаются здесь и задаются на стороне TopicEnsurer.
-     */
-    public Properties kafkaAdminProps() {
-        Properties p = new Properties();
-        p.setProperty("bootstrap.servers", this.bootstrap);
-        p.setProperty("client.id", this.adminClientId);
-        return p;
-    }
     /** @return значение client.id для AdminClient */
-    public String getAdminClientId() { return adminClientId; }
+    public String getAdminClientId() { return ensureSettings.getAdminSpec().getClientId(); }
     /**
      * Базовая задержка (в миллисекундах) для повторной попытки при «неуверенных» ошибках AdminClient.
      * Значение нормализуется при построении конфигурации: минимум 1 мс.
      */
-    public long getUnknownBackoffMs() { return unknownBackoffMs; }
+    public long getUnknownBackoffMs() { return ensureSettings.getAdminSpec().getUnknownBackoffMs(); }
     /** @return размер батча отправок, после которого ожидаются подтверждения */
-    public int getAwaitEvery() { return awaitEvery; }
+    public int getAwaitEvery() { return producerSettings.getAwaitEvery(); }
     /** @return таймаут ожидания подтверждений батча, мс */
-    public int getAwaitTimeoutMs() { return awaitTimeoutMs; }
+    public int getAwaitTimeoutMs() { return producerSettings.getAwaitTimeoutMs(); }
     /** @return карта дополнительных конфигураций топика (h2k.topic.config.*) */
-    public Map<String, String> getTopicConfigs() { return topicConfigs; }
+    public Map<String, String> getTopicConfigs() { return topicSettings.getTopicConfigs(); }
+
+    /** @return плоская секция именования топиков (для фабрик и тестов) */
+    public TopicNamingSettings getTopicSettings() { return topicSettings; }
+    /** @return плоская секция Avro/Schema Registry */
+    public AvroSettings getAvroSettings() { return avroSettings; }
+    /** @return плоская секция ensure-топиков */
+    public EnsureSettings getEnsureSettings() { return ensureSettings; }
+    /** @return плоская секция ожиданий Kafka Producer */
+    public ProducerAwaitSettings getProducerSettings() { return producerSettings; }
 
     /**
      * Возвращает количество байт соли для заданной таблицы.
@@ -627,6 +338,7 @@ public final class H2kConfig {
     }
 
     /** @return включены ли наблюдатели статистики таблиц. */
+    @Override
     public boolean isObserversEnabled() { return observersEnabled; }
 
     /**
@@ -635,6 +347,7 @@ public final class H2kConfig {
      * @param table имя таблицы HBase
      * @return ожидаемое число полей в корневом JSON (0 — если подсказка не задана)
      */
+    @Override
     public int getCapacityHintFor(TableName table) {
         return resolveTableOptions(table).capacityHint();
     }
@@ -643,6 +356,7 @@ public final class H2kConfig {
      * Возвращает снимок табличных опций (соль/ёмкость) вместе с источниками данных.
      * Удобно для отладочного логирования и диагностических сценариев.
      */
+    @Override
     public TableOptionsSnapshot describeTableOptions(TableName table) {
         return resolveTableOptions(table);
     }
@@ -653,6 +367,7 @@ public final class H2kConfig {
      * @param table таблица HBase/Phoenix
      * @return неизменяемый снимок фильтра CF
      */
+    @Override
     public CfFilterSnapshot describeCfFilter(TableName table) {
         return resolveTableOptions(table).cfFilter();
     }
@@ -667,27 +382,27 @@ public final class H2kConfig {
 
     private TableOptionsSnapshot computeTableOptions(TableName table) {
         int saltBytes = 0;
-        ValueSource saltSource = ValueSource.DEFAULT;
+        TableValueSource saltSource = TableValueSource.DEFAULT;
 
         Integer metaSalt = tableMetadataProvider.saltBytes(table);
         if (metaSalt != null) {
             saltBytes = clampSalt(metaSalt);
-            saltSource = ValueSource.AVRO;
+            saltSource = TableValueSource.AVRO;
         }
 
         int capacityHint = 0;
-        ValueSource capacitySource = ValueSource.DEFAULT;
+        TableValueSource capacitySource = TableValueSource.DEFAULT;
 
         Integer metaCapacity = tableMetadataProvider.capacityHint(table);
         if (metaCapacity != null && metaCapacity > 0) {
             capacityHint = metaCapacity;
-            capacitySource = ValueSource.AVRO;
+            capacitySource = TableValueSource.AVRO;
         }
 
         String[] cfNames = tableMetadataProvider.columnFamilies(table);
         CfFilterSnapshot cfSnapshot;
         if (cfNames != null && cfNames.length > 0) {
-            cfSnapshot = CfFilterSnapshot.from(cfNames, ValueSource.AVRO);
+            cfSnapshot = CfFilterSnapshot.from(cfNames, TableValueSource.AVRO);
         } else {
             cfSnapshot = CfFilterSnapshot.disabled();
         }
@@ -706,133 +421,6 @@ public final class H2kConfig {
         return (v > 8) ? 8 : v;
     }
 
-    /** Источники табличных параметров (соль/ёмкость). */
-    public enum ValueSource {
-        AVRO("Avro-схема"),
-        DEFAULT("значение по умолчанию");
-
-        private final String label;
-
-        ValueSource(String label) {
-            this.label = label;
-        }
-
-        public String label() {
-            return label;
-        }
-    }
-
-    /** Иммутабельный снимок табличных опций. */
-    public static final class TableOptionsSnapshot {
-        private final int saltBytes;
-        private final ValueSource saltSource;
-        private final int capacityHint;
-        private final ValueSource capacitySource;
-        private final CfFilterSnapshot cfFilter;
-
-        TableOptionsSnapshot(int saltBytes,
-                             ValueSource saltSource,
-                             int capacityHint,
-                             ValueSource capacitySource,
-                             CfFilterSnapshot cfFilter) {
-            this.saltBytes = saltBytes;
-            this.saltSource = saltSource;
-            this.capacityHint = capacityHint;
-            this.capacitySource = capacitySource;
-            this.cfFilter = cfFilter == null ? CfFilterSnapshot.disabled() : cfFilter;
-        }
-
-        public int saltBytes() {
-            return saltBytes;
-        }
-
-        public ValueSource saltSource() {
-            return saltSource;
-        }
-
-        public int capacityHint() {
-            return capacityHint;
-        }
-
-        public ValueSource capacitySource() {
-            return capacitySource;
-        }
-
-        public CfFilterSnapshot cfFilter() {
-            return cfFilter;
-        }
-    }
-
-    /**
-     * Иммутабельный снимок конфигурации фильтра CF для конкретной таблицы.
-     * Снимок хранит актуальный список column family в виде CSV и UTF-8 байтов, а также источник данных
-     * (Avro-схема или значения по умолчанию). Объект безопасен для публикации между потоками.
-     */
-    public static final class CfFilterSnapshot {
-        private static final byte[][] EMPTY_FAMILIES = new byte[0][];
-        private static final CfFilterSnapshot DISABLED = new CfFilterSnapshot(false, EMPTY_FAMILIES, "", ValueSource.DEFAULT);
-
-        private final boolean enabled;
-        private final byte[][] families;
-        private final String csv;
-        private final ValueSource source;
-
-        private CfFilterSnapshot(boolean enabled, byte[][] families, String csv, ValueSource source) {
-            this.enabled = enabled;
-            this.families = families;
-            this.csv = csv;
-            this.source = source;
-        }
-
-        static CfFilterSnapshot disabled() {
-            return DISABLED;
-        }
-
-        static CfFilterSnapshot from(String[] names, ValueSource source) {
-            if (names == null || names.length == 0) {
-                return DISABLED;
-            }
-            int len = names.length;
-            byte[][] immutableFamilies = new byte[len][];
-            for (int i = 0; i < len; i++) {
-                String name = names[i];
-                immutableFamilies[i] = name == null
-                        ? new byte[0]
-                        : name.getBytes(StandardCharsets.UTF_8);
-            }
-            String csv = String.join(",", names);
-            return new CfFilterSnapshot(true, immutableFamilies, csv, source == null ? ValueSource.AVRO : source);
-        }
-
-        /**
-         * @return {@code true}, если для таблицы настроена явная фильтрация по column family
-         */
-        public boolean enabled() {
-            return enabled;
-        }
-
-        /**
-         * @return массив UTF-8 байтов имен column family; не {@code null}
-         */
-        public byte[][] families() {
-            return families;
-        }
-
-        /**
-         * @return CSV-представление списка column family; пустая строка, если фильтр отключён
-         */
-        public String csv() {
-            return csv;
-        }
-
-        /**
-         * @return источник данных (Avro, конфигурация или значение по умолчанию)
-         */
-        public ValueSource source() {
-            return source;
-        }
-    }
-
     /**
      * Строковое представление конфигурации с маскировкой bootstrap.servers.
      * Используется только для диагностических логов.
@@ -840,26 +428,32 @@ public final class H2kConfig {
     @Override
     public String toString() {
         final String maskedBootstrap = maskBootstrap(bootstrap);
+    TopicNamingSettings ts = this.topicSettings;
+    AvroSettings avro = this.avroSettings;
+    EnsureSettings ensure = this.ensureSettings;
+    EnsureSettings.TopicSpec topic = ensure.getTopicSpec();
+    EnsureSettings.AdminSpec admin = ensure.getAdminSpec();
+    ProducerAwaitSettings producer = this.producerSettings;
         return new StringBuilder(256)
                 .append("H2kConfig{")
                 .append("bootstrap=").append(maskedBootstrap)
-                .append(", topicPattern='").append(topicPattern).append('\'')
-                .append(", topicMaxLength=").append(topicMaxLength)
-                .append(", avroSchemaDir='").append(avroSchemaDir).append('\'')
-                .append(", avroSrUrls.size=").append(avroSchemaRegistryUrls.size())
-                .append(", ensureTopics=").append(ensureTopics)
-                .append(", ensureIncreasePartitions=").append(ensureIncreasePartitions)
-                .append(", ensureDiffConfigs=").append(ensureDiffConfigs)
-                .append(", topicPartitions=").append(topicPartitions)
-                .append(", topicReplication=").append(topicReplication)
-                .append(", adminTimeoutMs=").append(adminTimeoutMs)
-                .append(", adminClientId='").append(adminClientId).append('\'')
-                .append(", unknownBackoffMs=").append(unknownBackoffMs)
-                .append(", awaitEvery=").append(awaitEvery)
-                .append(", awaitTimeoutMs=").append(awaitTimeoutMs)
-                .append(", topicConfigs.size=").append(topicConfigs.size())
-                .append(", avroSrAuth.size=").append(avroSrAuth.size())
-                .append(", avroProps.size=").append(avroProps.size())
+        .append(", topicPattern='").append(ts.getPattern()).append('\'')
+        .append(", topicMaxLength=").append(ts.getMaxLength())
+        .append(", avroSchemaDir='").append(avro.getSchemaDir()).append('\'')
+        .append(", avroSrUrls.size=").append(avro.getRegistryUrls().size())
+        .append(", ensureTopics=").append(ensure.isEnsureTopics())
+        .append(", ensureIncreasePartitions=").append(ensure.isAllowIncreasePartitions())
+        .append(", ensureDiffConfigs=").append(ensure.isAllowDiffConfigs())
+        .append(", topicPartitions=").append(topic.getPartitions())
+        .append(", topicReplication=").append(topic.getReplication())
+        .append(", adminTimeoutMs=").append(admin.getTimeoutMs())
+        .append(", adminClientId='").append(admin.getClientId()).append('\'')
+        .append(", unknownBackoffMs=").append(admin.getUnknownBackoffMs())
+        .append(", awaitEvery=").append(producer.getAwaitEvery())
+        .append(", awaitTimeoutMs=").append(producer.getAwaitTimeoutMs())
+        .append(", topicConfigs.size=").append(ts.getTopicConfigs().size())
+        .append(", avroSrAuth.size=").append(avro.getRegistryAuth().size())
+        .append(", avroProps.size=").append(avro.getProperties().size())
                 .append('}')
                 .toString();
     }

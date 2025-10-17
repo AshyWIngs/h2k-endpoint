@@ -109,7 +109,7 @@ class KafkaReplicationEndpointIntegrationTest {
         };
 
         PayloadBuilder builder = new PayloadBuilder(decoder, config, factory);
-        TopicManager topicManager = new TopicManager(config, TopicEnsurer.disabled());
+    TopicManager topicManager = new TopicManager(config.getTopicSettings(), TopicEnsurer.disabled());
         MockProducer<byte[], byte[]> producer = new MockProducer<>(true, new ByteArraySerializer(), new ByteArraySerializer());
         WalEntryProcessor processor = new WalEntryProcessor(builder, topicManager, producer, config);
 
@@ -168,8 +168,10 @@ class KafkaReplicationEndpointIntegrationTest {
 
         Decoder decoder = defaultDecoder();
 
-        assertThrows(IllegalStateException.class, () -> new PayloadBuilder(decoder, config, failingFactory),
+        IllegalStateException initError = assertThrows(IllegalStateException.class,
+                () -> new PayloadBuilder(decoder, config, failingFactory),
                 "Ожидается ошибка инициализации при недоступном Schema Registry");
+        assertNotNull(initError);
     }
 
     @Test
@@ -191,7 +193,7 @@ class KafkaReplicationEndpointIntegrationTest {
         MockProducer<byte[], byte[]> producer = new MockProducer<>(true, new ByteArraySerializer(), new ByteArraySerializer());
 
         try (TopicEnsurer failingEnsurer = makeFailingEnsurer(ensureAttempts, ensureFailure)) {
-            TopicManager topicManager = new TopicManager(config, failingEnsurer);
+            TopicManager topicManager = new TopicManager(config.getTopicSettings(), failingEnsurer);
             WalEntryProcessor processor = new WalEntryProcessor(builder, topicManager, producer, config);
 
             TableName table = TableName.valueOf("INT_TEST_TABLE");
@@ -288,18 +290,15 @@ class KafkaReplicationEndpointIntegrationTest {
      */
     private static TopicEnsurer makeFailingEnsurer(AtomicInteger ensureAttempts,
                                                    AtomicReference<RuntimeException> failureRef) {
-        EnsureDelegate failingDelegate = new EnsureDelegate() {
-            @Override
-            public void ensureTopic(String topic) {
-                if (ensureAttempts != null) {
-                    ensureAttempts.incrementAndGet();
-                }
-                IllegalStateException failure = new IllegalStateException("Симуляция сбоя ensure топика: " + topic);
-                if (failureRef != null) {
-                    failureRef.set(failure);
-                }
-                throw failure;
+        EnsureDelegate failingDelegate = topic -> {
+            if (ensureAttempts != null) {
+                ensureAttempts.incrementAndGet();
             }
+            IllegalStateException failure = new IllegalStateException("Симуляция сбоя ensure топика: " + topic);
+            if (failureRef != null) {
+                failureRef.set(failure);
+            }
+            throw failure;
         };
         return TopicEnsurer.testingDelegate(failingDelegate);
     }

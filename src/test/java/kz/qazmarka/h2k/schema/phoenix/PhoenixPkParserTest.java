@@ -25,7 +25,7 @@ class PhoenixPkParserTest {
         FakeRegistry registry = new FakeRegistry()
                 .primaryKey("ID")
                 .type("ID", "UNSIGNED_INT");
-        PhoenixPkParser parser = new PhoenixPkParser(registry, new PhoenixColumnTypeRegistry(registry));
+    PhoenixPkParser parser = newParser(registry);
 
         Map<String, Object> out = new HashMap<>();
         parser.decodeRowKey(TABLE, RowKeySlice.whole(new byte[] {0x01, 0x02}), 0, out);
@@ -42,7 +42,7 @@ class PhoenixPkParserTest {
         FakeRegistry registry = new FakeRegistry()
                 .primaryKey(new String[]{null})
                 .type("IGNORED", "VARCHAR");
-        PhoenixPkParser parser = new PhoenixPkParser(registry, new PhoenixColumnTypeRegistry(registry));
+    PhoenixPkParser parser = newParser(registry);
 
         Map<String, Object> out = new HashMap<>();
         parser.decodeRowKey(TABLE, RowKeySlice.whole(new byte[] {0x00}), 0, out);
@@ -60,6 +60,26 @@ class PhoenixPkParserTest {
                 "Должно быть зафиксировано предупреждение о недекодированном PK");
     }
 
+    /**
+     * Проверяет, что кэш предупреждений PhoenixPkParser не растёт при повторных сбоях.
+     */
+    @Test
+    @DisplayName("Повторная неудача декодирования не дублирует WARN")
+    void repeatedFailureWarnsOnce() {
+        PhoenixPkParser.clearWarnCachesForTest();
+        FakeRegistry registry = new FakeRegistry()
+                .primaryKey("ID")
+                .type("ID", "UNSIGNED_INT");
+        PhoenixPkParser parser = newParser(registry);
+
+        RowKeySlice slice = RowKeySlice.whole(new byte[] {0x00});
+        parser.decodeRowKey(TABLE, slice, 0, new HashMap<>());
+        parser.decodeRowKey(TABLE, slice, 0, new HashMap<>());
+
+        assertEquals(1, pkColumnWarned().size(), "Кэш предупреждений по колонке не должен разрастаться");
+        assertEquals(1, pkWarned().size(), "Предупреждение о PK должно фиксироваться один раз");
+    }
+
     private static Set<Object> pkColumnWarned() {
         Set<PhoenixPkParser.WarnedColumn> raw = PhoenixPkParser.pkColumnWarnedSnapshotForTest();
         Set<Object> copy = new HashSet<>();
@@ -71,6 +91,10 @@ class PhoenixPkParserTest {
 
     private static Set<String> pkWarned() {
         return PhoenixPkParser.pkWarnedSnapshotForTest();
+    }
+
+    private static PhoenixPkParser newParser(FakeRegistry registry) {
+        return new PhoenixPkParser(registry, new PhoenixColumnTypeRegistry(registry));
     }
 
     private static final class FakeRegistry implements SchemaRegistry {

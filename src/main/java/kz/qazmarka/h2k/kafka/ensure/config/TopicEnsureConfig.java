@@ -2,13 +2,15 @@ package kz.qazmarka.h2k.kafka.ensure.config;
 
 import java.util.Collections;
 import java.util.Map;
+import java.util.Objects;
 import java.util.function.UnaryOperator;
 
-import kz.qazmarka.h2k.config.H2kConfig;
+import kz.qazmarka.h2k.config.EnsureSettings;
+import kz.qazmarka.h2k.config.TopicNamingSettings;
 
 /**
  * Иммутабельный набор параметров ensure-цикла: целевые партиции/репликация, набор конфигов,
- * таймауты и политики апгрейда. Формируется один раз из {@link H2kConfig} и далее передаётся
+ * таймауты и политики апгрейда. Формируется один раз из плоских DTO конфигурации и далее передаётся
  * во внутренние компоненты {@link kz.qazmarka.h2k.kafka.ensure.TopicEnsureService}.
  */
 public final class TopicEnsureConfig {
@@ -62,21 +64,23 @@ public final class TopicEnsureConfig {
 
     public static Builder builder() { return new Builder(); }
 
-    public static TopicEnsureConfig from(H2kConfig cfg) {
-        Map<String, String> topicConfigs = cfg.getTopicConfigs();
-        if (topicConfigs == null) {
-            topicConfigs = Collections.emptyMap();
-        }
+    public static TopicEnsureConfig from(EnsureSettings ensureSettings, TopicNamingSettings topicSettings) {
+        Objects.requireNonNull(ensureSettings, "EnsureSettings не может быть null");
+        Objects.requireNonNull(topicSettings, "TopicNamingSettings не может быть null");
+        EnsureSettings.TopicSpec topicSpec = ensureSettings.getTopicSpec();
+        EnsureSettings.AdminSpec adminSpec = ensureSettings.getAdminSpec();
+        Map<String, String> topicConfigs = topicSettings.getTopicConfigs();
+
         return builder()
-                .topicNameMaxLen(cfg.getTopicMaxLength())
-                .topicSanitizer(cfg::sanitizeTopic)
-                .topicPartitions(cfg.getTopicPartitions())
-                .topicReplication(cfg.getTopicReplication())
-                .topicConfigs(Collections.unmodifiableMap(topicConfigs))
-                .ensureIncreasePartitions(cfg.isEnsureIncreasePartitions())
-                .ensureDiffConfigs(cfg.isEnsureDiffConfigs())
-                .adminTimeoutMs(cfg.getAdminTimeoutMs())
-                .unknownBackoffMs(cfg.getUnknownBackoffMs())
+                .topicNameMaxLen(topicSettings.getMaxLength())
+                .topicSanitizer(topicSettings::sanitize)
+                .topicPartitions(topicSpec.getPartitions())
+                .topicReplication(topicSpec.getReplication())
+                .topicConfigs(topicConfigs)
+                .ensureIncreasePartitions(ensureSettings.isAllowIncreasePartitions())
+                .ensureDiffConfigs(ensureSettings.isAllowDiffConfigs())
+                .adminTimeoutMs(adminSpec.getTimeoutMs())
+                .unknownBackoffMs(adminSpec.getUnknownBackoffMs())
                 .build();
     }
 

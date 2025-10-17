@@ -79,40 +79,25 @@ Codacy CLI v2 выполняет анализ целиком — выбор от
 
 ## Результаты последнего анализа
 
-**Дата:** 16 октября 2025
+**Дата:** 17 октября 2025 (последний прогон 14:40 по ALMT)
 
 **Инструменты:**
-- ✅ Semgrep OSS - 0 findings (639 правил, 87 файлов)
-- ✅ Trivy - 65+ уязвимостей в зависимостях (LOW: 3, MEDIUM: 23, HIGH: 28, CRITICAL: 11)
-- ✅ PMD7 - 825 code quality issues
-- ⚠️ Revive - exited with non-zero status
-- ✅ ESLint - completed
-- ✅ Pylint - completed
-- ✅ Dartanalyzer - completed
+- ✅ Semgrep OSS — 0 findings (639 правил, 85 файлов)
+- ✅ Trivy — уязвимостей не найдено
+- ✅ PMD7 — 0 code quality issues
+- ✅ Revive — успешно завершается (заменён бинарь для darwin/arm64)
+- ✅ ESLint — completed
+- ✅ Pylint — completed
+- ✅ Dartanalyzer — completed
 
-**Всего найдено:** 825 проблем качества кода + 65+ уязвимостей
+**Всего найдено:** 0 проблем качества кода + 0 уязвимостей
 
 ### Основные уязвимости в зависимостях
 
-Обнаружены критические уязвимости в:
-
-1. **jackson-core 2.10.2**:
-   - CVE-2025-52999 (HIGH) - StackoverflowError
-   - CVE-2025-49128 (MEDIUM) - Memory Disclosure
-
-2. **jackson-databind 2.10.2**:
-   - CVE-2020-25649 (HIGH) - XXE vulnerability
-   - CVE-2020-36518 (HIGH) - DoS via nested objects
-   - CVE-2021-46877 (HIGH) - DoS with JDK serialization
-   - CVE-2022-42003 (HIGH) - Deep wrapper array nesting
-   - CVE-2022-42004 (HIGH) - Deeply nested arrays
-
-3. **guava 12.0.1**:
-   - CVE-2018-10237 (MEDIUM) - Unbounded memory allocation
-
-**Рекомендации:**
-- Обновить Jackson до версии 2.15.0+
-- Обновить Guava до версии 24.1.1+
+- Guava обновлена до `24.1.1-jre`, CVE-2018-10237 закрыта.
+- Jackson — `2.17.2`, уязвимостей нет.
+- Avro — `1.11.4`, устранены CVE-2023-39410/2024-47561.
+- commons-compress — `1.26.0`, устранены CVE-2024-25710/26308.
 
 ## Интеграция с CI/CD
 

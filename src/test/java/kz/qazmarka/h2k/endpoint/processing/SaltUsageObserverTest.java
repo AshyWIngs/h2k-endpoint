@@ -14,6 +14,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import kz.qazmarka.h2k.config.H2kConfig;
+import kz.qazmarka.h2k.config.H2kConfigBuilder;
+import kz.qazmarka.h2k.config.TableOptionsSnapshot;
 import kz.qazmarka.h2k.schema.registry.PhoenixTableMetadataProvider;
 import kz.qazmarka.h2k.schema.registry.SchemaRegistry;
 
@@ -23,7 +25,7 @@ class SaltUsageObserverTest {
     void shouldLogAverageAndWarnAboutShortRow() {
         SaltUsageObserver observer = SaltUsageObserver.create();
         TableName table = TableName.valueOf("ns", "salted");
-        H2kConfig.TableOptionsSnapshot options = snapshot(table, 1, 0);
+    TableOptionsSnapshot options = snapshot(table, 1, 0);
 
         try (SaltCapture capture = new SaltCapture()) {
             for (int i = 0; i < 220; i++) {
@@ -39,8 +41,8 @@ class SaltUsageObserverTest {
         }
     }
 
-    private H2kConfig.TableOptionsSnapshot snapshot(TableName table, final int saltBytes, final int capacityHint) {
-        H2kConfig.Builder builder = new H2kConfig.Builder("mock:9092");
+    private TableOptionsSnapshot snapshot(TableName table, final int saltBytes, final int capacityHint) {
+    H2kConfigBuilder builder = new H2kConfigBuilder("mock:9092");
         builder.tableMetadataProvider(new PhoenixTableMetadataProvider() {
             private final String[] pk = new String[]{"ID"};
 

@@ -1,8 +1,12 @@
 package kz.qazmarka.h2k.endpoint.processing;
 
+import java.util.Objects;
+
 import org.apache.hadoop.hbase.TableName;
 
-import kz.qazmarka.h2k.config.H2kConfig;
+import kz.qazmarka.h2k.config.CfFilterSnapshot;
+import kz.qazmarka.h2k.config.TableMetadataView;
+import kz.qazmarka.h2k.config.TableOptionsSnapshot;
 
 /**
  * Инкапсулирует все наблюдатели WAL и обеспечивает единый интерфейс для строк и записей.
@@ -24,10 +28,11 @@ final class WalObserverHub {
         this.saltObserver = saltObserver;
     }
 
-    static WalObserverHub create(H2kConfig config) {
-        if (config.isObserversEnabled()) {
+    static WalObserverHub create(TableMetadataView metadata) {
+        Objects.requireNonNull(metadata, "метаданные таблиц");
+        if (metadata.isObserversEnabled()) {
             return new WalObserverHub(
-                    TableCapacityObserver.create(config),
+                    TableCapacityObserver.create(metadata),
                     CfFilterObserver.create(),
                     TableOptionsObserver.create(),
                     SaltUsageObserver.create());
@@ -51,7 +56,7 @@ final class WalObserverHub {
     }
 
     void observeRow(TableName table,
-                    H2kConfig.TableOptionsSnapshot tableOptions,
+                    TableOptionsSnapshot tableOptions,
                     int rowKeyLength) {
         saltObserver.observeRow(table, tableOptions, rowKeyLength);
     }
@@ -59,8 +64,8 @@ final class WalObserverHub {
     void finalizeEntry(TableName table,
                         WalCounterService.EntrySummary summary,
                         boolean filterActive,
-                        H2kConfig.CfFilterSnapshot cfSnapshot,
-                        H2kConfig.TableOptionsSnapshot tableOptions) {
+                        CfFilterSnapshot cfSnapshot,
+                        TableOptionsSnapshot tableOptions) {
         if (summary.rowsSeen <= 0L) {
             return;
         }
@@ -75,5 +80,33 @@ final class WalObserverHub {
         }
         cfFilterObserver.observe(table, summary.rowsSeen, summary.rowsFiltered, filterActive, cfSnapshot);
         tableOptionsObserver.observe(table, tableOptions, cfSnapshot);
+    }
+
+    /**
+     * Возвращает наблюдатель ёмкости таблицы для нужд модульного тестирования.
+     */
+    TableCapacityObserver capacityObserverForTest() {
+        return capacityObserver;
+    }
+
+    /**
+     * Возвращает наблюдатель CF-фильтра для нужд модульного тестирования.
+     */
+    CfFilterObserver cfFilterObserverForTest() {
+        return cfFilterObserver;
+    }
+
+    /**
+     * Возвращает наблюдатель табличных опций для нужд модульного тестирования.
+     */
+    TableOptionsObserver tableOptionsObserverForTest() {
+        return tableOptionsObserver;
+    }
+
+    /**
+     * Возвращает наблюдатель использования соли для нужд модульного тестирования.
+     */
+    SaltUsageObserver saltObserverForTest() {
+        return saltObserver;
     }
 }

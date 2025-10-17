@@ -80,8 +80,8 @@ final class TopicEnsureService implements AutoCloseable {
         this.state = state;
         this.adminTimeoutMs = config.adminTimeoutMs();
         this.unknownBackoffMs = config.unknownBackoffMs();
-    this.backoffManager = new TopicBackoffManager(state, config.unknownBackoffMs());
-    this.topicConfigs = config.topicConfigs();
+        this.backoffManager = new TopicBackoffManager(state, config.unknownBackoffMs());
+        this.topicConfigs = config.topicConfigs();
     }
 
     /**

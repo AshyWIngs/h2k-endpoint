@@ -29,10 +29,13 @@ import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import kz.qazmarka.h2k.config.H2kConfig;
+import kz.qazmarka.h2k.config.H2kConfigBuilder;
 import kz.qazmarka.h2k.kafka.ensure.admin.KafkaTopicAdmin;
 import kz.qazmarka.h2k.kafka.ensure.config.TopicEnsureConfig;
 
@@ -262,6 +265,12 @@ class TopicEnsurerTest {
         return new TopicEnsurer(service, null, state);
     }
 
+    private static H2kConfig minimalConfig(String bootstrap, boolean ensureEnabled) {
+        H2kConfigBuilder builder = new H2kConfigBuilder(bootstrap);
+        builder.ensure().enabled(ensureEnabled).done();
+        return builder.build();
+    }
+
     /**
      * Утилита чтения числовой метрики из {@link TopicEnsurer#getMetrics()}.
      * Если ключ отсутствует — возвращает −1.
@@ -273,6 +282,48 @@ class TopicEnsurerTest {
     private static long m(TopicEnsurer te, String key) {
         Long v = te.getMetrics().get(key);
         return (v == null) ? -1L : v;
+    }
+
+    @Test
+    @DisplayName("createIfEnabled возвращает NOOP при ensureTopics=false")
+    void factoryReturnsDisabledWhenEnsureFlagOff() {
+        H2kConfig cfg = minimalConfig("mock:9092", false);
+    TopicEnsurer ensurer = TopicEnsurer.createIfEnabled(
+        cfg.getEnsureSettings(),
+        cfg.getTopicSettings(),
+        cfg.getBootstrap(),
+        null);
+
+        assertSame(TopicEnsurer.disabled(), ensurer,
+                "При отключённом ensureTopics должен возвращаться безопасный NOOP экземпляр");
+    }
+
+    @Test
+    @DisplayName("createIfEnabled отключает ensure при пустом bootstrap")
+    void factoryDisablesEnsureForBlankBootstrap() {
+        H2kConfig cfg = minimalConfig("   ", true);
+    TopicEnsurer ensurer = TopicEnsurer.createIfEnabled(
+        cfg.getEnsureSettings(),
+        cfg.getTopicSettings(),
+        cfg.getBootstrap(),
+        null);
+
+    assertFalse(ensurer.isEnabled(),
+                "Пустой bootstrap обязан приводить к отключению ensureTopics");
+    }
+
+    @Test
+    @DisplayName("createIfEnabled принимает null adminProps и создаёт активный энсюрер")
+    void factoryHandlesNullAdminProps() {
+        H2kConfig cfg = minimalConfig("localhost:65535", true);
+        try (TopicEnsurer ensurer = TopicEnsurer.createIfEnabled(
+                cfg.getEnsureSettings(),
+                cfg.getTopicSettings(),
+        cfg.getBootstrap(),
+        null)) {
+        assertTrue(ensurer.isEnabled(),
+                    "При валидной конфигурации ensureTopics должен считаться включённым");
+        }
     }
 
     /* ====================== ТЕСТЫ ====================== */

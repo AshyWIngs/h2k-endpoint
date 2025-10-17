@@ -19,9 +19,10 @@ import org.apache.hadoop.hbase.util.Bytes;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import kz.qazmarka.h2k.config.CfFilterSnapshot;
 import kz.qazmarka.h2k.config.H2kConfig;
-import kz.qazmarka.h2k.config.H2kConfig.TableOptionsSnapshot;
-import kz.qazmarka.h2k.config.H2kConfig.ValueSource;
+import kz.qazmarka.h2k.config.TableOptionsSnapshot;
+import kz.qazmarka.h2k.config.TableValueSource;
 import kz.qazmarka.h2k.payload.serializer.avro.AvroValueCoercer;
 import kz.qazmarka.h2k.schema.decoder.Decoder;
 import kz.qazmarka.h2k.schema.registry.avro.local.AvroSchemaRegistry;
@@ -34,8 +35,8 @@ import kz.qazmarka.h2k.util.RowKeySlice;
 final class RowPayloadAssembler {
 
     private static final Logger LOG = LoggerFactory.getLogger(RowPayloadAssembler.class);
-    private static final String FIELD_EVENT_TS = "_event_ts";
-    private static final String FIELD_DELETE = "_delete";
+    private static final String FIELD_EVENT_TS = PayloadFields.EVENT_TS;
+    private static final String FIELD_DELETE = PayloadFields.DELETE;
 
     private final Decoder decoder;
     private final H2kConfig cfg;
@@ -117,7 +118,7 @@ final class RowPayloadAssembler {
                     cell.getQualifierOffset(),
                     cell.getQualifierLength());
             FieldPlan field = plan.field(column);
-            if (field == null) {
+            if (field == null || field.skip()) {
                 return;
             }
 
@@ -208,10 +209,10 @@ final class RowPayloadAssembler {
             throw new IllegalStateException(
                     "Отсутствует rowkey для таблицы " + table.getNameWithNamespaceInclAsString());
         }
-    Map<String, Object> buffer = collector.target();
-    decoder.decodeRowKey(table, rowKey, plan.saltBytes, buffer);
-    collector.applyToRecord(table);
-    plan.verifyPk(table, collector.currentRecord());
+        Map<String, Object> buffer = collector.target();
+        decoder.decodeRowKey(table, rowKey, plan.saltBytes, buffer);
+        collector.applyToRecord(table);
+        plan.verifyPk(table, collector.currentRecord());
     }
 
     private void debugTableOptions(TableName table) {
@@ -222,7 +223,7 @@ final class RowPayloadAssembler {
         TableOptionsSnapshot snapshot = cfg.describeTableOptions(table);
         String saltSource = label(snapshot.saltSource());
         String capacitySource = label(snapshot.capacitySource());
-        H2kConfig.CfFilterSnapshot cfSnapshot = snapshot.cfFilter();
+        CfFilterSnapshot cfSnapshot = snapshot.cfFilter();
         String cfLabel;
         if (cfSnapshot.enabled()) {
             String csv = cfSnapshot.csv();
@@ -241,7 +242,7 @@ final class RowPayloadAssembler {
                 cfSource);
     }
 
-    private static String label(ValueSource source) {
+    private static String label(TableValueSource source) {
         return source == null ? "" : source.label();
     }
 
@@ -251,11 +252,13 @@ final class RowPayloadAssembler {
     private static final class TablePlanCache {
         private final H2kConfig cfg;
         private final AvroSchemaRegistry schemaRegistry;
+        private final String skipProperty;
         private final ConcurrentHashMap<String, TablePlan> cache = new ConcurrentHashMap<>();
 
         TablePlanCache(H2kConfig cfg, AvroSchemaRegistry schemaRegistry) {
             this.cfg = cfg;
             this.schemaRegistry = schemaRegistry;
+            this.skipProperty = cfg.getPayloadSkipProperty();
         }
 
         TablePlan planFor(TableName table) {
@@ -265,7 +268,7 @@ final class RowPayloadAssembler {
 
         private TablePlan buildPlan(TableName table) {
             Schema schema = loadSchema(table);
-            Map<String, FieldPlan> fields = buildFieldPlans(schema);
+            Map<String, FieldPlan> fields = buildFieldPlans(table, schema);
 
             String[] pkColumns = cfg.primaryKeyColumns(table);
             int[] pkIndices = new int[pkColumns.length];
@@ -275,6 +278,11 @@ final class RowPayloadAssembler {
                 if (plan == null) {
                     throw new IllegalStateException(
                             "Avro: PK колонка '" + col + "' отсутствует в схеме " + table.getNameAsString());
+                }
+        if (plan.skip()) {
+            throw new IllegalStateException(
+                "Avro: PK колонка '" + col + "' помечена как пропускаемая (" + skipProperty + ")"
+                    + " в схеме " + table.getNameAsString());
                 }
                 pkIndices[i] = plan.index;
             }
@@ -306,24 +314,77 @@ final class RowPayloadAssembler {
             }
         }
 
-        private Map<String, FieldPlan> buildFieldPlans(Schema schema) {
+        private Map<String, FieldPlan> buildFieldPlans(TableName table, Schema schema) {
             Map<String, FieldPlan> map = new HashMap<>(schema.getFields().size() * 2);
             for (Schema.Field field : schema.getFields()) {
-                FieldPlan plan = new FieldPlan(field);
+                FieldPlan plan = new FieldPlan(field, parseSkip(table, field));
                 map.put(field.name(), plan);
                 map.put(field.name().toUpperCase(Locale.ROOT), plan);
-                map.put(field.name().toLowerCase(Locale.ROOT), plan);
             }
             return map;
+        }
+
+        private boolean parseSkip(TableName table, Schema.Field field) {
+            Object raw = resolveSkipRaw(field);
+            if (raw == null) {
+                return false;
+            }
+
+            Object normalized = normalizeSkipValue(raw);
+            if (normalized instanceof Boolean) {
+                return (Boolean) normalized;
+            }
+            if (normalized instanceof CharSequence) {
+                String text = normalized.toString().trim();
+                if (text.isEmpty()) {
+                    return false;
+                }
+                if ("true".equalsIgnoreCase(text)) {
+                    return true;
+                }
+                if ("false".equalsIgnoreCase(text)) {
+                    return false;
+                }
+                warnInvalidSkip(table, field, text);
+                return false;
+            }
+
+            warnInvalidSkip(table, field, raw);
+            return false;
+        }
+
+        private Object resolveSkipRaw(Schema.Field field) {
+            Object value = field.getObjectProp(skipProperty);
+            return value != null ? value : field.getProp(skipProperty);
+        }
+
+        private Object normalizeSkipValue(Object raw) {
+            if (raw instanceof Boolean || raw instanceof CharSequence) {
+                return raw;
+            }
+            if (raw instanceof com.fasterxml.jackson.databind.JsonNode) {
+                com.fasterxml.jackson.databind.JsonNode node = (com.fasterxml.jackson.databind.JsonNode) raw;
+                if (node.isBoolean()) {
+                    return node.booleanValue();
+                }
+                if (node.isTextual()) {
+                    return node.textValue();
+                }
+                return null;
+            }
+            return null;
+        }
+
+        private void warnInvalidSkip(TableName table, Schema.Field field, Object raw) {
+        LOG.warn("Avro-схема {}: поле {} имеет некорректное значение '{}' для {} — значение будет проигнорировано",
+            table.getNameAsString(), field.name(), raw, skipProperty);
         }
 
         private FieldPlan lookupField(Map<String, FieldPlan> fields, String name) {
             FieldPlan plan = fields.get(name);
             if (plan != null) return plan;
             if (name == null) return null;
-            FieldPlan upper = fields.get(name.toUpperCase(Locale.ROOT));
-            if (upper != null) return upper;
-            return fields.get(name.toLowerCase(Locale.ROOT));
+            return fields.get(name.toUpperCase(Locale.ROOT));
         }
 
         private int indexOfField(Schema schema, String name) {
@@ -373,14 +434,10 @@ final class RowPayloadAssembler {
         }
 
         FieldPlan field(String name) {
-            FieldPlan plan = fields.get(name);
-            if (plan != null) {
-                return plan;
-            }
             if (name == null) {
                 return null;
             }
-            return fields.get(name.toUpperCase(Locale.ROOT));
+            return fields.get(name);
         }
 
         void verifyPk(TableName table, GenericData.Record avroRecord) {
@@ -429,15 +486,24 @@ final class RowPayloadAssembler {
     private static final class FieldPlan {
         final Schema.Field field;
         final int index;
+        final boolean skip;
 
-        FieldPlan(Schema.Field field) {
+        FieldPlan(Schema.Field field, boolean skip) {
             this.field = field;
             this.index = field.pos();
+            this.skip = skip;
         }
 
         void write(GenericData.Record avroRecord, Object value) {
+            if (skip) {
+                return;
+            }
             Object coerced = AvroValueCoercer.coerceValue(field.schema(), value, field.name());
             avroRecord.put(index, coerced);
+        }
+
+        boolean skip() {
+            return skip;
         }
     }
 

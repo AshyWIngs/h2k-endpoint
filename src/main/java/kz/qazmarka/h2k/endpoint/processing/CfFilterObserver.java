@@ -11,7 +11,8 @@ import org.apache.hadoop.hbase.TableName;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import kz.qazmarka.h2k.config.H2kConfig;
+import kz.qazmarka.h2k.config.CfFilterSnapshot;
+import kz.qazmarka.h2k.config.TableValueSource;
 
 /**
  * Пассивно оценивает эффективность фильтрации CF: считает строки/отфильтрованные строки
@@ -40,6 +41,13 @@ final class CfFilterObserver {
     }
 
     /**
+     * Служебный индикатор для модульных тестов: показывает, работает ли наблюдатель.
+     */
+    boolean isEnabledForTest() {
+        return enabled;
+    }
+
+    /**
      * Накапливает статистику по эффективности фильтра CF для конкретной таблицы.
      * Метод вызывается на горячем пути после обработки партии строк и полностью потокобезопасен.
      *
@@ -53,7 +61,7 @@ final class CfFilterObserver {
                  long rowsTotal,
                  long rowsFiltered,
                  boolean filterActive,
-                 H2kConfig.CfFilterSnapshot cfSnapshot) {
+                 CfFilterSnapshot cfSnapshot) {
         if (!enabled) {
             return;
         }
@@ -69,8 +77,8 @@ final class CfFilterObserver {
         long total = stats.rowsTotal.sum();
         long filtered = stats.rowsFiltered.sum();
         if (total >= MIN_ROWS_TO_LOG) {
-            logEffectiveness(table, stats, total, filtered, cfSnapshot);
-            double ratio = filtered == 0L ? 0.0d : (double) filtered / (double) total;
+            double ratio = filtered <= 0L ? 0.0d : (double) filtered / (double) total;
+            logEffectiveness(table, stats, total, filtered, ratio, cfSnapshot);
             if (ratio < MIN_RATIO && ineffectiveWarned.add(table) && LOG.isWarnEnabled()) {
                 String cfCsv = safeCsv(cfSnapshot);
                 LOG.warn(
@@ -115,7 +123,8 @@ final class CfFilterObserver {
                                   Stats stats,
                                   long total,
                                   long filtered,
-                                  H2kConfig.CfFilterSnapshot cfSnapshot) {
+                                  double ratio,
+                                  CfFilterSnapshot cfSnapshot) {
         long lastLogged = stats.lastLoggedRows.get();
         if (lastLogged != 0L && total - lastLogged < MIN_ROWS_TO_LOG) {
             return;
@@ -124,9 +133,8 @@ final class CfFilterObserver {
             return;
         }
         if (LOG.isInfoEnabled()) {
-            double ratio = filtered == 0L ? 0.0d : (double) filtered / (double) total;
             String csv = safeCsv(cfSnapshot);
-            String scope = cfSnapshot.source().label();
+            TableValueSource scope = (cfSnapshot == null) ? TableValueSource.DEFAULT : cfSnapshot.source();
             LOG.info(
                     "CF-фильтр таблицы {}: эффективность {}% (строк={}, отфильтровано={}, список={} — {})",
                     table,
@@ -134,7 +142,7 @@ final class CfFilterObserver {
                     total,
                     filtered,
                     csv.isEmpty() ? "-" : csv,
-                    scope);
+                    label(scope));
         }
     }
 
@@ -145,11 +153,18 @@ final class CfFilterObserver {
         return String.format(Locale.ROOT, "%.2f", ratio * 100.0d);
     }
 
-    private static String safeCsv(H2kConfig.CfFilterSnapshot snapshot) {
+    private static String safeCsv(CfFilterSnapshot snapshot) {
         if (snapshot == null) {
             return "";
         }
         String csv = snapshot.csv();
         return csv == null ? "" : csv;
+    }
+
+    /**
+     * Возвращает метку источника значений CF для логирования.
+     */
+    private static String label(TableValueSource source) {
+        return source == null ? "" : source.label();
     }
 }

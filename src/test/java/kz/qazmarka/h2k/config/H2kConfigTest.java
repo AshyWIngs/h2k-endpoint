@@ -130,14 +130,14 @@ class H2kConfigTest {
         };
 
         H2kConfig hc = fromCfg(cfg, provider);
-        H2kConfig.CfFilterSnapshot snapshot = hc.describeCfFilter(table);
+        CfFilterSnapshot snapshot = hc.describeCfFilter(table);
         assertTrue(snapshot.enabled());
         assertEquals("d,b", snapshot.csv());
         byte[][] families = snapshot.families();
         assertEquals(2, families.length);
         assertEquals("d", new String(families[0], java.nio.charset.StandardCharsets.UTF_8));
         assertEquals("b", new String(families[1], java.nio.charset.StandardCharsets.UTF_8));
-        assertEquals(H2kConfig.ValueSource.AVRO, snapshot.source());
+        assertEquals(TableValueSource.AVRO, snapshot.source());
     }
 
     @Test
@@ -175,11 +175,11 @@ class H2kConfigTest {
         };
 
         H2kConfig hc = fromCfg(cfg, provider);
-        H2kConfig.CfFilterSnapshot snapshot = hc.describeCfFilter(table);
+        CfFilterSnapshot snapshot = hc.describeCfFilter(table);
         assertFalse(snapshot.enabled());
         assertEquals("", snapshot.csv());
         assertEquals(0, snapshot.families().length);
-        assertEquals(H2kConfig.ValueSource.DEFAULT, snapshot.source());
+        assertEquals(TableValueSource.DEFAULT, snapshot.source());
     }
 
     @Test

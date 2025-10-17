@@ -8,11 +8,13 @@ import java.util.Objects;
 import org.apache.avro.generic.GenericData;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.TableName;
+
+import kz.qazmarka.h2k.config.AvroSettings;
 import kz.qazmarka.h2k.config.H2kConfig;
 import kz.qazmarka.h2k.payload.serializer.avro.ConfluentAvroPayloadSerializer;
 import kz.qazmarka.h2k.payload.serializer.avro.SchemaRegistryClientFactory;
-import kz.qazmarka.h2k.schema.registry.avro.local.AvroSchemaRegistry;
 import kz.qazmarka.h2k.schema.decoder.Decoder;
+import kz.qazmarka.h2k.schema.registry.avro.local.AvroSchemaRegistry;
 import kz.qazmarka.h2k.util.RowKeySlice;
 
 /**
@@ -21,8 +23,8 @@ import kz.qazmarka.h2k.util.RowKeySlice;
  */
 public final class PayloadBuilder {
 
-    private final H2kConfig cfg;
     private final ConfluentAvroPayloadSerializer serializer;
+    private final AvroSettings avroSettings;
     private final RowPayloadAssembler assembler;
 
     /**
@@ -41,11 +43,12 @@ public final class PayloadBuilder {
     public PayloadBuilder(Decoder decoder,
                           H2kConfig cfg,
                           SchemaRegistryClientFactory schemaRegistryClientFactory) {
-        this.cfg = Objects.requireNonNull(cfg, "конфигурация h2k");
+        H2kConfig config = Objects.requireNonNull(cfg, "конфигурация h2k");
         Objects.requireNonNull(schemaRegistryClientFactory, "schemaRegistryClientFactory");
-        AvroSchemaRegistry localRegistry = new AvroSchemaRegistry(resolveSchemaDir(cfg));
-        this.serializer = new ConfluentAvroPayloadSerializer(cfg, schemaRegistryClientFactory, localRegistry);
-        this.assembler = new RowPayloadAssembler(decoder, cfg, localRegistry);
+        this.avroSettings = config.getAvroSettings();
+        AvroSchemaRegistry localRegistry = new AvroSchemaRegistry(resolveSchemaDir(avroSettings));
+        this.serializer = new ConfluentAvroPayloadSerializer(avroSettings, schemaRegistryClientFactory, localRegistry);
+        this.assembler = new RowPayloadAssembler(decoder, config, localRegistry);
     }
 
     /**
@@ -88,17 +91,17 @@ public final class PayloadBuilder {
         StringBuilder sb = new StringBuilder(160);
         sb.append("payload.format=AVRO_BINARY");
         sb.append(", serializer.class=").append(serializer.getClass().getName());
-        sb.append(", schema.registry.urls=").append(cfg.getAvroSchemaRegistryUrls());
+        sb.append(", schema.registry.urls=").append(avroSettings.getRegistryUrls());
         sb.append(", schema.registry.auth=")
-                .append(cfg.getAvroSrAuth().isEmpty() ? "disabled" : "configured");
-        if (!cfg.getAvroProps().isEmpty()) {
-            sb.append(", schema.registry.props=").append(cfg.getAvroProps().keySet());
+                .append(avroSettings.getRegistryAuth().isEmpty() ? "disabled" : "configured");
+        if (!avroSettings.getProperties().isEmpty()) {
+            sb.append(", schema.registry.props=").append(avroSettings.getProperties().keySet());
         }
         return sb.toString();
     }
 
-    private Path resolveSchemaDir(H2kConfig cfg) {
-        String dir = cfg.getAvroSchemaDir();
+    private Path resolveSchemaDir(AvroSettings settings) {
+        String dir = settings.getSchemaDir();
         if (dir == null || dir.trim().isEmpty()) {
             return Paths.get("conf", "avro");
         }

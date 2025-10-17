@@ -7,7 +7,7 @@ import java.util.concurrent.TimeoutException;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.TableName;
 
-import kz.qazmarka.h2k.config.H2kConfig;
+import kz.qazmarka.h2k.config.TableOptionsSnapshot;
 import kz.qazmarka.h2k.kafka.producer.batch.BatchSender;
 import kz.qazmarka.h2k.util.RowKeySlice;
 
@@ -59,7 +59,7 @@ final class WalRowProcessor {
         final TableName table;
         final WalMeta walMeta;
         final BatchSender sender;
-        final H2kConfig.TableOptionsSnapshot tableOptions;
+        final TableOptionsSnapshot tableOptions;
         final WalCfFilterCache cfFilter;
         final WalCounterService.EntryCounters counters;
 
@@ -67,7 +67,7 @@ final class WalRowProcessor {
                    TableName table,
                    WalMeta walMeta,
                    BatchSender sender,
-                   H2kConfig.TableOptionsSnapshot tableOptions,
+                   TableOptionsSnapshot tableOptions,
                    WalCfFilterCache cfFilter,
                    WalCounterService.EntryCounters counters) {
             this.topic = topic;

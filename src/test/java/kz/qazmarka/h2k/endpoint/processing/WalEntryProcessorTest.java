@@ -22,6 +22,7 @@ import org.apache.hadoop.hbase.wal.WALKey;
 import org.apache.kafka.clients.producer.MockProducer;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 import org.junit.jupiter.api.DisplayName;
@@ -36,15 +37,18 @@ import kz.qazmarka.h2k.kafka.producer.batch.BatchSender;
 import kz.qazmarka.h2k.payload.builder.PayloadBuilder;
 import kz.qazmarka.h2k.payload.serializer.avro.SchemaRegistryClientFactory;
 import kz.qazmarka.h2k.schema.decoder.Decoder;
-import kz.qazmarka.h2k.schema.decoder.SimpleDecoder;
+import kz.qazmarka.h2k.schema.decoder.TestRawDecoder;
 import kz.qazmarka.h2k.schema.registry.PhoenixTableMetadataProvider;
 import kz.qazmarka.h2k.schema.registry.SchemaRegistry;
 import kz.qazmarka.h2k.util.RowKeySlice;
 
 /**
- * Юнит‑тесты для внутренних помощников {@link WalEntryProcessor} (initialCapacity и фильтры WAL).
+ * Юнит‑тесты внутренних помощников {@link WalEntryProcessor}: агрегированные метрики, буфер строк и
+ * обработка пустых записей.
  */
 class WalEntryProcessorTest {
+
+    private static final TableName TABLE = TableName.valueOf("T_AVRO");
 
     private static byte[] bytes(String s) {
         return s.getBytes(StandardCharsets.UTF_8);
@@ -53,71 +57,20 @@ class WalEntryProcessorTest {
     @Test
     @DisplayName("WalMetrics агрегирует строки и фильтрацию")
     void metricsAccumulates() {
-        Configuration cfg = new Configuration(false);
-        cfg.set("h2k.kafka.bootstrap.servers", "mock:9092");
-        cfg.set("h2k.avro.sr.urls", "http://mock");
-        cfg.set("h2k.avro.schema.dir", Paths.get("src", "test", "resources", "avro").toAbsolutePath().toString());
-
-        SchemaRegistryClientFactory testFactory = (urls, props, capacity) -> new MockSchemaRegistryClient();
-
-        PhoenixTableMetadataProvider provider = new PhoenixTableMetadataProvider() {
-            @Override
-            public Integer saltBytes(TableName table) { return null; }
-
-            @Override
-            public Integer capacityHint(TableName table) { return null; }
-
-            @Override
-            public String[] columnFamilies(TableName table) {
-                return "T_AVRO".equalsIgnoreCase(table.getNameAsString()) ? new String[]{"d"} : SchemaRegistry.EMPTY;
-            }
-        };
-
-        H2kConfig h2kConfig = H2kConfig.from(cfg, "mock:9092", provider);
-
-        Decoder decoder = new Decoder() {
-            @Override
-            public Object decode(TableName table, String qualifier, byte[] value) {
-                Object raw = SimpleDecoder.INSTANCE.decode(table, qualifier, value);
-                if (raw instanceof byte[]) {
-                    return new String((byte[]) raw, StandardCharsets.UTF_8);
-                }
-                return raw;
-            }
-
-            @Override
-            public Object decode(TableName table, byte[] qual, int qOff, int qLen, byte[] value, int vOff, int vLen) {
-                Object raw = SimpleDecoder.INSTANCE.decode(table, qual, qOff, qLen, value, vOff, vLen);
-                if (raw instanceof byte[]) {
-                    return new String((byte[]) raw, StandardCharsets.UTF_8);
-                }
-                return raw;
-            }
-
-            @Override
-            public void decodeRowKey(TableName table, RowKeySlice rk, int saltBytes, Map<String, Object> out) {
-                if (rk != null) {
-                    out.put("id", new String(rk.toByteArray(), StandardCharsets.UTF_8));
-                }
-            }
-        };
-
-        PayloadBuilder builder = new PayloadBuilder(decoder, h2kConfig, testFactory);
+        WalScenario scenario = createScenario(new String[]{"d"});
 
         byte[] probeRow = bytes("probe");
         List<Cell> probeCells = Collections.singletonList(new KeyValue(probeRow,
                 Bytes.toBytes("d"),
                 Bytes.toBytes("value"),
                 Bytes.toBytes("v")));
-        GenericData.Record probeRecord = builder.buildRowPayload(TableName.valueOf("T_AVRO"),
+        GenericData.Record probeRecord = scenario.builder.buildRowPayload(TABLE,
                 probeCells,
                 RowKeySlice.whole(probeRow),
                 0L,
                 0L);
         assertEquals("probe", String.valueOf(probeRecord.get("id")));
-        TopicManager topicManager = new TopicManager(h2kConfig, TopicEnsurer.disabled());
-        MockProducer<byte[], byte[]> producer = new MockProducer<>(true, new ByteArraySerializer(), new ByteArraySerializer());
-        WalEntryProcessor processor = new WalEntryProcessor(builder, topicManager, producer, h2kConfig);
+        WalEntryProcessor processor = scenario.processor;
 
         processWalEntry(processor, walEntry("row1", "d"), 10);
 
@@ -136,42 +89,30 @@ class WalEntryProcessorTest {
         assertEquals(1, after.filteredRows());
     }
 
+    /** Проверяет, что пустая запись WAL игнорируется и метрики не изменяются. */
+    @Test
+    @DisplayName("Пустая запись WAL игнорируется без обновления счётчиков")
+    void skipEmptyEntryIgnoresRecord() {
+        WalScenario scenario = createScenario(new String[]{"d"});
+        WALKey key = new WALKey(bytes("ignored"), TABLE, 42L);
+        WALEdit emptyEdit = new WALEdit();
+        WAL.Entry entry = new Entry(key, emptyEdit);
+
+        processWalEntry(scenario.processor, entry, 3);
+
+        WalEntryProcessor.WalMetrics metrics = scenario.processor.metrics();
+        assertEquals(0, metrics.entries(), "Пустая запись не должна увеличивать счётчик записей");
+        assertEquals(0, metrics.rows(), "Пустая запись не должна учитывать строки");
+        assertTrue(scenario.producer.history().isEmpty(), "Kafka не должен получать сообщений для пустого WAL");
+    }
+
     private static WAL.Entry walEntry(String row, String cf) {
         byte[] rowBytes = bytes(row);
         byte[] cfBytes = bytes(cf);
-        WALKey key = new WALKey(rowBytes, TableName.valueOf("T_AVRO"), 1L);
+        WALKey key = new WALKey(rowBytes, TABLE, 1L);
         WALEdit edit = new WALEdit();
         edit.add(new KeyValue(rowBytes, cfBytes, bytes("q"), 1L, bytes("v")));
         return new Entry(key, edit);
-    }
-
-    @Test
-    @DisplayName("CF-фильтр отключён → строки всегда отправляются")
-    void cfFilterDisabledAllowsAllRows() {
-        WalScenario scenario = createScenario(new String[0]);
-        WAL.Entry entry = walEntry("row-disabled", "x");
-
-        processWalEntry(scenario.processor, entry, 3);
-
-        assertEquals(1, scenario.producer.history().size(), "Строка должна быть отправлена при выключенном фильтре");
-        WalEntryProcessor.WalMetrics metrics = scenario.processor.metrics();
-        assertEquals(1, metrics.rows());
-        assertEquals(0, metrics.filteredRows());
-    }
-
-    @Test
-    @DisplayName("CF-фильтр удаляет строки без разрешённых семейств")
-    void cfFilterRejectsDisallowedRows() {
-        WalScenario scenario = createScenario(new String[]{"d"});
-        WAL.Entry entry = walEntry("row-filtered", "x");
-
-        processWalEntry(scenario.processor, entry, 3);
-
-        assertTrue(scenario.producer.history().isEmpty(),
-                "Отфильтрованная строка не должна публиковаться");
-        WalEntryProcessor.WalMetrics metrics = scenario.processor.metrics();
-        assertEquals(1, metrics.rows(), "Строка учитывается в метриках");
-        assertEquals(1, metrics.filteredRows(), "Должна учитываться как отфильтрованная");
     }
 
     @Test
@@ -186,13 +127,44 @@ class WalEntryProcessorTest {
         WalEntryProcessor.WalMetrics metrics = scenario.processor.metrics();
         assertEquals(cellsCount, metrics.cells(), "Все ячейки должны быть обработаны");
         assertEquals(cellsCount, metrics.rows(), "Все строки должны быть учтены в метриках");
-        assertTrue(scenario.processor.rowBufferUpsizeCount() > 0,
-                "Ожидается увеличение буфера");
+    assertTrue(scenario.processor.rowBufferUpsizeCount() > 0,
+        "Ожидается увеличение буфера");
+    assertFalse(scenario.producer.history().isEmpty(),
+        "После отправки большого набора строк Kafka должна получить сообщения");
 
         int trimThreshold = WalEntryProcessor.rowBufferTrimThresholdForTest();
         forceRowBufferTrim(scenario, trimThreshold);
         assertTrue(scenario.processor.rowBufferTrimCount() > 0,
                 "Ожидается усадка буфера после ручного сброса");
+    }
+
+    @Test
+    @DisplayName("sendRow публикует строку в Kafka и добавляет фьючерс")
+    void sendRowPublishesRecord() throws Exception {
+        WalScenario scenario = createScenario(new String[]{"d"});
+        byte[] row = bytes("rk-send");
+        List<Cell> cells = Collections.singletonList(new KeyValue(row,
+                Bytes.toBytes("d"),
+                Bytes.toBytes("value"),
+                1L,
+                Bytes.toBytes("payload")));
+        RowKeySlice rowKey = RowKeySlice.whole(row);
+        BatchSender sender = new BatchSender(2, 1_000);
+        WalMeta meta = new WalMeta(123L, 456L);
+
+        scenario.processor.sendRow(scenario.topicManager.resolveTopic(TABLE),
+                TABLE,
+                meta,
+                rowKey,
+                cells,
+                sender);
+        sender.flush();
+
+        assertEquals(1, scenario.producer.history().size(), "Ожидается публикация строки");
+        org.apache.kafka.clients.producer.ProducerRecord<byte[], byte[]> produced = scenario.producer.history().get(0);
+        assertEquals(scenario.topicManager.resolveTopic(TABLE), produced.topic());
+        assertTrue(java.util.Arrays.equals(row, produced.key()), "Ключ должен совпасть с rowkey");
+        assertTrue(produced.value() != null && produced.value().length > 0, "Payload не должен быть пустым");
     }
 
     private static void processWalEntry(WalEntryProcessor processor, WAL.Entry entry, int batchSize) {
@@ -225,38 +197,11 @@ class WalEntryProcessorTest {
         SchemaRegistryClientFactory factory = (urls, props, capacity) -> new MockSchemaRegistryClient();
         H2kConfig h2kConfig = H2kConfig.from(cfg, "mock:9092", provider);
 
-        Decoder decoder = new Decoder() {
-            @Override
-            public Object decode(TableName table, String qualifier, byte[] value) {
-                Object raw = SimpleDecoder.INSTANCE.decode(table, qualifier, value);
-                if (raw instanceof byte[]) {
-                    return new String((byte[]) raw, StandardCharsets.UTF_8);
-                }
-                return raw;
-            }
-
-            @Override
-            public Object decode(TableName table, byte[] qual, int qOff, int qLen, byte[] value, int vOff, int vLen) {
-                Object raw = SimpleDecoder.INSTANCE.decode(table, qual, qOff, qLen, value, vOff, vLen);
-                if (raw instanceof byte[]) {
-                    return new String((byte[]) raw, StandardCharsets.UTF_8);
-                }
-                return raw;
-            }
-
-            @Override
-            public void decodeRowKey(TableName table, RowKeySlice rk, int saltBytes, Map<String, Object> out) {
-                if (rk != null) {
-                    out.put("id", new String(rk.toByteArray(), StandardCharsets.UTF_8));
-                }
-            }
-        };
-
-        PayloadBuilder payloadBuilder = new PayloadBuilder(decoder, h2kConfig, factory);
-        TopicManager topicManager = new TopicManager(h2kConfig, TopicEnsurer.disabled());
+        PayloadBuilder payloadBuilder = new PayloadBuilder(decoder(), h2kConfig, factory);
+        TopicManager topicManager = new TopicManager(h2kConfig.getTopicSettings(), TopicEnsurer.disabled());
         MockProducer<byte[], byte[]> producer = new MockProducer<>(true, new ByteArraySerializer(), new ByteArraySerializer());
         WalEntryProcessor processor = new WalEntryProcessor(payloadBuilder, topicManager, producer, h2kConfig);
-        return new WalScenario(processor, producer);
+        return new WalScenario(processor, producer, payloadBuilder, topicManager);
     }
 
     private static PhoenixTableMetadataProvider provider(String[] cfFamilies) {
@@ -270,7 +215,7 @@ class WalEntryProcessorTest {
 
             @Override
             public String[] columnFamilies(TableName table) {
-                return "T_AVRO".equalsIgnoreCase(table.getNameAsString()) ? fams.clone() : SchemaRegistry.EMPTY;
+                return TABLE.getNameAsString().equalsIgnoreCase(table.getNameAsString()) ? fams.clone() : SchemaRegistry.EMPTY;
             }
 
             @Override
@@ -280,11 +225,39 @@ class WalEntryProcessorTest {
         };
     }
 
+    private static Decoder decoder() {
+        return new Decoder() {
+            @Override
+            public Object decode(TableName table, String qualifier, byte[] value) {
+                Object raw = TestRawDecoder.INSTANCE.decode(table, qualifier, value);
+                if (raw instanceof byte[]) {
+                    return new String((byte[]) raw, StandardCharsets.UTF_8);
+                }
+                return raw;
+            }
+
+            @Override
+            public Object decode(TableName table, byte[] qual, int qOff, int qLen, byte[] value, int vOff, int vLen) {
+                Object raw = TestRawDecoder.INSTANCE.decode(table, qual, qOff, qLen, value, vOff, vLen);
+                if (raw instanceof byte[]) {
+                    return new String((byte[]) raw, StandardCharsets.UTF_8);
+                }
+                return raw;
+            }
+
+            @Override
+            public void decodeRowKey(TableName table, RowKeySlice rk, int saltBytes, Map<String, Object> out) {
+                if (rk != null) {
+                    out.put("id", new String(rk.toByteArray(), StandardCharsets.UTF_8));
+                }
+            }
+        };
+    }
+
     private static WAL.Entry largeWalEntry(String row, String cf, int cellsCount) {
         byte[] rowBytes = bytes(row);
         byte[] cfBytes = bytes(cf);
-        TableName table = TableName.valueOf("T_AVRO");
-        WALKey key = new WALKey(rowBytes, table, 1L);
+        WALKey key = new WALKey(rowBytes, TABLE, 1L);
         WALEdit edit = new WALEdit();
         byte[] qualifier = bytes("value");
         for (int i = 0; i < cellsCount; i++) {
@@ -297,10 +270,17 @@ class WalEntryProcessorTest {
     private static final class WalScenario {
         final WalEntryProcessor processor;
         final MockProducer<byte[], byte[]> producer;
+        final PayloadBuilder builder;
+        final TopicManager topicManager;
 
-        WalScenario(WalEntryProcessor processor, MockProducer<byte[], byte[]> producer) {
+        WalScenario(WalEntryProcessor processor,
+                    MockProducer<byte[], byte[]> producer,
+                    PayloadBuilder builder,
+                    TopicManager topicManager) {
             this.processor = processor;
             this.producer = producer;
+            this.builder = builder;
+            this.topicManager = topicManager;
         }
     }
 }

@@ -13,7 +13,10 @@ import org.junit.jupiter.api.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import kz.qazmarka.h2k.config.CfFilterSnapshot;
 import kz.qazmarka.h2k.config.H2kConfig;
+import kz.qazmarka.h2k.config.H2kConfigBuilder;
+import kz.qazmarka.h2k.config.TableOptionsSnapshot;
 import kz.qazmarka.h2k.schema.registry.PhoenixTableMetadataProvider;
 import kz.qazmarka.h2k.schema.registry.SchemaRegistry;
 
@@ -44,7 +47,7 @@ class TableOptionsObserverTest {
     }
 
     private Snapshot snapshot(TableName table, final int salt, final int capacity, final String[] cfNames) {
-        H2kConfig.Builder builder = new H2kConfig.Builder("mock:9092");
+    H2kConfigBuilder builder = new H2kConfigBuilder("mock:9092");
         builder.tableMetadataProvider(new PhoenixTableMetadataProvider() {
             private final String[] pk = new String[]{"ID"};
 
@@ -69,15 +72,15 @@ class TableOptionsObserverTest {
             }
         });
         H2kConfig config = builder.build();
-        H2kConfig.TableOptionsSnapshot options = config.describeTableOptions(table);
+        TableOptionsSnapshot options = config.describeTableOptions(table);
         return new Snapshot(options, options.cfFilter());
     }
 
     private static final class Snapshot {
-        final H2kConfig.TableOptionsSnapshot options;
-        final H2kConfig.CfFilterSnapshot cf;
+        final TableOptionsSnapshot options;
+        final CfFilterSnapshot cf;
 
-        Snapshot(H2kConfig.TableOptionsSnapshot options, H2kConfig.CfFilterSnapshot cf) {
+        Snapshot(TableOptionsSnapshot options, CfFilterSnapshot cf) {
             this.options = options;
             this.cf = cf;
         }

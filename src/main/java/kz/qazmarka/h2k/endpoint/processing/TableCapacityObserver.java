@@ -1,6 +1,7 @@
 package kz.qazmarka.h2k.endpoint.processing;
 
 import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -10,7 +11,9 @@ import org.apache.hadoop.hbase.TableName;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import kz.qazmarka.h2k.config.H2kConfig;
+import kz.qazmarka.h2k.config.TableMetadataView;
+import kz.qazmarka.h2k.config.TableOptionsSnapshot;
+import kz.qazmarka.h2k.config.TableValueSource;
 
 /**
  * Наблюдает фактическое количество колонок на строку и рекомендует обновления h2k.capacity.hints.
@@ -23,20 +26,27 @@ final class TableCapacityObserver {
     private static final long MIN_ROWS_BEFORE_RECOMMEND = 200L;
 
     private final ConcurrentHashMap<TableName, Stats> statsByTable = new ConcurrentHashMap<>();
-    private final H2kConfig config;
+    private final TableMetadataView metadata;
     private final boolean enabled;
 
-    private TableCapacityObserver(H2kConfig config, boolean enabled) {
-        this.config = config;
+    private TableCapacityObserver(TableMetadataView metadata, boolean enabled) {
+        this.metadata = metadata;
         this.enabled = enabled;
     }
 
-    static TableCapacityObserver create(H2kConfig config) {
-        return new TableCapacityObserver(config, true);
+    static TableCapacityObserver create(TableMetadataView metadata) {
+        return new TableCapacityObserver(Objects.requireNonNull(metadata, "метаданные таблиц"), true);
     }
 
     static TableCapacityObserver disabled() {
         return new TableCapacityObserver(null, false);
+    }
+
+    /**
+     * Минимальный хук для модульных тестов: сигнализирует, активен ли наблюдатель.
+     */
+    boolean isEnabledForTest() {
+        return enabled;
     }
 
     /**
@@ -107,38 +117,47 @@ final class TableCapacityObserver {
             return;
         }
         long rows = stats.rowsObserved.sum();
-        if (rows < MIN_ROWS_BEFORE_RECOMMEND) {
-            return;
-        }
         long maxFields = stats.maxFields.get();
-        if (maxFields <= 0L) {
+        boolean hasSufficientData = rows >= MIN_ROWS_BEFORE_RECOMMEND && maxFields > 0L;
+        if (!hasSufficientData) {
             return;
         }
-        int configuredHint = config.getCapacityHintFor(table);
-        if (configuredHint > 0 && maxFields <= configuredHint) {
-            return;
-        }
+        int configuredHint = metadata.getCapacityHintFor(table);
         long lastWarned = stats.lastWarnedRecommendation.get();
-        if (maxFields <= lastWarned) {
+        boolean needsCapacityUpdate = configuredHint <= 0 || maxFields > configuredHint;
+        boolean newerRecommendation = maxFields > lastWarned;
+        if (!(needsCapacityUpdate && newerRecommendation)) {
             return;
         }
         if (!stats.lastWarnedRecommendation.compareAndSet(lastWarned, maxFields)) {
             return;
         }
-        H2kConfig.TableOptionsSnapshot snapshot = config.describeTableOptions(table);
         Logger logger = LOG.get();
+        if (!logger.isWarnEnabled()) {
+            return;
+        }
+        TableOptionsSnapshot snapshot = metadata.describeTableOptions(table);
+        int currentHint = (snapshot == null) ? configuredHint : snapshot.capacityHint();
+        TableValueSource source = (snapshot == null) ? TableValueSource.DEFAULT : snapshot.capacitySource();
         logger.warn("Таблица {}: замечено {} полей при {} строках (источник подсказки: {}). Рекомендуется обновить h2k.capacityHint в Avro-схеме не ниже {} (сейчас {}).",
                 table,
                 maxFields,
                 rows,
-                snapshot.capacitySource(),
+                label(source),
                 maxFields,
-                snapshot.capacityHint());
+                currentHint);
     }
 
     static AutoCloseable withLoggerForTest(Logger testLogger) {
         Logger previous = LOG.getAndSet(testLogger);
         return () -> LOG.set(previous);
+    }
+
+    /**
+     * Возвращает человекочитаемую метку источника для логирования.
+     */
+    private static String label(TableValueSource source) {
+        return source == null ? "" : source.label();
     }
 
     /**

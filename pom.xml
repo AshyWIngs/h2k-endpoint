@@ -5,7 +5,7 @@
 
   <groupId>kz.qazmarka</groupId>
   <artifactId>h2k-endpoint</artifactId>
-  <version>0.0.20</version>
+  <version>0.0.21</version>
   <packaging>jar</packaging>
 
   <name>H2K Endpoint Build</name>
@@ -17,10 +17,14 @@
     <phoenix.version>4.14.2-HBase-1.4</phoenix.version>
     <kafka.version>2.3.1</kafka.version>
     <slf4j.version>1.7.25</slf4j.version>
-    <gson.version>2.8.9</gson.version>
     <lz4.version>1.6.0</lz4.version>
-    <avro.version>1.9.2</avro.version>
+    <avro.version>1.11.4</avro.version>
+  <commons-compress.version>1.26.0</commons-compress.version>
+  <commons-lang3.version>3.18.0</commons-lang3.version>
+  <commons-io.version>2.15.1</commons-io.version>
     <confluent.sr.version>5.3.8</confluent.sr.version>
+    <jackson.version>2.17.2</jackson.version>
+    <guava.version>24.1.1-jre</guava.version>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <avro.mode>confluent</avro.mode>
   </properties>
@@ -33,11 +37,6 @@
         <version>${slf4j.version}</version>
       </dependency>
       <dependency>
-        <groupId>com.google.code.gson</groupId>
-        <artifactId>gson</artifactId>
-        <version>${gson.version}</version>
-      </dependency>
-      <dependency>
         <groupId>org.lz4</groupId>
         <artifactId>lz4-java</artifactId>
         <version>${lz4.version}</version>
@@ -45,7 +44,7 @@
       <dependency>
         <groupId>com.google.guava</groupId>
         <artifactId>guava</artifactId>
-        <version>12.0.1</version>
+        <version>${guava.version}</version>
       </dependency>
       <dependency>
         <groupId>commons-logging</groupId>
@@ -70,47 +69,32 @@
       <dependency>
         <groupId>org.apache.commons</groupId>
         <artifactId>commons-compress</artifactId>
-        <version>1.21</version>
+        <version>${commons-compress.version}</version>
       </dependency>
       <dependency>
-        <groupId>org.codehaus.jackson</groupId>
-        <artifactId>jackson-core-asl</artifactId>
-        <version>1.9.13</version>
+        <groupId>commons-io</groupId>
+        <artifactId>commons-io</artifactId>
+        <version>${commons-io.version}</version>
       </dependency>
       <dependency>
-        <groupId>org.codehaus.jackson</groupId>
-        <artifactId>jackson-mapper-asl</artifactId>
-        <version>1.9.13</version>
-      </dependency>
-      <dependency>
-        <groupId>org.codehaus.jackson</groupId>
-        <artifactId>jackson-jaxrs</artifactId>
-        <version>1.9.13</version>
-      </dependency>
-      <dependency>
-        <groupId>org.codehaus.jackson</groupId>
-        <artifactId>jackson-xc</artifactId>
-        <version>1.9.13</version>
-      </dependency>
-      <dependency>
-        <groupId>org.codehaus.jackson</groupId>
-        <artifactId>jackson-smile</artifactId>
-        <version>1.9.13</version>
+        <groupId>org.apache.commons</groupId>
+        <artifactId>commons-lang3</artifactId>
+        <version>${commons-lang3.version}</version>
       </dependency>
       <dependency>
         <groupId>com.fasterxml.jackson.core</groupId>
         <artifactId>jackson-databind</artifactId>
-        <version>2.10.2</version>
+        <version>${jackson.version}</version>
       </dependency>
       <dependency>
         <groupId>com.fasterxml.jackson.core</groupId>
         <artifactId>jackson-core</artifactId>
-        <version>2.10.2</version>
+        <version>${jackson.version}</version>
       </dependency>
       <dependency>
         <groupId>com.fasterxml.jackson.core</groupId>
         <artifactId>jackson-annotations</artifactId>
-        <version>2.10.2</version>
+        <version>${jackson.version}</version>
       </dependency>
       <dependency>
         <groupId>org.apache.kafka</groupId>
@@ -239,6 +223,26 @@
               <groupId>org.slf4j</groupId>
               <artifactId>slf4j-api</artifactId>
             </exclusion>
+            <exclusion>
+              <groupId>com.fasterxml.jackson.core</groupId>
+              <artifactId>jackson-core</artifactId>
+            </exclusion>
+            <exclusion>
+              <groupId>com.fasterxml.jackson.core</groupId>
+              <artifactId>jackson-annotations</artifactId>
+            </exclusion>
+            <exclusion>
+              <groupId>com.fasterxml.jackson.core</groupId>
+              <artifactId>jackson-databind</artifactId>
+            </exclusion>
+            <exclusion>
+              <groupId>org.codehaus.jackson</groupId>
+              <artifactId>jackson-core-asl</artifactId>
+            </exclusion>
+            <exclusion>
+              <groupId>org.codehaus.jackson</groupId>
+              <artifactId>jackson-mapper-asl</artifactId>
+            </exclusion>
           </exclusions>
         </dependency>
         <dependency>
@@ -252,6 +256,22 @@
             <exclusion>
               <groupId>com.fasterxml.jackson.core</groupId>
               <artifactId>jackson-databind</artifactId>
+            </exclusion>
+            <exclusion>
+              <groupId>com.fasterxml.jackson.core</groupId>
+              <artifactId>jackson-core</artifactId>
+            </exclusion>
+            <exclusion>
+              <groupId>com.fasterxml.jackson.core</groupId>
+              <artifactId>jackson-annotations</artifactId>
+            </exclusion>
+            <exclusion>
+              <groupId>org.codehaus.jackson</groupId>
+              <artifactId>jackson-core-asl</artifactId>
+            </exclusion>
+            <exclusion>
+              <groupId>org.codehaus.jackson</groupId>
+              <artifactId>jackson-mapper-asl</artifactId>
             </exclusion>
           </exclusions>
         </dependency>
@@ -273,6 +293,10 @@
           <groupId>log4j</groupId>
           <artifactId>log4j</artifactId>
         </exclusion>
+        <exclusion>
+          <groupId>commons-io</groupId>
+          <artifactId>commons-io</artifactId>
+        </exclusion>
       </exclusions>
     </dependency>
     <dependency>
@@ -280,10 +304,33 @@
       <artifactId>avro</artifactId>
     </dependency>
     <dependency>
+      <groupId>commons-io</groupId>
+      <artifactId>commons-io</artifactId>
+      <scope>provided</scope>
+    </dependency>
+    <dependency>
       <groupId>org.apache.hadoop</groupId>
       <artifactId>hadoop-common</artifactId>
       <version>${hadoop.version}</version>
       <scope>provided</scope>
+      <exclusions>
+        <exclusion>
+          <groupId>org.codehaus.jackson</groupId>
+          <artifactId>jackson-core-asl</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>org.codehaus.jackson</groupId>
+          <artifactId>jackson-mapper-asl</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>org.codehaus.jackson</groupId>
+          <artifactId>jackson-jaxrs</artifactId>
+        </exclusion>
+        <exclusion>
+          <groupId>org.codehaus.jackson</groupId>
+          <artifactId>jackson-xc</artifactId>
+        </exclusion>
+      </exclusions>
     </dependency>
     <dependency>
       <groupId>org.apache.hadoop</groupId>
@@ -336,10 +383,6 @@
       <scope>provided</scope>
     </dependency>
     <dependency>
-      <groupId>com.google.code.gson</groupId>
-      <artifactId>gson</artifactId>
-    </dependency>
-    <dependency>
       <groupId>org.slf4j</groupId>
       <artifactId>slf4j-api</artifactId>
       <scope>provided</scope>
@@ -360,12 +403,6 @@
       <groupId>org.junit.jupiter</groupId>
       <artifactId>junit-jupiter-params</artifactId>
       <version>5.10.2</version>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>com.squareup.okhttp3</groupId>
-      <artifactId>mockwebserver</artifactId>
-      <version>3.14.9</version>
       <scope>test</scope>
     </dependency>
   </dependencies>
@@ -436,17 +473,20 @@
                   <searchTransitive>false</searchTransitive>
                   <excludes>
                     <exclude>org.slf4j:slf4j-api:(1.7.25,)</exclude>
-                    <exclude>com.fasterxml.jackson.core:jackson-databind:(2.10.2,)</exclude>
-                    <exclude>com.fasterxml.jackson.core:jackson-core:(2.10.2,)</exclude>
-                    <exclude>com.fasterxml.jackson.core:jackson-annotations:(2.10.2,)</exclude>
+                    <exclude>com.fasterxml.jackson.core:jackson-databind:(${jackson.version},)</exclude>
+                    <exclude>com.fasterxml.jackson.core:jackson-core:(${jackson.version},)</exclude>
+                    <exclude>com.fasterxml.jackson.core:jackson-annotations:(${jackson.version},)</exclude>
                     <exclude>org.xerial.snappy:snappy-java:(1.0.5,)</exclude>
-                    <exclude>org.apache.avro:avro:(1.9.2,)</exclude>
+                    <exclude>org.apache.avro:avro:(${avro.version},)</exclude>
+                    <exclude>org.apache.commons:commons-compress:(${commons-compress.version},)</exclude>
+                    <exclude>commons-io:commons-io:(${commons-io.version},)</exclude>
+                    <exclude>org.apache.commons:commons-lang3:(${commons-lang3.version},)</exclude>
                     <exclude>log4j:log4j</exclude>
                     <exclude>org.slf4j:slf4j-log4j12</exclude>
-                    <exclude>com.google.code.gson:gson:(2.8.9,)</exclude>
+                    <exclude>com.google.code.gson:gson</exclude>
                     <exclude>org.apache.zookeeper:zookeeper:[3.5,)</exclude>
                     <exclude>io.netty:netty-all:[4.1.9,)</exclude>
-                    <exclude>com.google.guava:guava:(12.0.1,)</exclude>
+                    <exclude>com.google.guava:guava:(${guava.version},)</exclude>
                     <exclude>org.slf4j:slf4j-api:[1.8,)</exclude>
                     <exclude>org.apache.kafka:kafka-clients:(2.3.1,)</exclude>
                     <exclude>org.apache.phoenix:phoenix-core:[0,4.14.2-HBase-1.4)</exclude>
@@ -503,6 +543,7 @@
                     <exclude>META-INF/*.DSA</exclude>
                     <exclude>META-INF/*.RSA</exclude>
                     <exclude>module-info.class</exclude>
+                    <exclude>META-INF/versions/**/module-info.class</exclude>
                     <exclude>META-INF/LICENSE</exclude>
                     <exclude>META-INF/LICENSE.txt</exclude>
                     <exclude>META-INF/NOTICE</exclude>
@@ -524,12 +565,8 @@
                   <include>com.fasterxml.jackson.core:*</include>
                   <include>com.fasterxml.jackson.databind:*</include>
                   <include>com.fasterxml.jackson.annotation:*</include>
-                  <include>org.codehaus.jackson:*</include>
-                  <include>com.google.code.gson:gson</include>
                   <include>org.apache.commons:commons-compress</include>
                   <include>io.confluent:*</include>
-                  <include>com.squareup.okhttp3:*</include>
-                  <include>com.squareup.okio:*</include>
                 </includes>
               </artifactSet>
               <relocations>
@@ -542,28 +579,12 @@
                   <shadedPattern>kz.qazmarka.shaded.jackson</shadedPattern>
                 </relocation>
                 <relocation>
-                  <pattern>org.codehaus.jackson</pattern>
-                  <shadedPattern>kz.qazmarka.shaded.codehaus.jackson</shadedPattern>
-                </relocation>
-                <relocation>
-                  <pattern>com.google.gson</pattern>
-                  <shadedPattern>kz.qazmarka.shaded.gson</shadedPattern>
-                </relocation>
-                <relocation>
                   <pattern>org.apache.commons.compress</pattern>
                   <shadedPattern>kz.qazmarka.shaded.commons.compress</shadedPattern>
                 </relocation>
                 <relocation>
                   <pattern>io.confluent</pattern>
                   <shadedPattern>kz.qazmarka.shaded.confluent</shadedPattern>
-                </relocation>
-                <relocation>
-                  <pattern>okhttp3</pattern>
-                  <shadedPattern>kz.qazmarka.shaded.okhttp3</shadedPattern>
-                </relocation>
-                <relocation>
-                  <pattern>okio</pattern>
-                  <shadedPattern>kz.qazmarka.shaded.okio</shadedPattern>
                 </relocation>
               </relocations>
             </configuration>

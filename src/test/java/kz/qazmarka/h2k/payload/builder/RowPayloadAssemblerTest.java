@@ -1,13 +1,7 @@
 package kz.qazmarka.h2k.payload.builder;
 
-import static java.nio.charset.StandardCharsets.UTF_8;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertSame;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
-
 import java.nio.ByteBuffer;
+import static java.nio.charset.StandardCharsets.UTF_8;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -22,9 +16,15 @@ import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.KeyValue.Type;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.util.Bytes;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Test;
 
 import kz.qazmarka.h2k.config.H2kConfig;
+import kz.qazmarka.h2k.config.H2kConfigBuilder;
 import kz.qazmarka.h2k.schema.decoder.Decoder;
 import kz.qazmarka.h2k.schema.registry.PhoenixTableMetadataProvider;
 import kz.qazmarka.h2k.schema.registry.avro.local.AvroSchemaRegistry;
@@ -87,6 +87,22 @@ class RowPayloadAssemblerTest {
         assertEquals(200L, actual.get(PayloadFields.EVENT_TS), "Максимальная метка времени учитывает delete");
         assertEquals(1, ctx.decoder.decodeCalls("version"), "Декодер должен вызываться только для Put-ячейки");
         assertEquals(0, ctx.decoder.decodeCalls("payload"), "Delete-ячейка не декодируется");
+    }
+
+    @Test
+    void assembleShouldSkipColumnsMarkedAsIgnoredInSchema() {
+        TestContext ctx = newContext();
+        List<Cell> cells = new ArrayList<>();
+        cells.add(putCell("skip_me", 101L, bytes("ignored")));
+        cells.add(putCell("version", 102L, bytes("2")));
+
+        RowKeySlice rowKey = RowKeySlice.whole(bytes("skip-row"));
+        GenericData.Record actual = ctx.assembler.assemble(TABLE, cells, rowKey, 10L, 20L);
+
+        assertEquals("skip-row", actual.get("id"));
+        assertEquals(2L, actual.get("version"));
+        assertNull(actual.get("skip_me"), "Поле с h2k.payload.skip должно оставаться по умолчанию");
+        assertEquals(0, ctx.decoder.decodeCalls("skip_me"), "Декодер не должен вызываться для пропускаемых колонок");
     }
 
     @Test
@@ -201,7 +217,7 @@ class RowPayloadAssemblerTest {
     }
 
     private H2kConfig configWithProvider(PhoenixTableMetadataProvider metadata) {
-        H2kConfig.Builder builder = new H2kConfig.Builder("mock:9092");
+    H2kConfigBuilder builder = new H2kConfigBuilder("mock:9092");
         builder.tableMetadataProvider(metadata);
         return builder.build();
     }

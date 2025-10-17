@@ -23,8 +23,11 @@ import org.apache.kafka.clients.producer.ProducerConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import kz.qazmarka.h2k.config.EnsureSettings;
 import kz.qazmarka.h2k.config.H2kConfig;
 import kz.qazmarka.h2k.config.H2kConfig.Keys;
+import kz.qazmarka.h2k.config.ProducerAwaitSettings;
+import kz.qazmarka.h2k.config.TopicNamingSettings;
 import kz.qazmarka.h2k.endpoint.processing.WalEntryProcessor;
 import kz.qazmarka.h2k.endpoint.topic.TopicManager;
 import kz.qazmarka.h2k.kafka.ensure.TopicEnsurer;
@@ -69,8 +72,10 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
     private Producer<byte[], byte[]> producer;
 
     // вынесенная конфигурация и сервисы
-    /** Иммутабельный снимок настроек h2k.* с предвычисленными флагами для горячего пути. */
-    private H2kConfig h2k;
+    /** Плоские DTO-выкладки конфигурации для быстрого доступа без повторных геттеров. */
+    private TopicNamingSettings topicSettings;
+    private EnsureSettings ensureSettings;
+    private ProducerAwaitSettings producerSettings;
     private TopicManager topicManager;
     private WalEntryProcessor walEntryProcessor;
     private PhoenixTableMetadataProvider tableMetadataProvider = PhoenixTableMetadataProvider.NOOP;
@@ -96,11 +101,18 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
         Decoder decoder = chooseDecoder(cfg);
 
         // immut-конфиг, билдер и энсюрер
-        this.h2k = H2kConfig.from(cfg, bootstrap, tableMetadataProvider);
-        final PayloadBuilder payload = new PayloadBuilder(decoder, h2k);
-        final TopicEnsurer topicEnsurer = TopicEnsurer.createIfEnabled(h2k);
-        this.topicManager = new TopicManager(h2k, topicEnsurer);
-        this.walEntryProcessor = new WalEntryProcessor(payload, topicManager, producer, h2k);
+        H2kConfig runtimeConfig = H2kConfig.from(cfg, bootstrap, tableMetadataProvider);
+        this.topicSettings = runtimeConfig.getTopicSettings();
+        this.ensureSettings = runtimeConfig.getEnsureSettings();
+        this.producerSettings = runtimeConfig.getProducerSettings();
+        final PayloadBuilder payload = new PayloadBuilder(decoder, runtimeConfig);
+        final TopicEnsurer topicEnsurer = TopicEnsurer.createIfEnabled(
+                ensureSettings,
+                topicSettings,
+                bootstrap,
+                null); // AdminClient конфигурация формируется внутри TopicEnsurer
+        this.topicManager = new TopicManager(topicSettings, topicEnsurer);
+        this.walEntryProcessor = new WalEntryProcessor(payload, topicManager, producer, runtimeConfig);
         registerMetrics(payload, walEntryProcessor);
         logPayloadSerializer(payload);
         logInitSummary();
@@ -120,9 +132,9 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
             cfSource = "per-table";
         }
         LOG.debug("Инициализация завершена: шаблон_топика={}, cf_источник={}, ensure_topics={}",
-                h2k.getTopicPattern(),
+                topicSettings.getPattern(),
                 cfSource,
-                h2k.isEnsureTopics());
+                ensureSettings.isEnsureTopics());
     }
 
     /**
@@ -264,8 +276,8 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
 
     private void replicateOnce(List<WAL.Entry> entries)
             throws InterruptedException, ExecutionException, TimeoutException {
-        final int awaitEvery = h2k.getAwaitEvery();
-        final int awaitTimeoutMs = h2k.getAwaitTimeoutMs();
+    final int awaitEvery = producerSettings.getAwaitEvery();
+    final int awaitTimeoutMs = producerSettings.getAwaitTimeoutMs();
 
         if (LOG.isDebugEnabled()) {
             LOG.debug("Репликация: записей={}, awaitEvery={}, awaitTimeoutMs={}",
@@ -365,10 +377,10 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
             props.put(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION, cfg.get("h2k.producer.max.in.flight", "1"));
 
             // Набор валидных ключей Kafka‑продьюсера (используем для фильтрации pass‑through)
-        final Set<String> kafkaValidKeys = org.apache.kafka.clients.producer.ProducerConfig.configNames();
+            final Set<String> kafkaValidKeys = org.apache.kafka.clients.producer.ProducerConfig.configNames();
             // Наши «служебные» ключи, которые не должны попадать в конфиг Kafka‑продьюсера
-        final Set<String> h2kInternalKeys = new HashSet<>(
-            Arrays.asList(
+            final Set<String> h2kInternalKeys = new HashSet<>(
+                    Arrays.asList(
                             "await.every",
                             "await.timeout.ms",
                             "batch.counters.enabled",
