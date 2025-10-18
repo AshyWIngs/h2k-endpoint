@@ -106,12 +106,64 @@ class WalEntryProcessorTest {
         assertTrue(scenario.producer.history().isEmpty(), "Kafka не должен получать сообщений для пустого WAL");
     }
 
+    @Test
+    @DisplayName("CF-фильтр пропускает строки только с разрешёнными семействами")
+    void cfFilterAllowsWhitelistedFamilies() {
+        WalScenario scenario = createScenario(new String[]{"d", "aux"});
+
+        WAL.Entry allowed = walEntryWithFamilies("row-allowed", "aux");
+        processWalEntry(scenario.processor, allowed, 4);
+
+        WalEntryProcessor.WalMetrics afterAllowed = scenario.processor.metrics();
+        assertEquals(1, afterAllowed.entries(), "Ожидается обработка первой записи WAL");
+        assertEquals(1, afterAllowed.rows(), "Строка с допустимым CF должна учитываться");
+        assertEquals(0, afterAllowed.filteredRows(), "При разрешённом CF фильтр не должен срабатывать");
+        assertEquals(1, scenario.producer.history().size(), "Kafka должен получить сообщение с разрешённым CF");
+
+        WAL.Entry denied = walEntryWithFamilies("row-denied", "forbidden");
+        processWalEntry(scenario.processor, denied, 4);
+
+        WalEntryProcessor.WalMetrics afterDenied = scenario.processor.metrics();
+        assertEquals(2, afterDenied.entries(), "Счётчик записей WAL должен увеличиться");
+        assertEquals(2, afterDenied.rows(), "Вторая строка засчитывается как просмотренная");
+        assertEquals(1, afterDenied.filteredRows(), "Строка с запрещённым CF должна отфильтроваться");
+        assertEquals(1, scenario.producer.history().size(), "Kafka не должен получать сообщения по запрещённому CF");
+    }
+
+    @Test
+    @DisplayName("CF-фильтр отключён при пустом списке семейств")
+    void cfFilterDisabledWhenFamiliesMissing() {
+        WalScenario scenario = createScenario(new String[0]);
+        WAL.Entry entry = walEntryWithFamilies("row-free", "unknown");
+
+        processWalEntry(scenario.processor, entry, 2);
+
+        WalEntryProcessor.WalMetrics metrics = scenario.processor.metrics();
+        assertEquals(1, metrics.entries(), "Запись WAL должна быть обработана");
+        assertEquals(1, metrics.rows(), "Строка должна пройти без фильтрации");
+        assertEquals(0, metrics.filteredRows(), "Фильтр отключён и не должен считать строки");
+        assertEquals(1, scenario.producer.history().size(), "Kafka должен получить сообщение при отключённом фильтре");
+    }
+
     private static WAL.Entry walEntry(String row, String cf) {
         byte[] rowBytes = bytes(row);
         byte[] cfBytes = bytes(cf);
         WALKey key = new WALKey(rowBytes, TABLE, 1L);
         WALEdit edit = new WALEdit();
         edit.add(new KeyValue(rowBytes, cfBytes, bytes("q"), 1L, bytes("v")));
+        return new Entry(key, edit);
+    }
+
+    private static WAL.Entry walEntryWithFamilies(String row, String... families) {
+        byte[] rowBytes = bytes(row);
+        WALKey key = new WALKey(rowBytes, TABLE, 1L);
+        WALEdit edit = new WALEdit();
+        if (families != null && families.length > 0) {
+            for (String family : families) {
+                byte[] cfBytes = bytes(family);
+                edit.add(new KeyValue(rowBytes, cfBytes, bytes("q"), 1L, bytes("v-" + family)));
+            }
+        }
         return new Entry(key, edit);
     }
 

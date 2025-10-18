@@ -199,6 +199,8 @@ Endpoint публикует события в формате Avro (Confluent Sch
 
 При старте endpoint выводит строку уровня INFO вида `Payload: payload.format=AVRO_BINARY, serializer.class=..., schema.registry.urls=...` — по ней видно, что активен Confluent SR и какие URL используются.
 
+Метрики `schema.registry.register.success` и `schema.registry.register.failures`, публикуемые через `TopicManager.getMetrics()`, напрямую отражают работу сериализатора Avro Confluent: успехи и ошибки регистрации схем в Schema Registry заметны без дополнительных логов.
+
 
 ## Безопасность и ограничения
 
@@ -213,7 +215,7 @@ Endpoint публикует события в формате Avro (Confluent Sch
 1. **Staged rollout.** Раскатайте JAR на один RegionServer, включите peer только для части таблиц и убедитесь, что Schema Registry зарегистрировал схемы без конфликтов.
 2. **Метрики GC/throughput.** Снимите `HRegionServer.GcTimeMillis`, `ReplicationSource.avgReplicationDelay`, а также нагрузку на Kafka продьюсер (`records-sec`, `request-latency`).
 3. **Наблюдаемость Kafka.** Проверяйте `UnderReplicatedPartitions`, `RecordErrorRate`, ошибки `org.apache.kafka.clients` в логах RS.
-4. **Метрики endpoint.** `TopicManager.getMetrics()` возвращает счётчики ensure и свежие показатели `wal.*`, `schema.registry.*`; INFO-лог `Скорость WAL: ...` появляется примерно каждые 5 секунд и показывает фактическую скорость строк/сек.
+4. **Метрики endpoint.** `TopicManager.getMetrics()` возвращает счётчики ensure и свежие показатели `wal.*`, `schema.registry.*`; `wal.rowbuffer.upsizes` и `wal.rowbuffer.trims` помогают заметить широкие строки (более 32 ячеек) и редкие «гигантские» записи (≥4096 ячеек), а INFO-лог `Скорость WAL: ...` появляется примерно каждые 5 секунд и показывает фактическую скорость строк/сек.
 5. **Расширение.** После 1–2 часов без аномалий включайте остальные RS и таблицы; держите предыдущую версию JAR в каталоге `lib/backup` до полного завершения миграции.
 6. **Откат.** При необходимости отключите peer (`disable_peer`), удалите новый JAR, верните предыдущий и перезапустите RS.
 

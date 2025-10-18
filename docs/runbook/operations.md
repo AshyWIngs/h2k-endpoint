@@ -104,6 +104,7 @@ Ensure: ok (create retries=0)
 
 - `status 'replication'` — `SizeOfLogQueue`, `AgeOfLastShippedOp`.
 - Метрики `TopicEnsurer` (через JMX или логи).
+- `TopicManager.getMetrics()`/JMX: отслеживайте `wal.rowbuffer.upsizes` (широкие строки требуют >32 ячеек) и `wal.rowbuffer.trims` (гигантские строки ≥4096 ячеек). Эти счётчики должны расти медленно; резкий рост указывает, что CF-фильтр пропускает слишком много данных.
 - Schema Registry: `curl $SR/subjects`, latency, ошибки 4xx/5xx.
 - Лог `KafkaReplicationEndpoint` выводит throughput каждые 5 с (`Скорость WAL…`).
 

@@ -161,7 +161,7 @@ class AvroPhoenixSchemaRegistryTest {
     Schema schema = avro.getByTable(table.getNameAsString());
     Object raw = schema.getObjectProp("h2k.cf.list");
     String rawType = raw == null ? "null" : raw.getClass().getName();
-    assertTrue(raw instanceof java.util.List,
+    assertTrue(raw instanceof List,
         "Свойство h2k.cf.list должно десериализоваться в java.util.List (class=" + rawType + ")");
 
         AvroPhoenixSchemaRegistry registry = new AvroPhoenixSchemaRegistry(avro);

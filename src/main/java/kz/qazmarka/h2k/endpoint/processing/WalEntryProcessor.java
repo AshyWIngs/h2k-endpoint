@@ -36,7 +36,14 @@ import kz.qazmarka.h2k.util.RowKeySlice;
 public final class WalEntryProcessor {
 
     private static final Logger LOG = LoggerFactory.getLogger(WalEntryProcessor.class);
+    /**
+     * Базовая ёмкость буфера строк: соответствует типичному числу ячеек для компактных WAL-записей.
+     */
     private static final int ROW_BUFFER_BASE_CAPACITY = 32;
+    /**
+     * Порог усадки буфера. Если за одну строку обработано столько или больше ячеек,
+     * буфер сбрасывается до базовой ёмкости, чтобы не удерживать крупные массивы в горячем пути.
+     */
     private static final int ROW_BUFFER_TRIM_THRESHOLD = 4_096;
 
     private final TopicManager topicManager;
@@ -215,14 +222,15 @@ public final class WalEntryProcessor {
     }
 
     /**
-     * Сколько раз буфер rowBuffer расширялся сверх базовой ёмкости.
+     * @return сколько раз буфер rowBuffer расширялся сверх базовой ёмкости.
      */
     public long rowBufferUpsizeCount() {
         return rowBufferUpsize.sum();
     }
 
     /**
-     * Сколько раз буфер rowBuffer принудительно усаживался после крупных строк.
+     * @return сколько раз буфер rowBuffer принудительно усаживался после строк, превышающих порог
+     *         {@value #ROW_BUFFER_TRIM_THRESHOLD}.
      */
     public long rowBufferTrimCount() {
         return rowBufferTrim.sum();
