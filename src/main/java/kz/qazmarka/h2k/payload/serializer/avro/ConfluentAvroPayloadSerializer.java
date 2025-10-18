@@ -165,7 +165,7 @@ public final class ConfluentAvroPayloadSerializer {
             schemaRegisterFailure.increment();
             if (firstFailureLogged.compareAndSet(false, true)) {
                 LOG.warn("Avro Confluent: первая ошибка регистрации схемы — subject={}, urls={}, error={}",
-                        subject, registryUrls, e.toString());
+                        subject, registryUrls, e.getMessage());
             }
             throw new IllegalStateException("Avro: не удалось зарегистрировать схему '" + subject + "'", e);
         } catch (RuntimeException e) {
@@ -201,7 +201,7 @@ public final class ConfluentAvroPayloadSerializer {
             }
         } catch (RestClientException | IOException | RuntimeException ex) {
             if (LOG.isWarnEnabled()) {
-                LOG.warn("Avro Confluent: не удалось сравнить fingerprint subject={}: {}", subject, ex.toString());
+                LOG.warn("Avro Confluent: не удалось сравнить fingerprint subject={}: {}", subject, ex.getMessage());
             }
             if (LOG.isDebugEnabled()) {
                 LOG.debug("Трассировка ошибки сравнения fingerprint для subject={}", subject, ex);

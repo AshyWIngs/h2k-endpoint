@@ -15,6 +15,15 @@ import kz.qazmarka.h2k.config.TableValueSource;
  * Отслеживает использование табличных опций (соль, capacityHint, cf.list) и логирует изменения.
  * Лёгкий наблюдатель: хранит последнее увиденное состояние на таблицу и пишет INFO только при изменении.
  */
+/**
+ * Потокобезопасный наблюдатель табличных опций.
+ *
+ * Конкурентный доступ:
+ * - Карта состояний на таблицу — ConcurrentHashMap.
+ * - Изменение снимка конкретной таблицы защищено synchronized на объекте состояния,
+ *   чтобы логировать консистентные значения одним сообщением и избежать гонок записи.
+ * - Логгер хранится в AtomicReference для безопасной подмены в тестах.
+ */
 final class TableOptionsObserver {
 
     private static final AtomicReference<Logger> LOGGER = new AtomicReference<>(LoggerFactory.getLogger(TableOptionsObserver.class));
@@ -61,6 +70,9 @@ final class TableOptionsObserver {
         state.updateAndLog(table, tableOpts, cfSnapshot);
     }
 
+    /**
+     * Мутируемое состояние одной таблицы; доступ синхронизирован внешним блоком в updateAndLog().
+     */
     private static final class TableState {
         private static final int UNINITIALIZED = Integer.MIN_VALUE;
 

@@ -66,8 +66,8 @@ public final class TopicManager {
         }
         try {
             topicEnsurer.ensureTopic(topic);
-        } catch (Exception e) {
-            LOG.warn("Проверка/создание топика '{}' не выполнена: {}. Репликацию не прерываю", topic, e.toString());
+        } catch (RuntimeException e) {
+            LOG.warn("Проверка/создание топика '{}' не выполнена: {}. Репликацию не прерываю", topic, e.getMessage());
             if (LOG.isDebugEnabled()) {
                 LOG.debug("Трассировка ошибки ensureTopic()", e);
             }
@@ -119,7 +119,7 @@ public final class TopicManager {
             try {
                 snapshot.put(e.getKey(), e.getValue().getAsLong());
             } catch (RuntimeException ex) {
-                LOG.warn("Метрика '{}' недоступна: {}", e.getKey(), ex.toString());
+                LOG.warn("Метрика '{}' недоступна: {}", e.getKey(), ex.getMessage());
                 if (LOG.isDebugEnabled()) {
                     LOG.debug("Трассировка ошибки метрики '{}'", e.getKey(), ex);
                 }

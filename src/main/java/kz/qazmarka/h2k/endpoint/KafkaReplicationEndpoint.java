@@ -11,6 +11,8 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.LongAdder;
 import java.util.function.LongSupplier;
 
 import org.apache.hadoop.conf.Configuration;
@@ -28,6 +30,7 @@ import kz.qazmarka.h2k.config.H2kConfig;
 import kz.qazmarka.h2k.config.H2kConfig.Keys;
 import kz.qazmarka.h2k.config.ProducerAwaitSettings;
 import kz.qazmarka.h2k.config.TopicNamingSettings;
+import kz.qazmarka.h2k.endpoint.metrics.H2kMetricsJmx;
 import kz.qazmarka.h2k.endpoint.processing.WalEntryProcessor;
 import kz.qazmarka.h2k.endpoint.topic.TopicManager;
 import kz.qazmarka.h2k.kafka.ensure.TopicEnsurer;
@@ -79,6 +82,15 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
     private TopicManager topicManager;
     private WalEntryProcessor walEntryProcessor;
     private PhoenixTableMetadataProvider tableMetadataProvider = PhoenixTableMetadataProvider.NOOP;
+    /** Имя зарегистрированного JMX MBean с метриками H2K (для корректного снятия регистрации). */
+    private javax.management.ObjectName h2kJmxName;
+
+    /**
+     * Счётчики отказов репликации и отметка времени последней ошибки.
+     * Используются только для метрик/диагностики, не влияют на поведение.
+     */
+    private final LongAdder replicateFailures = new LongAdder();
+    private final AtomicLong lastReplicateFailureAt = new AtomicLong(0L);
 
     /**
      * Инициализация эндпоинта: чтение конфигурации, подготовка продьюсера, декодера и сборщика payload.
@@ -114,6 +126,21 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
         this.topicManager = new TopicManager(topicSettings, topicEnsurer);
         this.walEntryProcessor = new WalEntryProcessor(payload, topicManager, producer, runtimeConfig);
         registerMetrics(payload, walEntryProcessor);
+        // JMX экспорт метрик через DynamicMBean: безопасно пытаемся зарегистрировать
+        try {
+            javax.management.ObjectName name = H2kMetricsJmx.register(this.topicManager);
+            this.h2kJmxName = name;
+            if (name != null && LOG.isInfoEnabled()) {
+                LOG.info("JMX-метрики H2K зарегистрированы: {}", name);
+            } else if (name == null) {
+                LOG.warn("JMX-метрики H2K не были зарегистрированы (см. DEBUG для деталей)");
+            }
+        } catch (RuntimeException ex) {
+            LOG.warn("Не удалось зарегистрировать JMX-метрики H2K: {}", ex.getMessage());
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("Трассировка ошибки регистрации JMX-метрик H2K", ex);
+            }
+        }
         logPayloadSerializer(payload);
         logInitSummary();
     }
@@ -148,7 +175,7 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
         try {
             LOG.info("Параметры payload: {}", payload.describeSerializer());
         } catch (RuntimeException ex) {
-            LOG.warn("Не удалось определить активный сериализатор payload: {}", ex.toString());
+            LOG.warn("Не удалось определить активный сериализатор payload: {}", ex.getMessage());
             if (LOG.isDebugEnabled()) {
                 LOG.debug("Трассировка ошибки сериализатора", ex);
             }
@@ -164,13 +191,16 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
         registerMetric("schema.registry.register.failures", payload::schemaRegistryFailedCount);
         registerMetric("wal.rowbuffer.upsizes", walProcessor::rowBufferUpsizeCount);
         registerMetric("wal.rowbuffer.trims", walProcessor::rowBufferTrimCount);
+        // Метрики отказов репликации
+        registerMetric("replicate.failures.total", replicateFailures::sum);
+        registerMetric("replicate.last.failure.epoch.ms", lastReplicateFailureAt::get);
     }
 
     private void registerMetric(String name, LongSupplier supplier) {
         try {
             topicManager.registerMetric(name, supplier);
         } catch (RuntimeException ex) {
-            LOG.warn("Не удалось зарегистрировать метрику '{}': {}", name, ex.toString());
+            LOG.warn("Не удалось зарегистрировать метрику '{}': {}", name, ex.getMessage());
             if (LOG.isDebugEnabled()) {
                 LOG.debug("Трассировка ошибки при регистрации метрики '{}'", name, ex);
             }
@@ -257,25 +287,51 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
             return true;
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
-            LOG.warn("Репликация: поток прерван; запросим повтор партии", ie);
-            return false;
+            return failReplicate("Репликация: поток прерван; запросим повтор партии", ie, true);
         } catch (ExecutionException ee) {
-            LOG.error("Репликация: ошибка при ожидании подтверждений Kafka", ee);
-            return false;
+            return failReplicate("Репликация: ошибка при ожидании подтверждений Kafka", ee, false);
         } catch (TimeoutException te) {
-            LOG.error("Репликация: таймаут ожидания подтверждений Kafka", te);
-            return false;
+            return failReplicate("Репликация: таймаут ожидания подтверждений Kafka", te, false);
         } catch (org.apache.kafka.common.KafkaException ke) {
-            LOG.error("Репликация: ошибка продьюсера Kafka", ke);
-            return false;
+            return failReplicate("Репликация: ошибка продьюсера Kafka", ke, false);
         } catch (RuntimeException e) {
-            LOG.error("Репликация: непредвиденная ошибка", e);
-            return false;
+            return failReplicate("Репликация: непредвиденная ошибка", e, false);
         }
+    }
+
+    /**
+     * Унифицированная обработка отказа replicate(): краткое сообщение на WARN/ERROR и стек на DEBUG.
+     * @param prefix краткий текст события
+     * @param ex исключение
+     * @param warn если true — писать WARN; иначе ERROR
+     * @return всегда false, чтобы попросить HBase повторить партию
+     */
+    private boolean failReplicate(String prefix, Throwable ex, boolean warn) {
+        if (warn) {
+            LOG.warn("{}: {}", prefix, ex.getMessage());
+        } else {
+            LOG.error("{}: {}", prefix, ex.getMessage());
+        }
+        if (LOG.isDebugEnabled()) {
+            LOG.debug("Трассировка ошибки в replicate()", ex);
+        }
+        onReplicateFailure();
+        return false;
+    }
+
+    /**
+     * Фиксирует отказ репликации для метрик и диагностики.
+     * Вызывается из обработчиков исключений в replicate().
+     */
+    private void onReplicateFailure() {
+        replicateFailures.increment();
+        lastReplicateFailureAt.set(System.currentTimeMillis());
     }
 
     private void replicateOnce(List<WAL.Entry> entries)
             throws InterruptedException, ExecutionException, TimeoutException {
+    // Контракт: отправляет события в Kafka, периодически ожидая подтверждения по awaitEvery/awaitTimeoutMs.
+    // Исключения пробрасываются наружу и обрабатываются в replicate(). Никаких sleep/побочных потоков.
     final int awaitEvery = producerSettings.getAwaitEvery();
     final int awaitTimeoutMs = producerSettings.getAwaitTimeoutMs();
 
@@ -339,6 +395,15 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
         }
         if (topicManager != null) {
             topicManager.closeQuietly();
+        }
+        // Снятие регистрации JMX-метрик (если были зарегистрированы)
+        try {
+            if (h2kJmxName != null) {
+                H2kMetricsJmx.unregisterQuietly(h2kJmxName);
+                h2kJmxName = null;
+            }
+        } catch (RuntimeException ignore) {
+            // игнорируем при остановке
         }
         notifyStopped();
     }

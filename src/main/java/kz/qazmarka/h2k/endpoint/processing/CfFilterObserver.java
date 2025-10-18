@@ -23,9 +23,15 @@ final class CfFilterObserver {
     private static final Logger LOG = LoggerFactory.getLogger(CfFilterObserver.class);
     private static final long MIN_ROWS_TO_LOG = 500L;
     private static final double MIN_RATIO = 0.01d; // 1%
+    /**
+     * Порог «слишком эффективного» фильтра — когда отфильтровано 95%+ строк. Это может указывать на
+     * избыточно широкую конфигурацию CF и риски пропуска нужных данных. Логируем один раз на таблицу.
+     */
+    private static final double TOO_EFFECTIVE_RATIO = 0.95d; // 95%
 
     private final ConcurrentHashMap<TableName, Stats> statsByTable = new ConcurrentHashMap<>();
     private final Set<TableName> ineffectiveWarned = ConcurrentHashMap.newKeySet();
+    private final Set<TableName> tooEffectiveWarned = ConcurrentHashMap.newKeySet();
     private final boolean enabled;
 
     private CfFilterObserver(boolean enabled) {
@@ -62,33 +68,47 @@ final class CfFilterObserver {
                  long rowsFiltered,
                  boolean filterActive,
                  CfFilterSnapshot cfSnapshot) {
-        if (!enabled) {
-            return;
-        }
-        if (!filterActive || table == null || cfSnapshot == null) {
-            return;
-        }
-        if (rowsTotal <= 0L) {
-            return;
-        }
+        if (!enabled) return;
+        if (!filterActive || table == null || cfSnapshot == null) return;
+        if (rowsTotal <= 0L) return;
+
         Stats stats = statsByTable.computeIfAbsent(table, t -> new Stats());
         stats.rowsTotal.add(rowsTotal);
         stats.rowsFiltered.add(rowsFiltered);
+
         long total = stats.rowsTotal.sum();
+        if (total < MIN_ROWS_TO_LOG) return;
+
         long filtered = stats.rowsFiltered.sum();
-        if (total >= MIN_ROWS_TO_LOG) {
-            double ratio = filtered <= 0L ? 0.0d : (double) filtered / (double) total;
-            logEffectiveness(table, stats, total, filtered, ratio, cfSnapshot);
-            if (ratio < MIN_RATIO && ineffectiveWarned.add(table) && LOG.isWarnEnabled()) {
-                String cfCsv = safeCsv(cfSnapshot);
-                LOG.warn(
-                        "CF-фильтр для таблицы {} почти неэффективен: обработано {} строк, отфильтровано {} ({}%). Рассмотрите корректировку списка CF '{}'.",
-                        table,
-                        total,
-                        filtered,
-                        formatPercent(ratio),
-                        cfCsv.isEmpty() ? "-" : cfCsv);
-            }
+        double ratio = filtered <= 0L ? 0.0d : (double) filtered / (double) total;
+        evaluateAndWarn(table, stats, total, filtered, ratio, cfSnapshot);
+    }
+
+    /**
+     * Выполняет логирование эффективности и разовые предупреждения для неэффективного/слишком эффективного фильтра.
+     */
+    private void evaluateAndWarn(TableName table,
+                                 Stats stats,
+                                 long total,
+                                 long filtered,
+                                 double ratio,
+                                 CfFilterSnapshot cfSnapshot) {
+        logEffectiveness(table, stats, total, filtered, ratio, cfSnapshot);
+        if (!LOG.isWarnEnabled()) {
+            return;
+        }
+        if (ratio < MIN_RATIO && ineffectiveWarned.add(table)) {
+            String cfCsv = safeCsv(cfSnapshot);
+            LOG.warn(
+                    "CF-фильтр для таблицы {} почти неэффективен: обработано {} строк, отфильтровано {} ({}%). Рассмотрите корректировку списка CF '{}'.",
+                    table, total, filtered, formatPercent(ratio), cfCsv.isEmpty() ? "-" : cfCsv);
+            return;
+        }
+        if (ratio >= TOO_EFFECTIVE_RATIO && tooEffectiveWarned.add(table)) {
+            String cfCsv = safeCsv(cfSnapshot);
+            LOG.warn(
+                    "CF-фильтр для таблицы {} возможно слишком агрессивен: обработано {} строк, отфильтровано {} ({}%). Проверьте конфигурацию CF '{}', чтобы избежать потери нужных событий.",
+                    table, total, filtered, formatPercent(ratio), cfCsv.isEmpty() ? "-" : cfCsv);
         }
     }
 
@@ -97,6 +117,13 @@ final class CfFilterObserver {
             return 0L;
         }
         return ineffectiveWarned.size();
+    }
+
+    long tooEffectiveTables() {
+        if (!enabled) {
+            return 0L;
+        }
+        return tooEffectiveWarned.size();
     }
 
     Map<TableName, Stats> snapshot() {

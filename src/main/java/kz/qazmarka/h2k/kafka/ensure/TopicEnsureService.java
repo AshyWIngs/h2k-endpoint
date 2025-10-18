@@ -85,14 +85,6 @@ final class TopicEnsureService implements AutoCloseable {
     }
 
     /**
-     * Проверяет существование темы и при отсутствии — пытается создать её (идемпотентно).
-     *
-     * Быстрые ветки: пустое/некорректное имя → WARN и выход; кеш ensured; активный backoff.
-     * При UNKNOWN‑ситуациях (таймаут/ACL/сеть) назначает короткий backoff с джиттером.
-     *
-     * @param topic имя Kafka‑топика
-     */
-    /**
      * Основной ensure-цикл для одной темы: нормализует имя, проверяет кеш и backoff, выполняет describe/create.
      */
     public void ensureTopic(String topic) {
@@ -504,8 +496,23 @@ final class TopicEnsureService implements AutoCloseable {
         return sb.toString();
     }
 
+    /**
+     * Формирует краткое человекочитаемое описание причины ошибки без использования toString().
+     * На WARN/INFO оставляем только тип и сообщение; полный стек выводится отдельно в DEBUG.
+     *
+     * @param cause исходная причина (может быть null)
+     * @return строка вида "IllegalStateException: описание" либо "неизвестная причина" при {@code null}
+     */
     private static String safeCause(Throwable cause) {
-        return (cause == null) ? "неизвестная причина" : cause.toString();
+        if (cause == null) {
+            return "неизвестная причина";
+        }
+        final String type = cause.getClass().getSimpleName();
+        final String msg = cause.getMessage();
+        if (msg == null || msg.isEmpty()) {
+            return type;
+        }
+        return type + ": " + msg;
     }
 
     private static boolean append(StringBuilder sb, String key, String value, boolean first) {
@@ -642,13 +649,13 @@ final class TopicEnsureService implements AutoCloseable {
             if (LOG.isDebugEnabled()) {
                 LOG.debug("Не удалось проверить/увеличить партиции Kafka-топика '{}'", t, e);
             } else {
-                LOG.warn("Не удалось проверить/увеличить партиции Kafka-топика '{}': {}", t, e.toString());
+                LOG.warn("Не удалось проверить/увеличить партиции Kafka-топика '{}': {}", t, e.getMessage());
             }
         } catch (RuntimeException e) {
             if (LOG.isDebugEnabled()) {
                 LOG.debug("Не удалось проверить/увеличить партиции Kafka-топика '{}' (runtime)", t, e);
             } else {
-                LOG.warn("Не удалось проверить/увеличить партиции Kafka-топика '{}' (runtime): {}", t, e.toString());
+                LOG.warn("Не удалось проверить/увеличить партиции Kafka-топика '{}' (runtime): {}", t, e.getMessage());
             }
         }
     }
@@ -756,7 +763,7 @@ final class TopicEnsureService implements AutoCloseable {
         if (LOG.isDebugEnabled()) {
             LOG.debug("Не удалось привести конфиги Kafka-топика '{}'", t, e);
         } else {
-            LOG.warn("Не удалось привести конфиги Kafka-топика '{}': {}", t, e.toString());
+            LOG.warn("Не удалось привести конфиги Kafka-топика '{}': {}", t, e.getMessage());
         }
     }
 
@@ -764,7 +771,7 @@ final class TopicEnsureService implements AutoCloseable {
         if (LOG.isDebugEnabled()) {
             LOG.debug("Не удалось привести конфиги Kafka-топика '{}' (runtime)", t, e);
         } else {
-            LOG.warn("Не удалось привести конфиги Kafka-топика '{}' (runtime): {}", t, e.toString());
+            LOG.warn("Не удалось привести конфиги Kafka-топика '{}' (runtime): {}", t, e.getMessage());
         }
     }
 

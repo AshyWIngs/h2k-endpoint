@@ -64,6 +64,37 @@ class CfFilterObserverTest {
     }
 
     @Test
+    @DisplayName("Наблюдатель фиксирует слишком агрессивный фильтр (95%+)")
+    void detectsTooEffectiveFilter() {
+        Configuration configuration = new Configuration(false);
+        configuration.set("h2k.kafka.bootstrap.servers", "mock:9092");
+        configuration.set("h2k.topic.pattern", "${namespace}.${qualifier}");
+        PhoenixTableMetadataProvider provider = new PhoenixTableMetadataProvider() {
+            @Override
+            public Integer saltBytes(TableName table) { return null; }
+
+            @Override
+            public Integer capacityHint(TableName table) { return null; }
+
+            @Override
+            public String[] columnFamilies(TableName table) { return new String[]{"cf1","cf2"}; }
+        };
+        H2kConfig h2kConfig = H2kConfig.from(configuration, "mock:9092", provider);
+
+        CfFilterObserver observer = CfFilterObserver.create();
+        TableName table = TableName.valueOf("ns", "too_effective");
+        CfFilterSnapshot snapshot = h2kConfig.describeCfFilter(table);
+
+        // 96% отфильтровано: 480 из 500, пять раз — чтобы гарантировать накопление выше порога
+        for (int i = 0; i < 5; i++) {
+            observer.observe(table, 500, 480, true, snapshot);
+        }
+        assertTrue(observer.tooEffectiveTables() >= 1, "Ожидаем предупреждение о слишком агрессивном фильтре");
+        // При этом не должно считаться как 'неэффективный' (низкая доля)
+        assertEquals(0L, observer.ineffectiveTables(), "Неэффективный счётчик не должен увеличиваться");
+    }
+
+    @Test
     @DisplayName("Отключённый CfFilterObserver не накапливает статистику")
     void disabledObserverSkipsAccumulation() {
         CfFilterObserver observer = CfFilterObserver.disabled();

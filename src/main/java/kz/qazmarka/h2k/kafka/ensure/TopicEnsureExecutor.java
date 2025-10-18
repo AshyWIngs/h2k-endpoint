@@ -110,7 +110,7 @@ final class TopicEnsureExecutor implements AutoCloseable {
         try {
             service.ensureTopic(topic);
         } catch (RuntimeException ex) {
-            LOG.warn("Ensure-поток: ошибка при обработке темы '{}': {}", topic, ex.toString());
+            LOG.warn("Ensure-поток: ошибка при обработке темы '{}': {}", topic, ex.getMessage());
             if (LOG.isDebugEnabled()) {
                 LOG.debug("Ensure-поток: трассировка ошибки '{}'", topic, ex);
             }

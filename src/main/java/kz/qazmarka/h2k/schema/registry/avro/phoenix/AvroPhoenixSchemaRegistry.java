@@ -10,6 +10,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicReference;
 
+import org.apache.avro.JsonProperties;
 import org.apache.avro.Schema;
 import org.apache.avro.Schema.Field;
 import org.apache.hadoop.hbase.TableName;
@@ -35,6 +36,7 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
     private static final String PROP_SALT = "h2k.saltBytes";
     private static final String PROP_CAPACITY = "h2k.capacityHint";
     private static final String PROP_CF_LIST = "h2k.cf.list";
+    private static final String WARN_CF_FILTER_DISABLED = "Avro-схема {}: h2k.cf.list не содержит валидных имён — фильтр будет отключён";
     private static final ObjectMapper PK_MAPPER = new ObjectMapper();
 
     private final AvroSchemaRegistry avroRegistry;
@@ -116,13 +118,13 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
         Integer salt = readSaltBytes(schema, table);
         Integer capacity = readCapacityHint(schema, table);
         String[] cfFamilies = readColumnFamilies(schema, table);
-        Logger logger = logger();
-        if (logger.isDebugEnabled()) {
+        Logger log = logger();
+        if (log.isDebugEnabled()) {
             String pkText = pk.length == 0 ? "-" : String.join(",", pk);
             String saltText = salt == null ? "-" : salt.toString();
             String capacityText = capacity == null ? "-" : capacity.toString();
             String cfText = cfFamilies.length == 0 ? "-" : String.join(",", cfFamilies);
-            logger.debug("Avro-схема {} загружена: файл={}, полей={}, pk={}, соль={}, capacity={}, cf={}, cacheSize={}",
+            log.debug("Avro-схема {} загружена: файл={}, полей={}, pk={}, соль={}, capacity={}, cf={}, cacheSize={}",
                     table.getNameAsString(),
                     schemaPath.toAbsolutePath(),
                     schema.getFields().size(),
@@ -144,16 +146,22 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
             return sanitizeCfFromJson((JsonNode) raw, table);
         }
         if (raw instanceof java.util.List<?>) {
-            return sanitizeCfFromList((java.util.List<?>) raw);
+            return sanitizeCfFromList((java.util.List<?>) raw, table);
         }
         if (!(raw instanceof CharSequence)) {
-            logger().warn("Avro-схема {}: h2k.cf.list имеет неподдерживаемый тип {} — значение будет обработано как CSV-строка",
-                    table.getNameAsString(), raw.getClass().getName());
+            Logger log = logger();
+            log.warn("Avro-схема {}: h2k.cf.list имеет неподдерживаемый тип — будет обработано как CSV",
+                    table.getNameAsString());
+            log.debug("h2k.cf.list: неподдерживаемый тип: {}", raw.getClass().getName());
         }
         String text = String.valueOf(raw);
         return sanitizeCfCsv(text, table);
     }
 
+    /**
+     * Нормализует список CF из JSON-массива: обрезает пробелы, отбрасывает пустые элементы,
+     * устраняет дубликаты, сохраняет порядок. Если узел не массив — возвращает пустой список.
+     */
     String[] sanitizeCfFromJson(JsonNode node, TableName table) {
         if (!node.isArray()) {
             logger().warn("Avro-схема {}: h2k.cf.list задан в виде JSON, но не является массивом — значение проигнорировано", table.getNameAsString());
@@ -170,23 +178,53 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
                 values.add(val);
             }
         }
-        return deduplicate(values);
+        String[] families = deduplicate(values);
+        if (families.length == 0) {
+            Logger log = logger();
+            log.warn(WARN_CF_FILTER_DISABLED, table.getNameAsString());
+            log.debug("h2k.cf.list: JSON-массив без валидных значений: {}", node);
+        }
+        return families;
     }
 
-    private String[] sanitizeCfFromList(java.util.List<?> list) {
+    /**
+     * Нормализует список CF из java.util.List: приводит элементы к строке, обрезает пробелы,
+     * отбрасывает пустые, устраняет дубликаты, сохраняет порядок.
+     */
+    String[] sanitizeCfFromList(java.util.List<?> list, TableName table) {
         if (list.isEmpty()) {
             return SchemaRegistry.EMPTY;
         }
         java.util.List<String> values = new java.util.ArrayList<>(list.size());
         for (Object o : list) {
-            String normalized = normalizeCfName(o == null ? null : String.valueOf(o));
+            String asText;
+            if (o == null || o == JsonProperties.NULL_VALUE) {
+                asText = null;
+            } else if (o instanceof JsonNode) {
+                JsonNode node = (JsonNode) o;
+                asText = node.isNull() ? null : node.asText();
+            } else {
+                asText = String.valueOf(o);
+            }
+            String normalized = normalizeCfName(asText);
             if (normalized != null) {
                 values.add(normalized);
             }
         }
-        return deduplicate(values);
+        String[] families = deduplicate(values);
+        if (families.length == 0) {
+            Logger log = logger();
+            log.warn(WARN_CF_FILTER_DISABLED, table.getNameAsString());
+            log.debug("h2k.cf.list: список без валидных значений: {}", list);
+        }
+        return families;
     }
 
+    /**
+     * Нормализует список CF из CSV-строки: разбивает по запятым, обрезает пробелы,
+     * отбрасывает пустые, устраняет дубликаты. Если после очистки список пуст —
+     * фильтр CF отключается.
+     */
     private String[] sanitizeCfCsv(String raw, TableName table) {
         if (raw == null) {
             return SchemaRegistry.EMPTY;
@@ -204,7 +242,7 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
             }
         }
         if (values.isEmpty()) {
-            logger().warn("Avro-схема {}: h2k.cf.list не содержит валидных имён — фильтр будет отключён", table.getNameAsString());
+            logger().warn(WARN_CF_FILTER_DISABLED, table.getNameAsString());
             return SchemaRegistry.EMPTY;
         }
         return deduplicate(values);
@@ -237,11 +275,13 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
             return null;
         }
         if (value < 0) {
-            logger().warn("Avro-схема {}: h2k.saltBytes={} < 0 — значение будет проигнорировано", table.getNameAsString(), value);
+            logger().warn("Avro-схема {}: h2k.saltBytes < 0 — значение будет проигнорировано", table.getNameAsString());
+            logger().debug("h2k.saltBytes: отрицательное значение: {}", value);
             return null;
         }
         if (value > 8) {
-            logger().warn("Avro-схема {}: h2k.saltBytes={} > 8 — значение будет ограничено 8", table.getNameAsString(), value);
+            logger().warn("Avro-схема {}: h2k.saltBytes > 8 — значение будет ограничено 8", table.getNameAsString());
+            logger().debug("h2k.saltBytes: исходное значение ограничено: {}", value);
             return 8;
         }
         return value;
@@ -258,7 +298,8 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
             return null;
         }
         if (value < 0) {
-            logger().warn("Avro-схема {}: h2k.capacityHint={} < 0 — значение будет проигнорировано", table.getNameAsString(), value);
+            logger().warn("Avro-схема {}: h2k.capacityHint < 0 — значение будет проигнорировано", table.getNameAsString());
+            logger().debug("h2k.capacityHint: отрицательное значение: {}", value);
             return null;
         }
         return value;
@@ -274,9 +315,9 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
             return copyPkFromList(list);
         }
         if (raw != null && !(raw instanceof CharSequence)) {
-            Logger logger = logger();
-            logger.warn("Avro-схема {}: h2k.pk имеет неподдерживаемый тип {} — значение будет проигнорировано",
-                    schema.getFullName(), raw.getClass().getName());
+            Logger log = logger();
+            log.warn("Avro-схема {}: h2k.pk имеет неподдерживаемый тип — значение будет проигнорировано", schema.getFullName());
+            log.debug("h2k.pk: неподдерживаемый тип: {}", raw.getClass().getName());
             return SchemaRegistry.EMPTY;
         }
         if (raw instanceof CharSequence) {
@@ -335,11 +376,10 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
             JsonNode node = PK_MAPPER.readTree(json);
             return readPkFromJsonNode(node);
         } catch (java.io.IOException e) {
-            Logger logger = logger();
-            logger.warn("Не удалось распарсить h2k.pk из Avro-схемы ({}): {}", json, e.toString());
-            if (logger.isDebugEnabled()) {
-                logger.debug("Трассировка парсинга h2k.pk", e);
-            }
+            Logger log = logger();
+            // Короткое предупреждение без длинного содержимого JSON; подробности уходим в DEBUG.
+            log.warn("Не удалось распарсить h2k.pk из Avro-схемы — значение будет проигнорировано: {}", e.getMessage());
+            log.debug("Трассировка парсинга h2k.pk, исходное значение='{}'", json, e);
             return SchemaRegistry.EMPTY;
         }
     }
@@ -379,8 +419,10 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
     }
 
     private void logInvalidNumeric(TableName table, String prop, Object raw) {
-        logger().warn("Avro-схема {}: свойство {} имеет некорректное значение '{}' — будет проигнорировано",
-                table.getNameAsString(), prop, raw);
+        Logger log = logger();
+        log.warn("Avro-схема {}: свойство {} имеет некорректное значение — будет проигнорировано",
+        table.getNameAsString(), prop);
+        log.debug("Некорректное числовое свойство {}: исходное значение='{}'", prop, raw);
     }
 
     private static final class TableMetadata {

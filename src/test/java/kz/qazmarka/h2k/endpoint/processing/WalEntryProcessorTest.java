@@ -167,6 +167,64 @@ class WalEntryProcessorTest {
         assertTrue(produced.value() != null && produced.value().length > 0, "Payload не должен быть пустым");
     }
 
+    @Test
+    @DisplayName("Сбой отправки продьюсера приводит к ExecutionException при flush/close")
+    void producerFailurePropagatesAsExecutionException() {
+        // Конфигурация и метаданные как в обычном сценарии
+        PhoenixTableMetadataProvider provider = provider(new String[]{"d"});
+        Configuration cfg = new Configuration(false);
+        cfg.set("h2k.kafka.bootstrap.servers", "mock:9092");
+        cfg.set("h2k.avro.sr.urls", "http://mock");
+        cfg.set("h2k.avro.schema.dir", Paths.get("src", "test", "resources", "avro").toAbsolutePath().toString());
+        cfg.set("h2k.topic.pattern", "${namespace}.${qualifier}");
+
+        SchemaRegistryClientFactory factory = (urls, props, capacity) -> new MockSchemaRegistryClient();
+        H2kConfig h2kConfig = H2kConfig.from(cfg, "mock:9092", provider);
+
+        PayloadBuilder payloadBuilder = new PayloadBuilder(decoder(), h2kConfig, factory);
+        TopicManager topicManager = new TopicManager(h2kConfig.getTopicSettings(), TopicEnsurer.disabled());
+
+        // Продьюсер, у которого send() всегда возвращает exceptional future
+        class FailingProducer implements org.apache.kafka.clients.producer.Producer<byte[], byte[]> {
+            private java.util.concurrent.CompletableFuture<org.apache.kafka.clients.producer.RecordMetadata> failedFuture() {
+                java.util.concurrent.CompletableFuture<org.apache.kafka.clients.producer.RecordMetadata> cf = new java.util.concurrent.CompletableFuture<>();
+                cf.completeExceptionally(new IllegalStateException("simulated send failure"));
+                return cf;
+            }
+            @Override public java.util.concurrent.Future<org.apache.kafka.clients.producer.RecordMetadata> send(org.apache.kafka.clients.producer.ProducerRecord<byte[], byte[]> rec) { return failedFuture(); }
+            @Override public java.util.concurrent.Future<org.apache.kafka.clients.producer.RecordMetadata> send(org.apache.kafka.clients.producer.ProducerRecord<byte[], byte[]> rec, org.apache.kafka.clients.producer.Callback cb) { return failedFuture(); }
+            @Override public void flush() { /* no-op for test */ }
+            @Override public List<org.apache.kafka.common.PartitionInfo> partitionsFor(String topic) { return Collections.emptyList(); }
+            @Override public Map<org.apache.kafka.common.MetricName, ? extends org.apache.kafka.common.Metric> metrics() { return Collections.emptyMap(); }
+            @Override public void close() { /* no-op for test */ }
+            @Override public void close(java.time.Duration timeout) { /* no-op for test */ }
+            @Override public void initTransactions() { throw new UnsupportedOperationException("not used in test"); }
+            @Override public void beginTransaction() { throw new UnsupportedOperationException("not used in test"); }
+            @Override public void commitTransaction() { throw new UnsupportedOperationException("not used in test"); }
+            @Override public void abortTransaction() { throw new UnsupportedOperationException("not used in test"); }
+            @Override public void sendOffsetsToTransaction(Map<org.apache.kafka.common.TopicPartition, org.apache.kafka.clients.consumer.OffsetAndMetadata> offsets, String consumerGroupId) { throw new UnsupportedOperationException("not used in test"); }
+        }
+        org.apache.kafka.clients.producer.Producer<byte[], byte[]> failingProducer = new FailingProducer();
+
+        WalEntryProcessor processor = new WalEntryProcessor(payloadBuilder, topicManager, failingProducer, h2kConfig);
+
+        byte[] row = bytes("rk-fail");
+        WALKey key = new WALKey(row, TABLE, 1L);
+        WALEdit edit = new WALEdit();
+        edit.add(new KeyValue(row, Bytes.toBytes("d"), Bytes.toBytes("q"), 1L, Bytes.toBytes("v")));
+        WAL.Entry entry = new Entry(key, edit);
+
+        // Ожидаем ExecutionException из-за exceptional future продьюсера
+        ExecutionException thrown = org.junit.jupiter.api.Assertions.assertThrows(ExecutionException.class, () -> {
+            try (BatchSender sender = new BatchSender(1, 500)) {
+                processor.process(entry, sender, false);
+            }
+        });
+        org.junit.jupiter.api.Assertions.assertTrue(thrown.getCause() instanceof IllegalStateException,
+                "Причина должна сохранять исходное исключение отправки");
+        org.junit.jupiter.api.Assertions.assertEquals("simulated send failure", thrown.getCause().getMessage());
+    }
+
     private static void processWalEntry(WalEntryProcessor processor, WAL.Entry entry, int batchSize) {
         try (BatchSender sender = new BatchSender(batchSize, 1_000)) {
             processor.process(entry, sender, false);

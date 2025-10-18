@@ -18,6 +18,15 @@ import kz.qazmarka.h2k.config.TableValueSource;
  * Фиксирует использование соли Phoenix (h2k.saltBytes) на горячем пути.
  * Считывает длину rowkey и оценивает эффективность соли, логируя предупреждения при аномалиях.
  */
+/**
+ * Потокобезопасный сборщик статистики по длине rowkey vs saltBytes.
+ *
+ * Конкурентность и производительность:
+ * - На горячем пути используются lock-free примитивы (LongAdder/Atomic*),
+ *   чтобы не блокировать обработку WAL.
+ * - lastInfoLogged — AtomicLong для редкого INFO-логирования пакетами по LOG_THRESHOLD строк.
+ * - Локирование отсутствует, кроме редкого обновления метаданных соли (synchronized внутри refreshSaltMetadata()).
+ */
 final class SaltUsageObserver {
 
     private static final AtomicReference<Logger> LOG = new AtomicReference<>(LoggerFactory.getLogger(SaltUsageObserver.class));

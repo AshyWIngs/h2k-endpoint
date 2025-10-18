@@ -97,13 +97,15 @@ log4j.logger.org.apache.phoenix=WARN
 - При переполнении буфера — увеличить h2k.producer.buffer.memory или уменьшить batch.size/linger.ms.
 
 ### Ошибки ensure.topics
-- Если h2k.ensure.topics=true, но топики не создаются:
   - Проверить права у Kafka Admin.
   - Проверить h2k.topic.replication и h2k.topic.partitions.
   - Проверить h2k.admin.timeout.ms и h2k.ensure.unknown.backoff.ms.
   - В логах TopicEnsureService ищите метрики `ensure.*`, `exists.*`, `create.*` — они показываются при DEBUG и
     доступны через `TopicManager.getMetrics()`. Поле `unknown.backoff.size` отражает размер очереди ожидания без
     лишних копий.
+  - Для диагностики отказов репликации добавлены метрики `replicate.failures.total` и `replicate.last.failure.epoch.ms`.
+    Они регистрируются через `TopicManager.registerMetric(...)` и доступны в снимке `TopicManager.getMetrics()`.
+    Первая — общий счётчик неуспешных попыток `replicate()`, вторая — отметка времени (epoch ms) последней ошибки.
   - Для детального анализа backoff включите DEBUG для `kz.qazmarka.h2k.kafka.ensure.TopicBackoffManager` — в логах
     будет указан дедлайн повторной попытки. Дополнительно можно сериализовать `TopicManager.getMetrics()` в JMX и
     следить за `ensure.*`/`create.*`/`unknown.backoff.size` в реальном времени.

@@ -1,0 +1,16 @@
+# Minimal rules to scrape H2K metrics from RegionServer JVM via javaagent
+# Place this file on RegionServer host and start RS with:
+#   -javaagent:/opt/jmx/jmx_prometheus_javaagent.jar=9404:/opt/jmx/h2k_jmx_javaagent.yml
+
+lowercaseOutputName: true
+lowercaseOutputLabelNames: true
+# Only our MBean; keep noise low
+whitelistObjectNames:
+  - 'kz.qazmarka.h2k:type=Endpoint,name=H2KMetrics*'
+
+rules:
+  # Export all numeric attributes as h2k_*
+  - pattern: 'kz.qazmarka.h2k<type=Endpoint, name=H2KMetrics(?:, uid=[^>]*)?>:(.*)'
+    name: h2k_$1
+    type: GAUGE
+    help: 'H2K metric $1 exported from JMX'

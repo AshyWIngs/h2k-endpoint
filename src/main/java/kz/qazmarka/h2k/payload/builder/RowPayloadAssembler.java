@@ -376,8 +376,11 @@ final class RowPayloadAssembler {
         }
 
         private void warnInvalidSkip(TableName table, Schema.Field field, Object raw) {
-        LOG.warn("Avro-схема {}: поле {} имеет некорректное значение '{}' для {} — значение будет проигнорировано",
-            table.getNameAsString(), field.name(), raw, skipProperty);
+            LOG.warn("Avro-схема {}: поле {} имеет некорректное значение для {} — будет проигнорировано",
+                    table.getNameAsString(), field.name(), skipProperty);
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("{}: исходное значение='{}'", skipProperty, raw);
+            }
         }
 
         private FieldPlan lookupField(Map<String, FieldPlan> fields, String name) {
@@ -553,7 +556,11 @@ final class RowPayloadAssembler {
         }
     }
 
-    /** Минимальный потокобезопасный кэш qualifier → String. */
+    /**
+     * Минимальный потокобезопасный кэш qualifier → String.
+     * synchronized только на короткой операции lookup, чтобы переиспользовать объект LookupKey
+     * и не создавать мусор; вставки в карту выполняются без блокировки через ConcurrentHashMap.
+     */
     private static final class QualifierCache {
         private final ConcurrentHashMap<AbstractKey, String> cache = new ConcurrentHashMap<>(64);
         private final LookupKey lookup = new LookupKey();

@@ -1,0 +1,17 @@
+# Minimal rules to scrape H2K metrics via standalone jmx_exporter httpserver
+# Start on RegionServer host:
+#   java -jar jmx_prometheus_httpserver.jar 9404 conf/jmx/h2k_jmx_standalone.yml
+
+startDelaySeconds: 0
+hostPort: 127.0.0.1:9010
+ssl: false
+lowercaseOutputName: true
+lowercaseOutputLabelNames: true
+whitelistObjectNames:
+  - 'kz.qazmarka.h2k:type=Endpoint,name=H2KMetrics*'
+
+rules:
+  - pattern: 'kz.qazmarka.h2k<type=Endpoint, name=H2KMetrics(?:, uid=[^>]*)?>:(.*)'
+    name: h2k_$1
+    type: GAUGE
+    help: 'H2K metric $1 exported from JMX'
