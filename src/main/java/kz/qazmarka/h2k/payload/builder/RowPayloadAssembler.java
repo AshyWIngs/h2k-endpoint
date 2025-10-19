@@ -1,10 +1,9 @@
 package kz.qazmarka.h2k.payload.builder;
 
 import java.nio.charset.StandardCharsets;
-import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
-import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
@@ -14,10 +13,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericData;
 import org.apache.hadoop.hbase.Cell;
+import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.TableName;
-import org.apache.hadoop.hbase.util.Bytes;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 import kz.qazmarka.h2k.config.CfFilterSnapshot;
 import kz.qazmarka.h2k.config.H2kConfig;
@@ -30,11 +27,13 @@ import kz.qazmarka.h2k.util.RowKeySlice;
 
 /**
  * Формирует Avro {@link GenericData.Record} для строки WAL без промежуточных карт.
- * Табличный план (поля, индексы PK, служебные поля) вычисляется один раз и переиспользуется.
+ * План обработки таблицы вычисляется один раз и кешируется.
  */
 final class RowPayloadAssembler {
 
-    private static final Logger LOG = LoggerFactory.getLogger(RowPayloadAssembler.class);
+    private static final org.slf4j.Logger LOG =
+            org.slf4j.LoggerFactory.getLogger(RowPayloadAssembler.class);
+
     private static final String FIELD_EVENT_TS = PayloadFields.EVENT_TS;
     private static final String FIELD_DELETE = PayloadFields.DELETE;
 
@@ -42,17 +41,17 @@ final class RowPayloadAssembler {
     private final H2kConfig cfg;
     private final QualifierCache qualifierCache = new QualifierCache();
     private final Set<String> tableOptionsLogged = ConcurrentHashMap.newKeySet();
-    private final TablePlanCache tablePlans;
-    private static final CellActionResolver CELL_ACTIONS = new CellActionResolver();
+    private final TableSchemaCache schemaCache;
+    private final LinkedHashMap<String, Object> pkBuffer = new LinkedHashMap<>(8);
 
     RowPayloadAssembler(Decoder decoder, H2kConfig cfg, AvroSchemaRegistry schemaRegistry) {
         this.decoder = Objects.requireNonNull(decoder, "decoder");
         this.cfg = Objects.requireNonNull(cfg, "cfg");
-        this.tablePlans = new TablePlanCache(cfg, schemaRegistry);
+        this.schemaCache = new TableSchemaCache(cfg, schemaRegistry);
     }
 
     GenericData.Record assemble(TableName table,
-                                List<Cell> cells,
+                                java.util.List<Cell> cells,
                                 RowKeySlice rowKey,
                                 long walSeq,
                                 long walWriteTime) {
@@ -60,159 +59,115 @@ final class RowPayloadAssembler {
             debugTableOptions(table);
         }
 
-        TablePlan plan = tablePlans.planFor(table);
-        GenericData.Record avroRecord = plan.newRecord();
+        TableSchema schema = schemaCache.schemaFor(table);
+        ensureRowKeyPresent(table, rowKey);
+        GenericData.Record avroRecord = schema.newRecord();
 
-        PkCollector pkCollector = new PkCollector(plan);
-        pkCollector.bind(avroRecord);
-        decodePrimaryKey(table, rowKey, plan, pkCollector);
-
-        RowAssemblyState state = new RowAssemblyState(table, plan, avroRecord);
-        if (cells != null) {
-            for (Cell cell : cells) {
-                if (cell == null) {
-                    continue;
-                }
-                state.accept(cell);
-            }
-        }
-        state.applyFlags();
-
-        plan.applyWalMetadata(avroRecord, walSeq, walWriteTime);
-
+        decodePrimaryKey(table, schema, rowKey, avroRecord);
+        RowProcessingState state = fillRecordWithCells(table, schema, avroRecord, cells);
+        applyFlags(schema, avroRecord, state, walSeq, walWriteTime);
+        schema.verifyPrimaryKey(table, avroRecord);
         return avroRecord;
     }
 
-    /**
-     * Состояние сборки строки: аккумулирует метаданные и делегирует обработку ячеек стратегиям.
-     */
-    private final class RowAssemblyState {
-        private final TableName table;
-        private final TablePlan plan;
-        private final GenericData.Record avroRecord;
-        private long maxTimestamp = Long.MIN_VALUE;
-        private boolean hasDelete;
-
-        RowAssemblyState(TableName table, TablePlan plan, GenericData.Record avroRecord) {
-            this.table = table;
-            this.plan = plan;
-            this.avroRecord = avroRecord;
-        }
-
-        void accept(Cell cell) {
-            long ts = cell.getTimestamp();
-            if (ts > maxTimestamp) {
-                maxTimestamp = ts;
-            }
-            CELL_ACTIONS.resolve(cell).apply(this, cell);
-        }
-
-        void handleDelete(Cell cell) {
-            Objects.requireNonNull(cell, "cell");
-            hasDelete = true;
-        }
-
-        void handleValue(Cell cell) {
-            String column = qualifierCache.intern(
-                    cell.getQualifierArray(),
-                    cell.getQualifierOffset(),
-                    cell.getQualifierLength());
-            FieldPlan field = plan.field(column);
-            if (field == null || field.skip()) {
-                return;
-            }
-
-            Object decodedValue = decoder.decode(
-                    table,
-                    cell.getQualifierArray(),
-                    cell.getQualifierOffset(),
-                    cell.getQualifierLength(),
-                    cell.getValueArray(),
-                    cell.getValueOffset(),
-                    cell.getValueLength());
-
-            Object valueToWrite = decodedValue;
-            if (valueToWrite == null && cell.getValueLength() > 0) {
-                valueToWrite = BinarySlice.of(
-                        cell.getValueArray(),
-                        cell.getValueOffset(),
-                        cell.getValueLength());
-            }
-
-            if (valueToWrite != null) {
-                field.write(avroRecord, valueToWrite);
-            }
-        }
-
-        void applyFlags() {
-            if (plan.eventTsIndex >= 0 && maxTimestamp != Long.MIN_VALUE) {
-                avroRecord.put(plan.eventTsIndex, maxTimestamp);
-            }
-            if (plan.deleteIndex >= 0 && hasDelete) {
-                avroRecord.put(plan.deleteIndex, Boolean.TRUE);
-            }
-        }
-    }
-
-    private enum CellAction {
-        UPSERT {
-            @Override
-            void apply(RowAssemblyState state, Cell cell) {
-                state.handleValue(cell);
-            }
-        },
-        DELETE {
-            @Override
-            void apply(RowAssemblyState state, Cell cell) {
-                state.handleDelete(cell);
-            }
-        };
-
-        abstract void apply(RowAssemblyState state, Cell cell);
-    }
-
-    /**
-     * Быстрая таблица действий для типов ячеек WAL, чтобы избежать повторного ветвления в горячем цикле.
-     */
-    private static final class CellActionResolver {
-        private final CellAction[] lookup;
-
-        CellActionResolver() {
-            this.lookup = initLookup();
-        }
-
-        CellAction resolve(Cell cell) {
-            byte type = cell.getTypeByte();
-            return lookup[type & 0xFF];
-        }
-
-        private static CellAction[] initLookup() {
-            CellAction[] arr = new CellAction[256];
-            Arrays.fill(arr, CellAction.UPSERT);
-            markDelete(arr, org.apache.hadoop.hbase.KeyValue.Type.Delete);
-            markDelete(arr, org.apache.hadoop.hbase.KeyValue.Type.DeleteColumn);
-            markDelete(arr, org.apache.hadoop.hbase.KeyValue.Type.DeleteFamily);
-            markDelete(arr, org.apache.hadoop.hbase.KeyValue.Type.DeleteFamilyVersion);
-            return arr;
-        }
-
-        private static void markDelete(CellAction[] arr, org.apache.hadoop.hbase.KeyValue.Type type) {
-            arr[type.getCode() & 0xFF] = CellAction.DELETE;
-        }
-    }
-
-    private void decodePrimaryKey(TableName table,
-                                  RowKeySlice rowKey,
-                                  TablePlan plan,
-                                  PkCollector collector) {
+    private void ensureRowKeyPresent(TableName table, RowKeySlice rowKey) {
         if (rowKey == null) {
             throw new IllegalStateException(
                     "Отсутствует rowkey для таблицы " + table.getNameWithNamespaceInclAsString());
         }
-        Map<String, Object> buffer = collector.target();
-        decoder.decodeRowKey(table, rowKey, plan.saltBytes, buffer);
-        collector.applyToRecord(table);
-        plan.verifyPk(table, collector.currentRecord());
+    }
+
+    private void decodePrimaryKey(TableName table,
+                                  TableSchema schema,
+                                  RowKeySlice rowKey,
+                                  GenericData.Record avroRecord) {
+        pkBuffer.clear();
+        decoder.decodeRowKey(table, rowKey, schema.saltBytes(), pkBuffer);
+        schema.applyPrimaryKey(table, avroRecord, pkBuffer);
+    }
+
+    private RowProcessingState fillRecordWithCells(TableName table,
+                                                   TableSchema schema,
+                                                   GenericData.Record avroRecord,
+                                                   java.util.List<Cell> cells) {
+        long maxTimestamp = Long.MIN_VALUE;
+        boolean hasDelete = false;
+        if (cells != null) {
+            for (Cell cell : cells) {
+                if (cell != null) {
+                    long ts = cell.getTimestamp();
+                    if (ts > maxTimestamp) {
+                        maxTimestamp = ts;
+                    }
+                    if (CellUtil.isDelete(cell)) {
+                        hasDelete = true;
+                    } else {
+                        writeCellValue(table, schema, avroRecord, cell);
+                    }
+                }
+            }
+        }
+        return new RowProcessingState(maxTimestamp, hasDelete);
+    }
+
+    // Вынос обработки ячейки в отдельный метод удерживает цикл простым и понятным.
+    private void writeCellValue(TableName table,
+                                TableSchema schema,
+                                GenericData.Record avroRecord,
+                                Cell cell) {
+        String qualifier = qualifierCache.intern(
+                cell.getQualifierArray(),
+                cell.getQualifierOffset(),
+                cell.getQualifierLength());
+        FieldSpec field = schema.field(qualifier);
+        if (field == null || field.skip()) {
+            return;
+        }
+
+        Object decodedValue = decoder.decode(
+                table,
+                cell.getQualifierArray(),
+                cell.getQualifierOffset(),
+                cell.getQualifierLength(),
+                cell.getValueArray(),
+                cell.getValueOffset(),
+                cell.getValueLength());
+
+        Object valueToWrite = decodedValue;
+        if (valueToWrite == null && cell.getValueLength() > 0) {
+            valueToWrite = BinarySlice.of(
+                    cell.getValueArray(),
+                    cell.getValueOffset(),
+                    cell.getValueLength());
+        }
+
+        if (valueToWrite != null) {
+            field.write(avroRecord, valueToWrite);
+        }
+    }
+
+    private void applyFlags(TableSchema schema,
+                            GenericData.Record avroRecord,
+                            RowProcessingState state,
+                            long walSeq,
+                            long walWriteTime) {
+        if (schema.eventTimestampIndex() >= 0 && state.maxTimestamp != Long.MIN_VALUE) {
+            avroRecord.put(schema.eventTimestampIndex(), state.maxTimestamp);
+        }
+        if (schema.deleteFlagIndex() >= 0 && state.hasDelete) {
+            avroRecord.put(schema.deleteFlagIndex(), Boolean.TRUE);
+        }
+        schema.applyWalMetadata(avroRecord, walSeq, walWriteTime);
+    }
+
+    private static final class RowProcessingState {
+        final long maxTimestamp;
+        final boolean hasDelete;
+
+        RowProcessingState(long maxTimestamp, boolean hasDelete) {
+            this.maxTimestamp = maxTimestamp;
+            this.hasDelete = hasDelete;
+        }
     }
 
     private void debugTableOptions(TableName table) {
@@ -246,63 +201,43 @@ final class RowPayloadAssembler {
         return source == null ? "" : source.label();
     }
 
-    /**
-     * Кеш табличных планов (Avro-схема, индексы полей, PK, служебные поля).
-     */
-    private static final class TablePlanCache {
+    private static final class TableSchemaCache {
         private final H2kConfig cfg;
         private final AvroSchemaRegistry schemaRegistry;
         private final String skipProperty;
-        private final ConcurrentHashMap<String, TablePlan> cache = new ConcurrentHashMap<>();
+        private final ConcurrentHashMap<String, TableSchema> cache = new ConcurrentHashMap<>();
 
-        TablePlanCache(H2kConfig cfg, AvroSchemaRegistry schemaRegistry) {
+        TableSchemaCache(H2kConfig cfg, AvroSchemaRegistry schemaRegistry) {
             this.cfg = cfg;
             this.schemaRegistry = schemaRegistry;
             this.skipProperty = cfg.getPayloadSkipProperty();
         }
 
-        TablePlan planFor(TableName table) {
+        TableSchema schemaFor(TableName table) {
             String key = table.getNameWithNamespaceInclAsString();
-            return cache.computeIfAbsent(key, k -> buildPlan(table));
+            return cache.computeIfAbsent(key, k -> buildSchema(table));
         }
 
-        private TablePlan buildPlan(TableName table) {
+        private TableSchema buildSchema(TableName table) {
             Schema schema = loadSchema(table);
-            Map<String, FieldPlan> fields = buildFieldPlans(table, schema);
-
+            Map<String, FieldSpec> fields = buildFieldSpecs(table, schema);
             String[] pkColumns = cfg.primaryKeyColumns(table);
-            int[] pkIndices = new int[pkColumns.length];
-            for (int i = 0; i < pkColumns.length; i++) {
-                String col = pkColumns[i];
-                FieldPlan plan = lookupField(fields, col);
-                if (plan == null) {
-                    throw new IllegalStateException(
-                            "Avro: PK колонка '" + col + "' отсутствует в схеме " + table.getNameAsString());
-                }
-        if (plan.skip()) {
-            throw new IllegalStateException(
-                "Avro: PK колонка '" + col + "' помечена как пропускаемая (" + skipProperty + ")"
-                    + " в схеме " + table.getNameAsString());
-                }
-                pkIndices[i] = plan.index;
-            }
+            int[] pkIndices = mapPkIndices(table, pkColumns, fields);
 
-            int eventTsIndex = indexOfField(schema, FIELD_EVENT_TS);
-            int deleteIndex = indexOfField(schema, FIELD_DELETE);
+            int eventTsIndex = indexOf(schema, FIELD_EVENT_TS);
+            int deleteIndex = indexOf(schema, FIELD_DELETE);
+            int walSeqIndex = indexOf(schema, PayloadFields.WAL_SEQ);
+            int walWriteTimeIndex = indexOf(schema, PayloadFields.WAL_WRITE_TIME);
 
-            TableOptionsSnapshot opts = cfg.describeTableOptions(table);
-            int saltBytes = opts.saltBytes();
+            TableOptionsSnapshot options = cfg.describeTableOptions(table);
+            int saltBytes = options.saltBytes();
+        WalOffsets walOffsets = new WalOffsets(eventTsIndex, deleteIndex, walSeqIndex, walWriteTimeIndex);
 
-            WalMetadataPlan walMetadata = WalMetadataPlan.of(
-                    lookupField(fields, PayloadFields.WAL_SEQ),
-                    lookupField(fields, PayloadFields.WAL_WRITE_TIME));
-            return new TablePlan(schema,
-                    fields,
-                    pkIndices,
-                    eventTsIndex,
-                    deleteIndex,
-                    saltBytes,
-                    walMetadata);
+        return new TableSchema(schema,
+            fields,
+            pkIndices,
+            saltBytes,
+            walOffsets);
         }
 
         private Schema loadSchema(TableName table) {
@@ -314,14 +249,18 @@ final class RowPayloadAssembler {
             }
         }
 
-        private Map<String, FieldPlan> buildFieldPlans(TableName table, Schema schema) {
-            Map<String, FieldPlan> map = new HashMap<>(schema.getFields().size() * 2);
+        private Map<String, FieldSpec> buildFieldSpecs(TableName table, Schema schema) {
+            Map<String, FieldSpec> fields = new HashMap<>(schema.getFields().size());
             for (Schema.Field field : schema.getFields()) {
-                FieldPlan plan = new FieldPlan(field, parseSkip(table, field));
-                map.put(field.name(), plan);
-                map.put(field.name().toUpperCase(Locale.ROOT), plan);
+                boolean skip = parseSkip(table, field);
+                FieldSpec spec = new FieldSpec(field, skip);
+                register(fields, field.name(), spec);
             }
-            return map;
+            return Collections.unmodifiableMap(fields);
+        }
+
+        private void register(Map<String, FieldSpec> fields, String name, FieldSpec spec) {
+            fields.put(normalizeFieldKey(name), spec);
         }
 
         private boolean parseSkip(TableName table, Schema.Field field) {
@@ -329,7 +268,6 @@ final class RowPayloadAssembler {
             if (raw == null) {
                 return false;
             }
-
             Object normalized = normalizeSkipValue(raw);
             if (normalized instanceof Boolean) {
                 return (Boolean) normalized;
@@ -348,7 +286,6 @@ final class RowPayloadAssembler {
                 warnInvalidSkip(table, field, text);
                 return false;
             }
-
             warnInvalidSkip(table, field, raw);
             return false;
         }
@@ -383,118 +320,164 @@ final class RowPayloadAssembler {
             }
         }
 
-        private FieldPlan lookupField(Map<String, FieldPlan> fields, String name) {
-            FieldPlan plan = fields.get(name);
-            if (plan != null) return plan;
-            if (name == null) return null;
-            return fields.get(name.toUpperCase(Locale.ROOT));
+        private int[] mapPkIndices(TableName table, String[] pkColumns, Map<String, FieldSpec> fields) {
+            if (pkColumns == null || pkColumns.length == 0) {
+                return new int[0];
+            }
+            int[] indices = new int[pkColumns.length];
+            for (int i = 0; i < pkColumns.length; i++) {
+                String col = pkColumns[i];
+                FieldSpec spec = lookupField(fields, col);
+                if (spec == null) {
+                    throw new IllegalStateException(
+                            "Avro: PK колонка '" + col + "' отсутствует в схеме " + table.getNameAsString());
+                }
+                if (spec.skip()) {
+                    throw new IllegalStateException(
+                            "Avro: PK колонка '" + col + "' помечена как пропускаемая (" + skipProperty + ")"
+                                    + " в схеме " + table.getNameAsString());
+                }
+                indices[i] = spec.index();
+            }
+            return indices;
         }
 
-        private int indexOfField(Schema schema, String name) {
+        private FieldSpec lookupField(Map<String, FieldSpec> fields, String name) {
+            if (name == null) {
+                return null;
+            }
+            return fields.get(normalizeFieldKey(name));
+        }
+
+        private int indexOf(Schema schema, String name) {
             if (name == null) {
                 return -1;
             }
-            for (Schema.Field field : schema.getFields()) {
-                if (name.equals(field.name())) {
-                    return field.pos();
-                }
-            }
-            return -1;
+            Schema.Field field = schema.getField(name);
+            return field == null ? -1 : field.pos();
         }
     }
 
-    private static final class TablePlan {
-        private final Schema schema;
-        private final Map<String, FieldPlan> fields;
-        private final int[] pkFieldIndices;
-        private final int eventTsIndex;
-        private final int deleteIndex;
-        private final int saltBytes;
-        private final WalMetadataPlan walMetadata;
+    private static final class WalOffsets {
+        private final int eventTimestampIndex;
+        private final int deleteFlagIndex;
+        private final int walSequenceIndex;
+        private final int walWriteTimeIndex;
 
-        TablePlan(Schema schema,
-                  Map<String, FieldPlan> fields,
-                  int[] pkFieldIndices,
-                  int eventTsIndex,
-                  int deleteIndex,
-                  int saltBytes,
-                  WalMetadataPlan walMetadata) {
+        WalOffsets(int eventTimestampIndex, int deleteFlagIndex, int walSequenceIndex, int walWriteTimeIndex) {
+            this.eventTimestampIndex = eventTimestampIndex;
+            this.deleteFlagIndex = deleteFlagIndex;
+            this.walSequenceIndex = walSequenceIndex;
+            this.walWriteTimeIndex = walWriteTimeIndex;
+        }
+    }
+
+    private static final class TableSchema {
+        private final Schema schema;
+        private final Map<String, FieldSpec> fields;
+        private final int[] pkIndices;
+        private final int saltBytes;
+        private final WalOffsets walOffsets;
+
+        TableSchema(Schema schema,
+                    Map<String, FieldSpec> fields,
+                    int[] pkIndices,
+                    int saltBytes,
+                    WalOffsets walOffsets) {
             this.schema = schema;
             this.fields = fields;
-            this.pkFieldIndices = pkFieldIndices;
-            this.eventTsIndex = eventTsIndex;
-            this.deleteIndex = deleteIndex;
+            this.pkIndices = pkIndices;
             this.saltBytes = saltBytes;
-            this.walMetadata = walMetadata;
+            this.walOffsets = walOffsets;
         }
 
         GenericData.Record newRecord() {
             GenericData.Record avroRecord = new GenericData.Record(schema);
-            if (deleteIndex >= 0) {
-                avroRecord.put(deleteIndex, Boolean.FALSE);
+            if (walOffsets.deleteFlagIndex >= 0) {
+                avroRecord.put(walOffsets.deleteFlagIndex, Boolean.FALSE);
             }
             return avroRecord;
         }
 
-        FieldPlan field(String name) {
-            if (name == null) {
+        FieldSpec field(String qualifier) {
+            if (qualifier == null) {
                 return null;
             }
-            return fields.get(name);
+            return fields.get(normalizeFieldKey(qualifier));
         }
 
-        void verifyPk(TableName table, GenericData.Record avroRecord) {
-            for (int idx : pkFieldIndices) {
-                if (avroRecord.get(idx) == null) {
-                    String fieldName = schema.getFields().get(idx).name();
+        int saltBytes() {
+            return saltBytes;
+        }
+
+        int eventTimestampIndex() {
+            return walOffsets.eventTimestampIndex;
+        }
+
+        int deleteFlagIndex() {
+            return walOffsets.deleteFlagIndex;
+        }
+
+        void applyWalMetadata(GenericData.Record avroRecord, long walSeq, long walWriteTime) {
+            if (walOffsets.walSequenceIndex >= 0) {
+                avroRecord.put(walOffsets.walSequenceIndex, walSeq);
+            }
+            if (walOffsets.walWriteTimeIndex >= 0) {
+                avroRecord.put(walOffsets.walWriteTimeIndex, walWriteTime);
+            }
+        }
+
+        void applyPrimaryKey(TableName table,
+                              GenericData.Record avroRecord,
+                              Map<String, Object> pkValues) {
+            if (pkValues == null || pkValues.isEmpty()) {
+                return;
+            }
+            for (Map.Entry<String, Object> entry : pkValues.entrySet()) {
+                FieldSpec spec = field(entry.getKey());
+                if (spec == null) {
                     throw new IllegalStateException(
-                            "PK '" + fieldName + "' не восстановлен из rowkey таблицы " +
-                                    table.getNameWithNamespaceInclAsString());
+                            "PK '" + entry.getKey() + "' отсутствует в Avro схеме таблицы "
+                                    + table.getNameWithNamespaceInclAsString());
+                }
+                Object value = entry.getValue();
+                if (value == null) {
+                    avroRecord.put(spec.index(), null);
+                } else {
+                    spec.write(avroRecord, value);
                 }
             }
         }
 
-        void applyWalMetadata(GenericData.Record avroRecord, long walSeq, long walWriteTime) {
-            walMetadata.apply(avroRecord, walSeq, walWriteTime);
-        }
-    }
-    private static final class WalMetadataPlan {
-        private static final WalMetadataPlan EMPTY = new WalMetadataPlan(null, null);
-
-        private final FieldPlan walSeqField;
-        private final FieldPlan walWriteTimeField;
-
-        private WalMetadataPlan(FieldPlan walSeqField, FieldPlan walWriteTimeField) {
-            this.walSeqField = walSeqField;
-            this.walWriteTimeField = walWriteTimeField;
-        }
-
-        static WalMetadataPlan of(FieldPlan walSeqField, FieldPlan walWriteTimeField) {
-            if (walSeqField == null && walWriteTimeField == null) {
-                return EMPTY;
-            }
-            return new WalMetadataPlan(walSeqField, walWriteTimeField);
-        }
-
-        void apply(GenericData.Record avroRecord, long walSeq, long walWriteTime) {
-            if (walSeqField != null) {
-                walSeqField.write(avroRecord, walSeq);
-            }
-            if (walWriteTimeField != null) {
-                walWriteTimeField.write(avroRecord, walWriteTime);
+        void verifyPrimaryKey(TableName table, GenericData.Record avroRecord) {
+            for (int idx : pkIndices) {
+                if (avroRecord.get(idx) == null) {
+                    String fieldName = schema.getFields().get(idx).name();
+                    throw new IllegalStateException(
+                            "PK '" + fieldName + "' не восстановлен из rowkey таблицы "
+                                    + table.getNameWithNamespaceInclAsString());
+                }
             }
         }
     }
 
-    private static final class FieldPlan {
-        final Schema.Field field;
-        final int index;
-        final boolean skip;
+    private static final class FieldSpec {
+        private final Schema.Field field;
+        private final int index;
+        private final boolean skip;
 
-        FieldPlan(Schema.Field field, boolean skip) {
+        FieldSpec(Schema.Field field, boolean skip) {
             this.field = field;
             this.index = field.pos();
             this.skip = skip;
+        }
+
+        boolean skip() {
+            return skip;
+        }
+
+        int index() {
+            return index;
         }
 
         void write(GenericData.Record avroRecord, Object value) {
@@ -504,56 +487,13 @@ final class RowPayloadAssembler {
             Object coerced = AvroValueCoercer.coerceValue(field.schema(), value, field.name());
             avroRecord.put(index, coerced);
         }
-
-        boolean skip() {
-            return skip;
-        }
     }
 
-    private static final class PkCollector {
-        private final TablePlan plan;
-        private final LinkedHashMap<String, Object> buffer;
-        private GenericData.Record avroRecord;
-
-        PkCollector(TablePlan plan) {
-            this.plan = plan;
-            int capacity = Math.max(4, plan.pkFieldIndices.length);
-            this.buffer = new LinkedHashMap<>(capacity);
+    private static String normalizeFieldKey(String name) {
+        if (name == null) {
+            return "";
         }
-
-        void bind(GenericData.Record avroRecord) {
-            this.avroRecord = avroRecord;
-            buffer.clear();
-        }
-
-        Map<String, Object> target() {
-            return buffer;
-        }
-
-        void applyToRecord(TableName table) {
-            if (avroRecord == null || buffer.isEmpty()) {
-                return;
-            }
-            for (Map.Entry<String, Object> entry : buffer.entrySet()) {
-                FieldPlan field = plan.field(entry.getKey());
-                if (field == null) {
-                    throw new IllegalStateException(
-                            "PK '" + entry.getKey() + "' отсутствует в Avro схеме таблицы " +
-                                    table.getNameWithNamespaceInclAsString());
-                }
-                Object value = entry.getValue();
-                if (value == null) {
-                    avroRecord.put(field.index, null);
-                } else {
-                    field.write(avroRecord, value);
-                }
-            }
-            buffer.clear();
-        }
-
-        GenericData.Record currentRecord() {
-            return avroRecord;
-        }
+        return name.trim().toUpperCase(Locale.ROOT);
     }
 
     /**
@@ -595,7 +535,7 @@ final class RowPayloadAssembler {
                 this.bytes = array;
                 this.offset = off;
                 this.length = len;
-                this.hash = Bytes.hashCode(array, off, len);
+                this.hash = org.apache.hadoop.hbase.util.Bytes.hashCode(array, off, len);
             }
 
             final void clear() {
@@ -611,15 +551,20 @@ final class RowPayloadAssembler {
             }
 
             @Override
-            public final boolean equals(Object o) {
-                if (this == o) return true;
-                if (!(o instanceof AbstractKey)) return false;
-                AbstractKey other = (AbstractKey) o;
-                if (this.hash != other.hash || this.length != other.length) {
+            public final boolean equals(Object other) {
+                if (this == other) {
+                    return true;
+                }
+                if (!(other instanceof AbstractKey)) {
                     return false;
                 }
-                return Bytes.equals(this.bytes, this.offset, this.length,
-                        other.bytes, other.offset, other.length);
+                AbstractKey that = (AbstractKey) other;
+                if (this.length != that.length) {
+                    return false;
+                }
+                return org.apache.hadoop.hbase.util.Bytes.equals(
+                        this.bytes, this.offset, this.length,
+                        that.bytes, that.offset, that.length);
             }
         }
 
@@ -629,15 +574,15 @@ final class RowPayloadAssembler {
             }
 
             OwnedKey toOwned() {
-                return new OwnedKey(bytes, offset, length);
+                byte[] copy = new byte[length];
+                System.arraycopy(bytes, offset, copy, 0, length);
+                return new OwnedKey(copy);
             }
         }
 
         private static final class OwnedKey extends AbstractKey {
-            OwnedKey(byte[] source, int off, int len) {
-                byte[] copy = new byte[len];
-                System.arraycopy(source, off, copy, 0, len);
-                reset(copy, 0, len);
+            OwnedKey(byte[] copy) {
+                reset(copy, 0, copy.length);
             }
         }
     }

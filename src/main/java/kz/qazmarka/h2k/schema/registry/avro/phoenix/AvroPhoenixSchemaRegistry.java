@@ -83,6 +83,13 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
         return LOG.get();
     }
 
+    private static String normalizeColumnKey(String qualifier) {
+        if (qualifier == null) {
+            return "";
+        }
+        return qualifier.trim().toUpperCase(Locale.ROOT);
+    }
+
     /** Позволяет временно подменить логгер для модульных тестов. */
     static AutoCloseable withLoggerForTest(Logger testLogger) {
         if (testLogger == null) {
@@ -102,17 +109,15 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
     private TableMetadata loadMetadata(TableName table) {
         Path schemaPath = avroRegistry.schemaPath(table.getNameAsString());
         Schema schema = avroRegistry.getByTable(table.getNameAsString());
-        Map<String, String> types = new HashMap<>(Math.max(8, schema.getFields().size() * 3));
+        Map<String, String> types = new HashMap<>(Math.max(8, schema.getFields().size()));
         for (Field field : schema.getFields()) {
             String type = field.getProp(PROP_TYPE);
             if (type == null || type.trim().isEmpty()) {
                 continue;
             }
             String trimmed = type.trim().toUpperCase(Locale.ROOT);
-            String name = field.name();
+            String name = normalizeColumnKey(field.name());
             types.put(name, trimmed);
-            types.put(name.toLowerCase(Locale.ROOT), trimmed);
-            types.put(name.toUpperCase(Locale.ROOT), trimmed);
         }
         String[] pk = readPk(schema);
         Integer salt = readSaltBytes(schema, table);
@@ -437,11 +442,9 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
                       Integer saltBytes,
                       Integer capacityHint,
                       String[] cfFamilies) {
-            if (columnTypes.isEmpty()) {
-                this.columnTypes = Collections.emptyMap();
-            } else {
-                this.columnTypes = Collections.unmodifiableMap(new HashMap<>(columnTypes));
-            }
+            this.columnTypes = columnTypes.isEmpty()
+                    ? Collections.emptyMap()
+                    : Collections.unmodifiableMap(new HashMap<>(columnTypes));
             this.pk = normalizePk(pk);
             this.saltBytes = saltBytes;
             this.capacityHint = capacityHint;
@@ -454,19 +457,7 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
             if (name == null) {
                 return null;
             }
-            String type = columnTypes.get(name);
-            if (type != null) {
-                return type;
-            }
-            type = columnTypes.get(name.toLowerCase(Locale.ROOT));
-            if (type != null) {
-                return type;
-            }
-            type = columnTypes.get(name.toUpperCase(Locale.ROOT));
-            if (type != null) {
-                return type;
-            }
-            return null;
+            return columnTypes.get(normalizeColumnKey(name));
         }
 
         String[] primaryKey() {

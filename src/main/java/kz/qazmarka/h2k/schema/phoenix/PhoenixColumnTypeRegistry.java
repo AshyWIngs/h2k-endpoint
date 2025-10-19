@@ -109,8 +109,9 @@ public final class PhoenixColumnTypeRegistry {
         final ConcurrentMap<String, PhoenixType> byQualifier =
                 cache.computeIfAbsent(table, t -> new ConcurrentHashMap<>());
 
-        return byQualifier.computeIfAbsent(qualifier, q -> {
-            final String raw = registry.columnType(table, q);
+        String normalizedQualifier = normalizeQualifier(qualifier);
+        return byQualifier.computeIfAbsent(normalizedQualifier, key -> {
+            final String raw = registry.columnType(table, qualifier);
             final String norm = normalizeTypeName(raw == null ? T_VARCHAR : raw);
 
             final PhoenixType predefined = TYPE_MAP.get(norm);
@@ -118,16 +119,20 @@ public final class PhoenixColumnTypeRegistry {
                 return predefined;
             }
 
-            final ColKey warnKey = new ColKey(table, q);
+            final ColKey warnKey = new ColKey(table, normalizedQualifier);
             if (unknownTypeWarned.add(warnKey)) {
                 LOG.warn("Неизвестный тип Phoenix в реестре для колонки {}.{} -> '{}' (нормализовано '{}'). Будет использован VARCHAR по умолчанию.",
-                        table.getNameAsString(), q, raw, norm);
+                        table.getNameAsString(), qualifier, raw, norm);
             } else if (LOG.isDebugEnabled()) {
                 LOG.debug("Повтор неизвестного типа Phoenix: {}.{} -> '{}' (нормализовано '{}')",
-                        table.getNameAsString(), q, raw, norm);
+                        table.getNameAsString(), qualifier, raw, norm);
             }
             return DEFAULT_TYPE;
         });
+    }
+
+    private static String normalizeQualifier(String qualifier) {
+        return qualifier == null ? "" : qualifier.trim().toUpperCase(Locale.ROOT);
     }
 
     private static String normalizeTypeName(String typeName) {
@@ -191,8 +196,8 @@ public final class PhoenixColumnTypeRegistry {
         ColKey(TableName t, String qual) {
             this.ns = t.getNamespaceAsString();
             this.name = t.getNameAsString();
-            this.qual = qual;
-            this.hash = 31 * (31 * ns.hashCode() + name.hashCode()) + qual.hashCode();
+            this.qual = normalizeQualifier(qual);
+            this.hash = 31 * (31 * ns.hashCode() + name.hashCode()) + this.qual.hashCode();
         }
 
         @Override

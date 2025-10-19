@@ -9,7 +9,7 @@ Phoenix остаётся основным источником схемы для
 | PK (`h2k.pk` или `primaryKey:true`) | Позволяет `PhoenixPkParser` восстановить ключ из rowkey и добавить PK в payload. |
 | Тип (`h2k.phoenixType` или `type`) | Нужен `PhoenixColumnTypeRegistry` и `ValueCodecPhoenix` для корректного декодирования. |
 | Соль (`h2k.saltBytes`) | Позволяет правильно разбить rowkey на соль+PK (Phoenix salt). У таблиц без соли ставьте `0`. |
-| capacity (`h2k.capacityHint`) | Используется `TableCapacityObserver` при расчёте подсказок. |
+| capacity (`h2k.capacityHint`) | Используется диагностикой (`WalDiagnostics`) для подсказок. |
 
 ### Как проверить соль в Phoenix
 

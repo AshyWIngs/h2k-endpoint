@@ -137,7 +137,7 @@ public final class H2kConfig implements TableMetadataView {
         public static final String PRODUCER_PREFIX = "h2k.producer.";
         /** Префикс для дополнительных конфигураций Kafka‑топика, собираемых в {@link #getTopicConfigs()}. */
         public static final String TOPIC_CONFIG_PREFIX = "h2k.topic.config.";
-        /** Включение наблюдателей TableCapacityObserver/CfFilterObserver. */
+        /** Включение диагностической статистики (WalDiagnostics). */
         public static final String OBSERVERS_ENABLED = "h2k.observers.enabled";
         /** Каталог локальных Avro-схем (generic Avro и режим phoenix-avro для декодера). */
         public static final String AVRO_SCHEMA_DIR = "h2k.avro.schema.dir";

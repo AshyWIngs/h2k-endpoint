@@ -60,7 +60,8 @@ public final class H2kMetricsJmx implements DynamicMBean {
         Map<String, String> mapping = new HashMap<>(snapshot.size());
         List<MBeanAttributeInfo> infos = new ArrayList<>(snapshot.size());
         for (String key : snapshot.keySet()) {
-            String attr = toAttributeName(key);
+            String baseName = normalizeMetricName(key);
+            String attr = ensureUniqueAttributeName(baseName, mapping);
             mapping.put(attr, key);
             infos.add(new MBeanAttributeInfo(
                     attr,
@@ -136,19 +137,65 @@ public final class H2kMetricsJmx implements DynamicMBean {
 
     private static String buildObjectName() { return OBJECT_NAME_BASE; }
 
-    private static String toAttributeName(String key) {
+    private static String normalizeMetricName(String key) {
         if (key == null || key.isEmpty()) {
             return "metric";
         }
-        String norm = key.toLowerCase(Locale.ROOT);
-        // Заменяем всё, кроме [a-z0-9_] на '_'
-        norm = norm.replaceAll("[^a-z0-9_]", "_");
-        // Сжимаем повторяющиеся подчёркивания
-        norm = norm.replaceAll("_+", "_");
-        // Убираем крайние подчёркивания
-        if (norm.startsWith("_")) norm = norm.substring(1);
-        if (norm.endsWith("_")) norm = norm.substring(0, norm.length() - 1);
-        return norm.isEmpty() ? "metric" : norm;
+        String lower = key.toLowerCase(Locale.ROOT);
+        StringBuilder sb = new StringBuilder(lower.length());
+        boolean previousUnderscore = false;
+        for (int i = 0; i < lower.length(); i++) {
+            char ch = lower.charAt(i);
+            char mapped = mapChar(ch);
+            if (mapped == '_') {
+                if (previousUnderscore) {
+                    continue;
+                }
+                previousUnderscore = true;
+                sb.append('_');
+            } else {
+                previousUnderscore = false;
+                sb.append(mapped);
+            }
+        }
+        trimEdgeUnderscores(sb);
+        if (sb.length() == 0) {
+            sb.append("metric");
+        }
+        return sb.toString();
+    }
+
+    private static char mapChar(char ch) {
+        if ((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_') {
+            return ch;
+        }
+        return '_';
+    }
+
+    private static void trimEdgeUnderscores(StringBuilder sb) {
+        while (sb.length() > 0 && sb.charAt(0) == '_') {
+            sb.deleteCharAt(0);
+        }
+        while (sb.length() > 0 && sb.charAt(sb.length() - 1) == '_') {
+            sb.deleteCharAt(sb.length() - 1);
+        }
+    }
+
+    private static String ensureUniqueAttributeName(String baseName, Map<String, String> mapping) {
+        String candidate = baseName;
+        int index = 2;
+        while (mapping.containsKey(candidate)) {
+            candidate = baseName + '_' + index;
+            index++;
+        }
+        return candidate;
+    }
+
+    /**
+     * Фабрика для модульных тестов: позволяет создать экземпляр без регистрации в MBeanServer.
+     */
+    static H2kMetricsJmx createForTest(Supplier<Map<String, Long>> supplier) {
+        return new H2kMetricsJmx(supplier);
     }
 
     private Map<String, Long> safeSnapshot() {
