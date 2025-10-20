@@ -23,7 +23,6 @@ import io.confluent.kafka.schemaregistry.client.MockSchemaRegistryClient;
 import kz.qazmarka.h2k.config.H2kConfig;
 import kz.qazmarka.h2k.kafka.producer.batch.BatchSender;
 import kz.qazmarka.h2k.payload.builder.PayloadBuilder;
-import kz.qazmarka.h2k.payload.serializer.avro.SchemaRegistryClientFactory;
 import kz.qazmarka.h2k.schema.decoder.Decoder;
 import kz.qazmarka.h2k.schema.registry.PhoenixTableMetadataProvider;
 import kz.qazmarka.h2k.util.RowKeySlice;
@@ -125,8 +124,7 @@ class WalRowProcessorTest {
     }
 
     private static WalRowProcessor processor(H2kConfig config, MockProducer<byte[], byte[]> producer) {
-        SchemaRegistryClientFactory factory = (urls, clientConfig, capacity) -> new MockSchemaRegistryClient();
-        PayloadBuilder builder = new PayloadBuilder(decoder(), config, factory);
+    PayloadBuilder builder = new PayloadBuilder(decoder(), config, new MockSchemaRegistryClient());
         WalRowDispatcher dispatcher = new WalRowDispatcher(builder, producer);
         WalObserverHub observers = WalObserverHub.create(config);
         return new WalRowProcessor(dispatcher, observers);

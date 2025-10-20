@@ -12,7 +12,6 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import org.apache.avro.Schema;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.TableName;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -71,23 +70,6 @@ class AvroPhoenixSchemaRegistryTest {
     }
 
     @Test
-    void shouldWarnAndFallbackWhenCfJsonIsNotArray() throws Exception {
-        TableName table = TableName.valueOf("T_AVRO_BAD_CF_JSON");
-        com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
-        com.fasterxml.jackson.databind.JsonNode invalidNode = mapper.readTree("{\"family\":\"data\"}");
-        AvroPhoenixSchemaRegistry registry = registryWithTestSchemas();
-
-        try (WarnCapture capture = WarnCapture.capture()) {
-            String[] families = registry.sanitizeCfFromJson(invalidNode, table);
-            assertArrayEquals(SchemaRegistry.EMPTY, families);
-            assertTrue(capture.warnCount() > 0, "WARN должен быть зафиксирован");
-            assertTrue(capture.contains("T_AVRO_BAD_CF_JSON"), "WARN должен ссылаться на имя таблицы");
-            assertTrue(capture.contains("h2k.cf.list") && capture.contains("не является массивом"),
-                    "WARN должен описывать некорректный JSON");
-        }
-    }
-
-    @Test
     void shouldWarnAndFallbackWhenCfCsvHasNoValidValues() {
         AvroPhoenixSchemaRegistry registry = registryWithTestSchemas();
         TableName table = TableName.valueOf("T_AVRO_BAD_CF_CSV");
@@ -103,26 +85,6 @@ class AvroPhoenixSchemaRegistryTest {
     }
 
     @Test
-    void shouldNormalizeAndDeduplicateJsonCfList() {
-        TableName table = TableName.valueOf("T_AVRO_GOOD_CF_JSON");
-        com.fasterxml.jackson.databind.ObjectMapper mapper = new com.fasterxml.jackson.databind.ObjectMapper();
-        com.fasterxml.jackson.databind.node.ArrayNode node = mapper.createArrayNode();
-        node.add(" data ");
-        node.addNull();
-        node.add("data");
-        node.add("");
-        node.add("meta");
-        node.add(" meta ");
-        AvroPhoenixSchemaRegistry registry = registryWithTestSchemas();
-
-        try (WarnCapture capture = WarnCapture.capture()) {
-            String[] families = registry.sanitizeCfFromJson(node, table);
-            assertArrayEquals(new String[]{"data", "meta"}, families);
-            assertEquals(0, capture.warnCount(), "Корректный массив не должен генерировать WARN");
-        }
-    }
-
-    @Test
     void shouldNormalizeCsvCfList(@TempDir Path tempDir) throws Exception {
         TableName table = TableName.valueOf("T_META_CF");
         Path schemaPath = tempDir.resolve("t_meta_cf.avsc");
@@ -133,74 +95,6 @@ class AvroPhoenixSchemaRegistryTest {
             String[] families = registry.columnFamilies(table);
             assertArrayEquals(new String[]{"cf1", "cf2"}, families);
             assertEquals(0, capture.warnCount(), "Корректный CSV не должен генерировать WARN");
-        }
-    }
-
-    @Test
-    void shouldParseLegacyJsonCfListFromAvroSchema(@TempDir Path tempDir) throws Exception {
-        TableName table = TableName.valueOf("T_META_CF_JSON");
-        Path schemaPath = tempDir.resolve("t_meta_cf_json.avsc");
-        Files.write(schemaPath, schemaJsonRawCf("T_META_CF_JSON", null, null, "[\"data\", \" meta \", \"\", \"data\"]").getBytes(StandardCharsets.UTF_8));
-
-        AvroPhoenixSchemaRegistry registry = new AvroPhoenixSchemaRegistry(new AvroSchemaRegistry(tempDir));
-        try (WarnCapture capture = WarnCapture.capture()) {
-            String[] families = registry.columnFamilies(table);
-            assertArrayEquals(new String[]{"data", "meta"}, families);
-            assertEquals(0, capture.warnCount(), "Корректный JSON-массив не должен генерировать WARN");
-        }
-    }
-
-    @Test
-    void shouldWarnAndDisableWhenJsonArrayNormalizesToEmpty(@TempDir Path tempDir) throws Exception {
-        TableName table = TableName.valueOf("T_META_CF_JSON_EMPTY");
-        Path schemaPath = tempDir.resolve("t_meta_cf_json_empty.avsc");
-        // JSON-массив с пустыми/пробельными значениями и null -> после нормализации фильтр отключается
-        Files.write(schemaPath, schemaJsonRawCf("T_META_CF_JSON_EMPTY", null, null, "[\" \", null, \"   \", \"\"]").getBytes(StandardCharsets.UTF_8));
-
-        AvroSchemaRegistry avro = new AvroSchemaRegistry(tempDir);
-    Schema schema = avro.getByTable(table.getNameAsString());
-    Object raw = schema.getObjectProp("h2k.cf.list");
-    String rawType = raw == null ? "null" : raw.getClass().getName();
-    assertTrue(raw instanceof List,
-        "Свойство h2k.cf.list должно десериализоваться в java.util.List (class=" + rawType + ")");
-
-        AvroPhoenixSchemaRegistry registry = new AvroPhoenixSchemaRegistry(avro);
-        try (WarnCapture capture = WarnCapture.capture()) {
-            String[] families = registry.columnFamilies(table);
-            assertArrayEquals(SchemaRegistry.EMPTY, families, "Возвращены CF: " + Arrays.toString(families));
-            assertEquals(1, capture.warnCount(), "Пустой JSON-массив должен отключать фильтр с единичным WARN");
-            assertTrue(capture.contains("не содержит валидных имён"), "WARN должен описывать пустой фильтр");
-        }
-    }
-
-    @Test
-    void shouldWarnAndDisableWhenListCfNormalizesToEmpty() {
-        AvroPhoenixSchemaRegistry registry = registryWithTestSchemas();
-        TableName table = TableName.valueOf("T_META_CF_LIST_EMPTY");
-        List<Object> raw = Arrays.asList("   ", null, "\t");
-
-        try (WarnCapture capture = WarnCapture.capture()) {
-            String[] families = registry.sanitizeCfFromList(raw, table);
-            assertArrayEquals(SchemaRegistry.EMPTY, families);
-            assertEquals(1, capture.warnCount(), "Пустой java.util.List должен приводить к единичному WARN");
-            assertTrue(capture.contains("не содержит валидных имён"), "WARN должен описывать пустой фильтр");
-        }
-    }
-
-    @Test
-    void shouldNormalizeMixedTokensInJsonCfList(@TempDir Path tempDir) throws Exception {
-        TableName table = TableName.valueOf("T_META_CF_JSON_MIXED");
-        Path schemaPath = tempDir.resolve("t_meta_cf_json_mixed.avsc");
-    Files.write(schemaPath, schemaJsonRawCf("T_META_CF_JSON_MIXED", null, null,
-        "[\" cf1 \", \"\", \"CF1\", null, \"cf2\", \" cf2 \", \"\\t\"]").getBytes(StandardCharsets.UTF_8));
-
-        AvroPhoenixSchemaRegistry registry = new AvroPhoenixSchemaRegistry(new AvroSchemaRegistry(tempDir));
-        try (WarnCapture capture = WarnCapture.capture()) {
-            String[] families = registry.columnFamilies(table);
-            // CF регистрозависимы, поэтому "CF1" сохраняется отдельным элементом.
-            assertArrayEquals(new String[]{"cf1", "CF1", "cf2"}, families,
-                    "Возвращены CF: " + Arrays.toString(families));
-            assertEquals(0, capture.warnCount(), "Валидные значения с шумом не должны генерировать WARN");
         }
     }
 
@@ -267,6 +161,21 @@ class AvroPhoenixSchemaRegistryTest {
     assertEquals(TableValueSource.DEFAULT, snapshot.saltSource());
         assertEquals(0, snapshot.capacityHint());
     assertEquals(TableValueSource.DEFAULT, snapshot.capacitySource());
+    }
+
+    @Test
+    void shouldDisableCfFilterWhenPropertyHasUnsupportedType(@TempDir Path tempDir) throws Exception {
+        TableName table = TableName.valueOf("T_META_CF_JSON_UNSUPPORTED");
+        Path schemaPath = tempDir.resolve("t_meta_cf_json_unsupported.avsc");
+        Files.write(schemaPath, schemaJsonRawCf("T_META_CF_JSON_UNSUPPORTED", null, null, "[\"data\"]").getBytes(StandardCharsets.UTF_8));
+
+        AvroPhoenixSchemaRegistry registry = new AvroPhoenixSchemaRegistry(new AvroSchemaRegistry(tempDir));
+        try (WarnCapture capture = WarnCapture.capture()) {
+            String[] families = registry.columnFamilies(table);
+            assertArrayEquals(SchemaRegistry.EMPTY, families);
+            assertEquals(1, capture.warnCount(), "Неподдерживаемый тип должен отдавать WARN");
+            assertTrue(capture.contains("неподдерживаемый тип"), "WARN должен описывать неподдерживаемый тип h2k.cf.list");
+        }
     }
 
     private static String schemaJson(String recordName, Integer saltBytes, Integer capacityHint) {

@@ -23,8 +23,7 @@ class WalCounterServiceTest {
         counters.cellsSent = 5;
         counters.rowsFiltered = 1;
         counters.cellsSeen = 6;
-        counters.maxRowCellsSent = 5;
-        counters.maxRowCellsSeen = 6;
+    counters.maxRowCellsSent = 5;
 
         WalCounterService.EntrySummary summary = service.completeEntry(counters);
 

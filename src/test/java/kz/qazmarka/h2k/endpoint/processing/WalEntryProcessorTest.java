@@ -35,7 +35,6 @@ import kz.qazmarka.h2k.endpoint.topic.TopicManager;
 import kz.qazmarka.h2k.kafka.ensure.TopicEnsurer;
 import kz.qazmarka.h2k.kafka.producer.batch.BatchSender;
 import kz.qazmarka.h2k.payload.builder.PayloadBuilder;
-import kz.qazmarka.h2k.payload.serializer.avro.SchemaRegistryClientFactory;
 import kz.qazmarka.h2k.schema.decoder.Decoder;
 import kz.qazmarka.h2k.schema.decoder.TestRawDecoder;
 import kz.qazmarka.h2k.schema.registry.PhoenixTableMetadataProvider;
@@ -230,10 +229,9 @@ class WalEntryProcessorTest {
         cfg.set("h2k.avro.schema.dir", Paths.get("src", "test", "resources", "avro").toAbsolutePath().toString());
         cfg.set("h2k.topic.pattern", "${namespace}.${qualifier}");
 
-        SchemaRegistryClientFactory factory = (urls, props, capacity) -> new MockSchemaRegistryClient();
         H2kConfig h2kConfig = H2kConfig.from(cfg, "mock:9092", provider);
 
-        PayloadBuilder payloadBuilder = new PayloadBuilder(decoder(), h2kConfig, factory);
+    PayloadBuilder payloadBuilder = new PayloadBuilder(decoder(), h2kConfig, new MockSchemaRegistryClient());
         TopicManager topicManager = new TopicManager(h2kConfig.getTopicSettings(), TopicEnsurer.disabled());
 
         // Продьюсер, у которого send() всегда возвращает exceptional future
@@ -304,10 +302,9 @@ class WalEntryProcessorTest {
         cfg.set("h2k.avro.schema.dir", Paths.get("src", "test", "resources", "avro").toAbsolutePath().toString());
         cfg.set("h2k.topic.pattern", "${namespace}.${qualifier}");
 
-        SchemaRegistryClientFactory factory = (urls, props, capacity) -> new MockSchemaRegistryClient();
         H2kConfig h2kConfig = H2kConfig.from(cfg, "mock:9092", provider);
 
-        PayloadBuilder payloadBuilder = new PayloadBuilder(decoder(), h2kConfig, factory);
+    PayloadBuilder payloadBuilder = new PayloadBuilder(decoder(), h2kConfig, new MockSchemaRegistryClient());
         TopicManager topicManager = new TopicManager(h2kConfig.getTopicSettings(), TopicEnsurer.disabled());
         MockProducer<byte[], byte[]> producer = new MockProducer<>(true, new ByteArraySerializer(), new ByteArraySerializer());
         WalEntryProcessor processor = new WalEntryProcessor(payloadBuilder, topicManager, producer, h2kConfig);

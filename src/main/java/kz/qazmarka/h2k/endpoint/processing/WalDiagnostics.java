@@ -37,10 +37,6 @@ final class WalDiagnostics {
         return new WalDiagnostics(metadata, enabled);
     }
 
-    static WalDiagnostics disabled() {
-        return new WalDiagnostics(null, false);
-    }
-
     void recordRow(TableName table,
                    TableOptionsSnapshot tableOptions,
                    int rowKeyLength) {

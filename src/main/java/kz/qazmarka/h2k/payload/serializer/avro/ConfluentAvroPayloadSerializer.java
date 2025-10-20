@@ -23,6 +23,7 @@ import org.apache.hadoop.hbase.TableName;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import io.confluent.kafka.schemaregistry.client.CachedSchemaRegistryClient;
 import io.confluent.kafka.schemaregistry.client.SchemaMetadata;
 import io.confluent.kafka.schemaregistry.client.SchemaRegistryClient;
 import io.confluent.kafka.schemaregistry.client.rest.exceptions.RestClientException;
@@ -47,6 +48,8 @@ public final class ConfluentAvroPayloadSerializer {
     private final AvroSchemaRegistry localRegistry;
     private final List<String> registryUrls;
     private final SchemaRegistryClient schemaRegistryClient;
+    private final Map<String, Object> schemaRegistryClientConfig;
+    private final int identityMapCapacity;
     private final LongAdder schemaRegisterSuccess = new LongAdder();
     private final LongAdder schemaRegisterFailure = new LongAdder();
     private final String subjectStrategy;
@@ -61,15 +64,21 @@ public final class ConfluentAvroPayloadSerializer {
 
     /**
      * @param avroSettings неизменяемые настройки Avro и Schema Registry
-     * @param factory      фабрика клиентов Schema Registry
      * @param localRegistry локальный реестр Avro-схем
      */
     public ConfluentAvroPayloadSerializer(AvroSettings avroSettings,
-                                          SchemaRegistryClientFactory factory,
                                           AvroSchemaRegistry localRegistry) {
+        this(avroSettings, localRegistry, null);
+    }
+
+    /**
+     * Расширенный конструктор, позволяющий тестам подменять клиент Schema Registry.
+     */
+    public ConfluentAvroPayloadSerializer(AvroSettings avroSettings,
+                                          AvroSchemaRegistry localRegistry,
+                                          SchemaRegistryClient clientOverride) {
         this.localRegistry = Objects.requireNonNull(localRegistry, "localRegistry");
         Objects.requireNonNull(avroSettings, "avroSettings");
-        Objects.requireNonNull(factory, "schemaRegistryClientFactory");
 
         List<String> urls = avroSettings.getRegistryUrls();
         if (urls == null || urls.isEmpty()) {
@@ -96,7 +105,13 @@ public final class ConfluentAvroPayloadSerializer {
         this.subjectStrategy = prop(avroProps, "subject.strategy", STRATEGY_TABLE);
         this.subjectPrefix = prop(avroProps, "subject.prefix", "");
         this.subjectSuffix = prop(avroProps, "subject.suffix", "");
-        this.schemaRegistryClient = createClient(factory, auth, avroProps);
+        this.identityMapCapacity = parsePositiveInt(
+                prop(avroProps, "client.cache.capacity", null),
+                AbstractKafkaAvroSerDeConfig.MAX_SCHEMAS_PER_SUBJECT_DEFAULT);
+        this.schemaRegistryClientConfig = buildClientConfig(auth);
+        this.schemaRegistryClient = clientOverride != null
+                ? clientOverride
+                : new CachedSchemaRegistryClient(this.registryUrls, identityMapCapacity, schemaRegistryClientConfig);
     }
 
     public byte[] serialize(TableName table, GenericData.Record avroRecord) {
@@ -238,24 +253,17 @@ public final class ConfluentAvroPayloadSerializer {
         }
     }
 
-    private SchemaRegistryClient createClient(SchemaRegistryClientFactory factory,
-                                              Map<String, String> auth,
-                                              Map<String, String> avroProps) {
-        Map<String, Object> clientConfig = new HashMap<>();
+    private Map<String, Object> buildClientConfig(Map<String, String> auth) {
+        Map<String, Object> config = new HashMap<>();
         String user = prop(auth, "basic.username", null);
         String pass = prop(auth, "basic.password", null);
         if (user != null && pass != null) {
             String credentials = user + ':' + pass;
-            clientConfig.put(AbstractKafkaAvroSerDeConfig.BASIC_AUTH_CREDENTIALS_SOURCE, "USER_INFO");
-            clientConfig.put(AbstractKafkaAvroSerDeConfig.USER_INFO_CONFIG, credentials);
-            clientConfig.put(SCHEMA_REGISTRY_BASIC_AUTH_USER_INFO, credentials);
+            config.put(AbstractKafkaAvroSerDeConfig.BASIC_AUTH_CREDENTIALS_SOURCE, "USER_INFO");
+            config.put(AbstractKafkaAvroSerDeConfig.USER_INFO_CONFIG, credentials);
+            config.put(SCHEMA_REGISTRY_BASIC_AUTH_USER_INFO, credentials);
         }
-
-        int identityMapCapacity = parsePositiveInt(
-                prop(avroProps, "client.cache.capacity", null),
-                AbstractKafkaAvroSerDeConfig.MAX_SCHEMAS_PER_SUBJECT_DEFAULT);
-
-        return factory.create(registryUrls, clientConfig, identityMapCapacity);
+        return Collections.unmodifiableMap(config);
     }
 
     private static String prop(Map<String, String> props, String key, String def) {
@@ -281,6 +289,18 @@ public final class ConfluentAvroPayloadSerializer {
         } catch (NumberFormatException ex) {
             return def;
         }
+    }
+
+    Map<String, Object> clientConfigForTest() {
+        return schemaRegistryClientConfig;
+    }
+
+    int identityMapCapacityForTest() {
+        return identityMapCapacity;
+    }
+
+    List<String> registryUrlsForTest() {
+        return registryUrls;
     }
 
     private enum CaseMode { ORIGINAL, UPPER, LOWER }
@@ -340,7 +360,7 @@ public final class ConfluentAvroPayloadSerializer {
         }
 
         @Override
-    protected void writeBytes(Object datum, Encoder out) throws IOException {
+        protected void writeBytes(Object datum, Encoder out) throws IOException {
             if (datum instanceof kz.qazmarka.h2k.payload.builder.BinarySlice) {
                 kz.qazmarka.h2k.payload.builder.BinarySlice slice =
                         (kz.qazmarka.h2k.payload.builder.BinarySlice) datum;

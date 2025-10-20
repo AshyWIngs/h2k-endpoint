@@ -39,8 +39,8 @@ class WalDiagnosticsTest {
     void capacityHintRecommendation() {
         WalDiagnostics diagnostics = WalDiagnostics.create(new DummyMetadata());
         TableName table = TableName.valueOf("ns", "capacity");
-        WalCounterService.EntrySummary summary =
-                new WalCounterService.EntrySummary(10, 10, 0, 20, 12, 12);
+    WalCounterService.EntrySummary summary =
+        new WalCounterService.EntrySummary(10, 10, 0, 20, 12);
 
         diagnostics.recordEntry(table, summary, false, null, OPTIONS_WITH_SALT);
 
@@ -57,8 +57,8 @@ class WalDiagnosticsTest {
 
         // низкая эффективность (почти нет фильтрации)
         for (int i = 0; i < 20; i++) {
-            WalCounterService.EntrySummary summary =
-                    new WalCounterService.EntrySummary(50, 50, 0, 100, 5, 5);
+        WalCounterService.EntrySummary summary =
+            new WalCounterService.EntrySummary(50, 50, 0, 100, 5);
             diagnostics.recordEntry(lowTable, summary, true, null, OPTIONS_WITH_SALT);
         }
         WalDiagnostics.TableStatsSnapshot low = diagnostics.snapshot().get(lowTable);
@@ -66,8 +66,8 @@ class WalDiagnosticsTest {
 
         TableName highTable = TableName.valueOf("ns", "cf-high");
         for (int i = 0; i < 20; i++) {
-            WalCounterService.EntrySummary summary =
-                    new WalCounterService.EntrySummary(50, 2, 48, 100, 5, 5);
+        WalCounterService.EntrySummary summary =
+            new WalCounterService.EntrySummary(50, 2, 48, 100, 5);
             diagnostics.recordEntry(highTable, summary, true, null, OPTIONS_WITH_SALT);
         }
         WalDiagnostics.TableStatsSnapshot high = diagnostics.snapshot().get(highTable);
@@ -79,8 +79,8 @@ class WalDiagnosticsTest {
     void snapshotKeepsCounters() {
         WalDiagnostics diagnostics = WalDiagnostics.create(new DummyMetadata());
         TableName table = TableName.valueOf("ns", "counter");
-        WalCounterService.EntrySummary summary =
-                new WalCounterService.EntrySummary(20, 18, 2, 40, 6, 6);
+    WalCounterService.EntrySummary summary =
+        new WalCounterService.EntrySummary(20, 18, 2, 40, 6);
 
         diagnostics.recordEntry(table, summary, true, null, OPTIONS_WITH_SALT);
 

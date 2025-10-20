@@ -1,10 +1,5 @@
 package kz.qazmarka.h2k.payload.builder;
 
-import static org.junit.jupiter.api.Assertions.assertAll;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertTrue;
-
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Paths;
 import java.util.ArrayList;
@@ -16,13 +11,16 @@ import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.util.Bytes;
+import static org.junit.jupiter.api.Assertions.assertAll;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import io.confluent.kafka.schemaregistry.client.MockSchemaRegistryClient;
 import kz.qazmarka.h2k.config.H2kConfig;
 import kz.qazmarka.h2k.config.H2kConfigBuilder;
-import kz.qazmarka.h2k.payload.serializer.avro.SchemaRegistryClientFactory;
 import kz.qazmarka.h2k.schema.decoder.Decoder;
 import kz.qazmarka.h2k.schema.decoder.TestRawDecoder;
 import kz.qazmarka.h2k.util.RowKeySlice;
@@ -31,9 +29,6 @@ import kz.qazmarka.h2k.util.RowKeySlice;
  * Юнит‑тесты {@link PayloadBuilder}: проверяем сборку payload и диагностический вывод.
  */
 class PayloadBuilderTest {
-
-    private static final SchemaRegistryClientFactory TEST_SR_FACTORY =
-            (urls, props, capacity) -> new MockSchemaRegistryClient();
 
     private static H2kConfig configWithSr() {
         String schemaDir = Paths.get("src", "test", "resources", "avro").toAbsolutePath().toString();
@@ -48,7 +43,7 @@ class PayloadBuilderTest {
     @Test
     @DisplayName("PK добавляется в payload, null-значения ячеек игнорируются")
     void pkInjectedAndNullValuesSkipped() {
-        PayloadBuilder builder = new PayloadBuilder(new StubDecoder(), configWithSr(), TEST_SR_FACTORY);
+        PayloadBuilder builder = new PayloadBuilder(new StubDecoder(), configWithSr(), new MockSchemaRegistryClient());
 
         List<Cell> cells = new ArrayList<>();
         byte[] row = Bytes.toBytes("rk-1");
@@ -69,10 +64,10 @@ class PayloadBuilderTest {
     @Test
     @DisplayName("Повторное использование списка ячеек не влияет на собранный payload")
     void rowBufferReuseDoesNotAffectPayload() {
-        Decoder decoder = (table, qualifier, value) -> value == null
-                ? null
-                : new String(value, StandardCharsets.UTF_8);
-        PayloadBuilder builder = new PayloadBuilder(decoder, configWithSr(), TEST_SR_FACTORY);
+    Decoder decoder = (table, qualifier, value) -> value == null
+        ? null
+        : new String(value, StandardCharsets.UTF_8);
+    PayloadBuilder builder = new PayloadBuilder(decoder, configWithSr(), new MockSchemaRegistryClient());
 
         List<Cell> cells = new ArrayList<>();
         byte[] row = Bytes.toBytes("rk-2");
@@ -89,7 +84,7 @@ class PayloadBuilderTest {
     @Test
     @DisplayName("describeSerializer() описывает Avro Confluent без legacy-ключа avro.mode")
     void describeSerializerHighlightsAvroMode() {
-        PayloadBuilder builder = new PayloadBuilder(TestRawDecoder.INSTANCE, configWithSr(), TEST_SR_FACTORY);
+        PayloadBuilder builder = new PayloadBuilder(TestRawDecoder.INSTANCE, configWithSr(), new MockSchemaRegistryClient());
 
         String info = builder.describeSerializer();
         assertTrue(info.contains("payload.format=AVRO_BINARY"), info);

@@ -40,12 +40,11 @@ final class WalCounterService {
         if (counters.rowsFiltered > 0) {
             rowsFiltered.add(counters.rowsFiltered);
         }
-        return new EntrySummary(rowsSeen,
-                counters.rowsSent,
-                counters.rowsFiltered,
-                counters.cellsSeen,
-                counters.maxRowCellsSent,
-                counters.maxRowCellsSeen);
+    return new EntrySummary(rowsSeen,
+        counters.rowsSent,
+        counters.rowsFiltered,
+        counters.cellsSeen,
+        counters.maxRowCellsSent);
     }
 
     void logThroughput(EntryCounters counters, Logger log) {
@@ -157,7 +156,6 @@ final class WalCounterService {
         int cellsSent;
         int rowsFiltered;
         int cellsSeen;
-        int maxRowCellsSeen;
         int maxRowCellsSent;
     }
 
@@ -167,20 +165,17 @@ final class WalCounterService {
         final long rowsFiltered;
         final long cellsSeen;
         final int maxRowCellsSent;
-        final int maxRowCellsSeen;
 
         EntrySummary(long rowsSeen,
                      int rowsSent,
                      int rowsFiltered,
                      int cellsSeen,
-                     int maxRowCellsSent,
-                     int maxRowCellsSeen) {
+                     int maxRowCellsSent) {
             this.rowsSeen = rowsSeen;
             this.rowsSent = rowsSent;
             this.rowsFiltered = rowsFiltered;
             this.cellsSeen = cellsSeen;
             this.maxRowCellsSent = maxRowCellsSent;
-            this.maxRowCellsSeen = maxRowCellsSeen;
         }
     }
 

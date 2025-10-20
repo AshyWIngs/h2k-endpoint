@@ -24,14 +24,6 @@ final class WalObserverHub {
         return new WalObserverHub(WalDiagnostics.create(metadata));
     }
 
-    /**
-     * Создаёт концентратор наблюдателей с заранее подготовленными экземплярами.
-     * Используется модульными тестами для контроля состояний.
-     */
-    static WalObserverHub forTest(WalDiagnostics diagnostics) {
-        return new WalObserverHub(diagnostics == null ? WalDiagnostics.disabled() : diagnostics);
-    }
-
     void observeRow(TableName table,
                     TableOptionsSnapshot tableOptions,
                     int rowKeyLength) {
@@ -47,9 +39,5 @@ final class WalObserverHub {
             return;
         }
         diagnostics.recordEntry(table, summary, filterActive, cfSnapshot, tableOptions);
-    }
-
-    WalDiagnostics diagnosticsForTest() {
-        return diagnostics;
     }
 }

@@ -9,10 +9,10 @@ import org.apache.avro.generic.GenericData;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.TableName;
 
+import io.confluent.kafka.schemaregistry.client.SchemaRegistryClient;
 import kz.qazmarka.h2k.config.AvroSettings;
 import kz.qazmarka.h2k.config.H2kConfig;
 import kz.qazmarka.h2k.payload.serializer.avro.ConfluentAvroPayloadSerializer;
-import kz.qazmarka.h2k.payload.serializer.avro.SchemaRegistryClientFactory;
 import kz.qazmarka.h2k.schema.decoder.Decoder;
 import kz.qazmarka.h2k.schema.registry.avro.local.AvroSchemaRegistry;
 import kz.qazmarka.h2k.util.RowKeySlice;
@@ -32,22 +32,24 @@ public final class PayloadBuilder {
      * @param cfg     неизменяемая конфигурация h2k
      */
     public PayloadBuilder(Decoder decoder, H2kConfig cfg) {
-        this(decoder, cfg, SchemaRegistryClientFactory.cached());
+        this(decoder, cfg, null);
     }
 
     /**
-     * @param decoder                     декодер Phoenix
-     * @param cfg                         конфигурация h2k
-     * @param schemaRegistryClientFactory фабрика клиентов Schema Registry (для режима Confluent)
+     * @param decoder декодер Phoenix, предоставляющий значения колонок и PK
+     * @param cfg конфигурация h2k
+     * @param schemaRegistryClient замена Schema Registry клиента для тестов и stand-alone режимов
      */
     public PayloadBuilder(Decoder decoder,
                           H2kConfig cfg,
-                          SchemaRegistryClientFactory schemaRegistryClientFactory) {
+                          SchemaRegistryClient schemaRegistryClient) {
+        Objects.requireNonNull(decoder, "decoder");
         H2kConfig config = Objects.requireNonNull(cfg, "конфигурация h2k");
-        Objects.requireNonNull(schemaRegistryClientFactory, "schemaRegistryClientFactory");
         this.avroSettings = config.getAvroSettings();
         AvroSchemaRegistry localRegistry = new AvroSchemaRegistry(resolveSchemaDir(avroSettings));
-        this.serializer = new ConfluentAvroPayloadSerializer(avroSettings, schemaRegistryClientFactory, localRegistry);
+        this.serializer = schemaRegistryClient == null
+                ? new ConfluentAvroPayloadSerializer(avroSettings, localRegistry)
+                : new ConfluentAvroPayloadSerializer(avroSettings, localRegistry, schemaRegistryClient);
         this.assembler = new RowPayloadAssembler(decoder, config, localRegistry);
     }
 

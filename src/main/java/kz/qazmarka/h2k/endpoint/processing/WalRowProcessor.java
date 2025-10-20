@@ -37,9 +37,6 @@ final class WalRowProcessor {
         WalCounterService.EntryCounters counters = context.counters;
         int cellsInRow = rowCells.size();
         counters.cellsSeen += cellsInRow;
-        if (cellsInRow > counters.maxRowCellsSeen) {
-            counters.maxRowCellsSeen = cellsInRow;
-        }
 
         if (!context.cfFilter.isEmpty() && !context.cfFilter.allows(rowCells)) {
             counters.rowsFiltered++;

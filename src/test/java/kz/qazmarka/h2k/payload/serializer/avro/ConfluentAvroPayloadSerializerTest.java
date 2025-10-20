@@ -51,13 +51,8 @@ class ConfluentAvroPayloadSerializerTest {
     @DisplayName("serialize(): регистрирует схему один раз и возвращает байты Confluent формата")
     void serializeRegistersSchemaAndCachesWriter() {
         MockSchemaRegistryClient mockClient = new MockSchemaRegistryClient();
-        SchemaRegistryClientFactory factory = (urls, clientConfig, identityMapCapacity) -> {
-            assertEquals(Collections.singletonList("http://mock-sr"), urls, "список SR URL");
-            assertEquals(1000, identityMapCapacity);
-            return mockClient;
-        };
 
-    H2kConfig cfg = new H2kConfigBuilder("mock:9092")
+        H2kConfig cfg = new H2kConfigBuilder("mock:9092")
                 .avro()
                 .schemaDir(SCHEMA_DIR.toString())
                 .schemaRegistryUrls(Collections.singletonList("http://mock-sr"))
@@ -66,10 +61,17 @@ class ConfluentAvroPayloadSerializerTest {
                 .build();
 
         AvroSchemaRegistry localRegistry = new AvroSchemaRegistry(SCHEMA_DIR);
-    ConfluentAvroPayloadSerializer serializer = new ConfluentAvroPayloadSerializer(
-        cfg.getAvroSettings(),
-        factory,
-        localRegistry);
+        ConfluentAvroPayloadSerializer serializer = new ConfluentAvroPayloadSerializer(
+                cfg.getAvroSettings(),
+                localRegistry,
+                mockClient);
+
+        assertEquals(Collections.singletonList("http://mock-sr"), serializer.registryUrlsForTest(),
+                "список URL должен совпадать с настройками");
+        assertEquals(1000, serializer.identityMapCapacityForTest(),
+                "ёмкость кеша клиента Schema Registry должна совпадать");
+        assertTrue(serializer.clientConfigForTest().isEmpty(),
+                "для сценария без аутентификации конфигурация клиента должна быть пустой");
 
         Schema tableSchema = localRegistry.getByTable("INT_TEST_TABLE");
         GenericData.Record avroRecord = new GenericData.Record(tableSchema);
@@ -110,23 +112,14 @@ class ConfluentAvroPayloadSerializerTest {
     }
 
     @Test
-    @DisplayName("Конструктор передаёт basic-auth в фабрику клиента Schema Registry")
-    void factoryReceivesAuthConfiguration() {
+    @DisplayName("Конструктор формирует basic-auth конфигурацию клиента Schema Registry")
+    void constructorBuildsBasicAuthConfiguration() {
         Map<String, String> auth = new HashMap<>();
         auth.put("basic.username", "user");
         auth.put("basic.password", "pass");
 
-        Map<String, String> props = new HashMap<>();
-        props.put("client.cache.capacity", "16");
-
-        Map<String, Object> capturedConfig = new HashMap<>();
-
-        SchemaRegistryClientFactory factory = (urls, clientConfig, identityMapCapacity) -> {
-            capturedConfig.putAll(clientConfig);
-            assertEquals(Collections.singletonList("http://mock-sr"), urls);
-            assertEquals(16, identityMapCapacity);
-            return new MockSchemaRegistryClient();
-        };
+    Map<String, String> props = new HashMap<>();
+    props.put("client.cache.capacity", "16");
 
     H2kConfig cfg = new H2kConfigBuilder("mock:9092")
                 .avro()
@@ -140,13 +133,16 @@ class ConfluentAvroPayloadSerializerTest {
         AvroSchemaRegistry localRegistry = new AvroSchemaRegistry(SCHEMA_DIR);
     ConfluentAvroPayloadSerializer created = new ConfluentAvroPayloadSerializer(
         cfg.getAvroSettings(),
-        factory,
-        localRegistry);
-        assertNotNull(created.metrics(), "метрики сериализатора должны быть доступны");
+        localRegistry,
+        new MockSchemaRegistryClient());
+    assertNotNull(created.metrics(), "метрики сериализатора должны быть доступны");
 
-        assertEquals("USER_INFO", capturedConfig.get(AbstractKafkaAvroSerDeConfig.BASIC_AUTH_CREDENTIALS_SOURCE));
-        assertEquals("user:pass", capturedConfig.get(AbstractKafkaAvroSerDeConfig.USER_INFO_CONFIG));
-        assertEquals("user:pass", capturedConfig.get("schema.registry.basic.auth.user.info"));
+    Map<String, Object> config = created.clientConfigForTest();
+    assertEquals("USER_INFO", config.get(AbstractKafkaAvroSerDeConfig.BASIC_AUTH_CREDENTIALS_SOURCE));
+    assertEquals("user:pass", config.get(AbstractKafkaAvroSerDeConfig.USER_INFO_CONFIG));
+    assertEquals("user:pass", config.get("schema.registry.basic.auth.user.info"));
+    assertEquals(16, created.identityMapCapacityForTest(),
+        "ёмкость кеша должна считываться из настроек");
     }
 
     @Test
@@ -162,7 +158,7 @@ class ConfluentAvroPayloadSerializerTest {
                 new SchemaMetadata(42, 3, tableSchema.toString(false)));
 
     ConfluentAvroPayloadSerializer serializer =
-        new ConfluentAvroPayloadSerializer(cfg.getAvroSettings(), constantFactory(client), localRegistry);
+        new ConfluentAvroPayloadSerializer(cfg.getAvroSettings(), localRegistry, client);
 
         GenericData.Record avroRecord = new GenericData.Record(tableSchema);
         avroRecord.put("id", "rk-1");
@@ -192,18 +188,26 @@ class ConfluentAvroPayloadSerializerTest {
         TableName table = TableName.valueOf("INT_TEST_TABLE");
         Schema tableSchema = localRegistry.getByTable(table.getQualifierAsString());
 
-    ConfluentAvroPayloadSerializer serializer =
-        new ConfluentAvroPayloadSerializer(cfg.getAvroSettings(), constantFactory(client), localRegistry);
+        ConfluentAvroPayloadSerializer serializer =
+                new ConfluentAvroPayloadSerializer(cfg.getAvroSettings(), localRegistry, client);
 
         GenericData.Record avroRecord = new GenericData.Record(tableSchema);
         avroRecord.put("id", "rk-err");
         avroRecord.put("value_long", 7L);
         avroRecord.put("_event_ts", 77L);
 
-        IllegalStateException ex = assertThrows(IllegalStateException.class,
-                () -> serializer.serialize(table, avroRecord));
-        assertTrue(ex.getMessage().contains("не удалось зарегистрировать схему"),
-                "ожидается текст с отказом регистрации");
+    IllegalStateException ex = assertThrows(IllegalStateException.class,
+        () -> serializer.serialize(table, avroRecord),
+        "Ожидается исключение при ошибке регистрации схемы");
+    assertTrue(ex.getMessage().contains("не удалось зарегистрировать схему"),
+        "сообщение должно описывать невозможность регистрации схемы");
+    assertTrue(ex.getCause() instanceof RestClientException,
+        "ожидается RestClientException в качестве первопричины");
+    String causeMessage = ex.getCause().getMessage();
+    assertTrue(causeMessage.startsWith("SR down"),
+        "сообщение RestClientException должно содержать описание сбоя");
+    assertTrue(causeMessage.contains("50301"),
+        "сообщение RestClientException должно включать код ошибки Schema Registry");
 
         ConfluentAvroPayloadSerializer.SchemaRegistryMetrics metrics = serializer.metrics();
         assertEquals(0, metrics.registeredSchemas(), "успешных сравнений fingerprint не было");
@@ -223,7 +227,7 @@ class ConfluentAvroPayloadSerializerTest {
                 new SchemaMetadata(10, 1, schema.toString(false)));
 
     ConfluentAvroPayloadSerializer serializer =
-        new ConfluentAvroPayloadSerializer(cfg.getAvroSettings(), constantFactory(client), localRegistry);
+        new ConfluentAvroPayloadSerializer(cfg.getAvroSettings(), localRegistry, client);
 
         GenericData.Record original = new GenericData.Record(schema);
         original.put("id", "rk-ok");
@@ -257,7 +261,7 @@ class ConfluentAvroPayloadSerializerTest {
                 new SchemaMetadata(11, 4, schema.toString(false)));
 
     ConfluentAvroPayloadSerializer serializer =
-        new ConfluentAvroPayloadSerializer(cfg.getAvroSettings(), constantFactory(client), localRegistry);
+        new ConfluentAvroPayloadSerializer(cfg.getAvroSettings(), localRegistry, client);
 
         GenericData.Record broken = new GenericData.Record(schema);
         broken.put("id", 123); // ожидалась строка
@@ -280,7 +284,7 @@ class ConfluentAvroPayloadSerializerTest {
     @DisplayName("serialize(): BinarySlice из RowPayloadAssembler сериализуется как bytes union без ошибок")
     void serializeHandlesBinarySliceFromAssembler() {
         RecordingSchemaRegistryClient client = new RecordingSchemaRegistryClient();
-    H2kConfig cfg = new H2kConfigBuilder("mock:9092")
+        H2kConfig cfg = new H2kConfigBuilder("mock:9092")
                 .avro()
                 .schemaDir(SCHEMA_DIR.toString())
                 .schemaRegistryUrls(Collections.singletonList("http://mock-sr"))
@@ -317,7 +321,7 @@ class ConfluentAvroPayloadSerializerTest {
             }
         };
 
-    PayloadBuilder builder = new PayloadBuilder(decoder, cfg, constantFactory(client));
+        PayloadBuilder builder = new PayloadBuilder(decoder, cfg, client);
         TableName table = TableName.valueOf("default", "T_ROW");
         byte[] row = Bytes.toBytes("rk-1");
         byte[] family = Bytes.toBytes("data");
@@ -343,22 +347,13 @@ class ConfluentAvroPayloadSerializerTest {
     private static H2kConfig configWithCacheCapacity(int capacity) {
         Map<String, String> props = new HashMap<>();
         props.put("client.cache.capacity", Integer.toString(capacity));
-    return new H2kConfigBuilder("mock:9092")
+        return new H2kConfigBuilder("mock:9092")
                 .avro()
                 .schemaDir(SCHEMA_DIR.toString())
                 .schemaRegistryUrls(Collections.singletonList("http://mock-sr"))
                 .properties(props)
                 .done()
                 .build();
-    }
-
-    private static SchemaRegistryClientFactory constantFactory(RecordingSchemaRegistryClient client) {
-        return (urls, clientConfig, identityMapCapacity) -> {
-            assertEquals(Collections.singletonList("http://mock-sr"), urls, "ожидается один URL SR");
-            assertTrue(clientConfig.isEmpty(), "для тестов дополнительных настроек SR быть не должно");
-            assertTrue(identityMapCapacity > 0, "ёмкость identity-map должна быть положительной");
-            return client;
-        };
     }
 
     private static final class RecordingSchemaRegistryClient extends MockSchemaRegistryClient {

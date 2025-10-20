@@ -15,6 +15,7 @@ import org.apache.avro.generic.GenericData;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.TableName;
+import org.apache.hadoop.hbase.util.Bytes;
 
 import kz.qazmarka.h2k.config.CfFilterSnapshot;
 import kz.qazmarka.h2k.config.H2kConfig;
@@ -535,7 +536,7 @@ final class RowPayloadAssembler {
                 this.bytes = array;
                 this.offset = off;
                 this.length = len;
-                this.hash = org.apache.hadoop.hbase.util.Bytes.hashCode(array, off, len);
+                this.hash = Bytes.hashCode(array, off, len);
             }
 
             final void clear() {
@@ -559,10 +560,8 @@ final class RowPayloadAssembler {
                     return false;
                 }
                 AbstractKey that = (AbstractKey) other;
-                if (this.length != that.length) {
-                    return false;
-                }
-                return org.apache.hadoop.hbase.util.Bytes.equals(
+                return this.length == that.length
+                        && Bytes.equals(
                         this.bytes, this.offset, this.length,
                         that.bytes, that.offset, that.length);
             }

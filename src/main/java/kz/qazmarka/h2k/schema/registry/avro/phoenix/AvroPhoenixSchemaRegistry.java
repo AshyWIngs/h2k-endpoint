@@ -10,7 +10,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicReference;
 
-import org.apache.avro.JsonProperties;
 import org.apache.avro.Schema;
 import org.apache.avro.Schema.Field;
 import org.apache.hadoop.hbase.TableName;
@@ -142,87 +141,20 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
         return new TableMetadata(types, pk, salt, capacity, cfFamilies);
     }
 
+    /** Считывает CF из Avro-свойства: поддерживается только CSV-строка, остальные типы отключают фильтр. */
     private String[] readColumnFamilies(Schema schema, TableName table) {
         Object raw = firstNonNull(schema.getObjectProp(PROP_CF_LIST), schema.getProp(PROP_CF_LIST));
         if (raw == null) {
             return SchemaRegistry.EMPTY;
         }
-        if (raw instanceof JsonNode) {
-            return sanitizeCfFromJson((JsonNode) raw, table);
-        }
-        if (raw instanceof java.util.List<?>) {
-            return sanitizeCfFromList((java.util.List<?>) raw, table);
-        }
         if (!(raw instanceof CharSequence)) {
             Logger log = logger();
-            log.warn("Avro-схема {}: h2k.cf.list имеет неподдерживаемый тип — будет обработано как CSV",
+            log.warn("Avro-схема {}: h2k.cf.list имеет неподдерживаемый тип — фильтр будет отключён",
                     table.getNameAsString());
             log.debug("h2k.cf.list: неподдерживаемый тип: {}", raw.getClass().getName());
-        }
-        String text = String.valueOf(raw);
-        return sanitizeCfCsv(text, table);
-    }
-
-    /**
-     * Нормализует список CF из JSON-массива: обрезает пробелы, отбрасывает пустые элементы,
-     * устраняет дубликаты, сохраняет порядок. Если узел не массив — возвращает пустой список.
-     */
-    String[] sanitizeCfFromJson(JsonNode node, TableName table) {
-        if (!node.isArray()) {
-            logger().warn("Avro-схема {}: h2k.cf.list задан в виде JSON, но не является массивом — значение проигнорировано", table.getNameAsString());
             return SchemaRegistry.EMPTY;
         }
-        java.util.List<String> values = new java.util.ArrayList<>(node.size());
-        for (int i = 0; i < node.size(); i++) {
-            JsonNode item = node.get(i);
-            if (item == null || item.isNull()) {
-                continue;
-            }
-            String val = normalizeCfName(item.asText());
-            if (val != null) {
-                values.add(val);
-            }
-        }
-        String[] families = deduplicate(values);
-        if (families.length == 0) {
-            Logger log = logger();
-            log.warn(WARN_CF_FILTER_DISABLED, table.getNameAsString());
-            log.debug("h2k.cf.list: JSON-массив без валидных значений: {}", node);
-        }
-        return families;
-    }
-
-    /**
-     * Нормализует список CF из java.util.List: приводит элементы к строке, обрезает пробелы,
-     * отбрасывает пустые, устраняет дубликаты, сохраняет порядок.
-     */
-    String[] sanitizeCfFromList(java.util.List<?> list, TableName table) {
-        if (list.isEmpty()) {
-            return SchemaRegistry.EMPTY;
-        }
-        java.util.List<String> values = new java.util.ArrayList<>(list.size());
-        for (Object o : list) {
-            String asText;
-            if (o == null || o == JsonProperties.NULL_VALUE) {
-                asText = null;
-            } else if (o instanceof JsonNode) {
-                JsonNode node = (JsonNode) o;
-                asText = node.isNull() ? null : node.asText();
-            } else {
-                asText = String.valueOf(o);
-            }
-            String normalized = normalizeCfName(asText);
-            if (normalized != null) {
-                values.add(normalized);
-            }
-        }
-        String[] families = deduplicate(values);
-        if (families.length == 0) {
-            Logger log = logger();
-            log.warn(WARN_CF_FILTER_DISABLED, table.getNameAsString());
-            log.debug("h2k.cf.list: список без валидных значений: {}", list);
-        }
-        return families;
+        return sanitizeCfCsv(raw.toString(), table);
     }
 
     /**
@@ -312,8 +244,8 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
 
     private static String[] readPk(Schema schema) {
         Object raw = schema.getObjectProp(PROP_PK);
-        if (raw instanceof com.fasterxml.jackson.databind.JsonNode) {
-            return readPkFromJsonNode((com.fasterxml.jackson.databind.JsonNode) raw);
+        if (raw instanceof JsonNode) {
+            return readPkFromJsonNode((JsonNode) raw);
         }
         if (raw instanceof java.util.List<?>) {
             java.util.List<?> list = (java.util.List<?>) raw;
@@ -346,7 +278,7 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
         return v.isEmpty() ? null : v;
     }
 
-    private static String[] readPkFromJsonNode(com.fasterxml.jackson.databind.JsonNode node) {
+    private static String[] readPkFromJsonNode(JsonNode node) {
         if (!node.isArray()) {
             return SchemaRegistry.EMPTY;
         }

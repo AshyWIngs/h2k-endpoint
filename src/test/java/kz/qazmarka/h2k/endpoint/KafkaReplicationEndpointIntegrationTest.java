@@ -42,7 +42,6 @@ import kz.qazmarka.h2k.kafka.ensure.TopicEnsurer;
 import kz.qazmarka.h2k.kafka.ensure.TopicEnsurer.EnsureDelegate;
 import kz.qazmarka.h2k.kafka.producer.batch.BatchSender;
 import kz.qazmarka.h2k.payload.builder.PayloadBuilder;
-import kz.qazmarka.h2k.payload.serializer.avro.SchemaRegistryClientFactory;
 import kz.qazmarka.h2k.schema.decoder.Decoder;
 import kz.qazmarka.h2k.schema.registry.PhoenixTableMetadataProvider;
 import kz.qazmarka.h2k.util.RowKeySlice;
@@ -86,8 +85,7 @@ class KafkaReplicationEndpointIntegrationTest {
 
         H2kConfig config = H2kConfig.from(cfg, "mock:9092", metadata);
 
-        MockSchemaRegistryClient mockClient = new MockSchemaRegistryClient();
-        SchemaRegistryClientFactory factory = (urls, clientConfig, identityMapCapacity) -> mockClient;
+    MockSchemaRegistryClient mockClient = new MockSchemaRegistryClient();
 
         Decoder decoder = new Decoder() {
             @Override
@@ -108,8 +106,8 @@ class KafkaReplicationEndpointIntegrationTest {
             }
         };
 
-        PayloadBuilder builder = new PayloadBuilder(decoder, config, factory);
-    TopicManager topicManager = new TopicManager(config.getTopicSettings(), TopicEnsurer.disabled());
+        PayloadBuilder builder = new PayloadBuilder(decoder, config, mockClient);
+        TopicManager topicManager = new TopicManager(config.getTopicSettings(), TopicEnsurer.disabled());
         MockProducer<byte[], byte[]> producer = new MockProducer<>(true, new ByteArraySerializer(), new ByteArraySerializer());
         WalEntryProcessor processor = new WalEntryProcessor(builder, topicManager, producer, config);
 
@@ -162,16 +160,27 @@ class KafkaReplicationEndpointIntegrationTest {
 
         H2kConfig config = H2kConfig.from(cfg, "mock:9092");
 
-        SchemaRegistryClientFactory failingFactory = (urls, clientConfig, capacity) -> {
-            throw new IllegalStateException("SR down");
-        };
-
-        Decoder decoder = defaultDecoder();
-
-        IllegalStateException initError = assertThrows(IllegalStateException.class,
-                () -> new PayloadBuilder(decoder, config, failingFactory),
-                "Ожидается ошибка инициализации при недоступном Schema Registry");
-        assertNotNull(initError);
+    Decoder decoder = defaultDecoder();
+    MockSchemaRegistryClient failingClient = new MockSchemaRegistryClient() {
+        @Override
+        public int register(String subject, Schema schema) {
+        throw new IllegalStateException("SR down");
+        }
+    };
+    PayloadBuilder builder = new PayloadBuilder(decoder, config, failingClient);
+    TableName table = TableName.valueOf("INT_TEST_TABLE");
+    byte[] row = Bytes.toBytes("rk-fail");
+    List<Cell> cells = new ArrayList<>();
+    cells.add(new KeyValue(row, Bytes.toBytes("d"), Bytes.toBytes("value_long"), Bytes.toBytes(1L)));
+    RowKeySlice rowSlice = RowKeySlice.whole(row);
+            IllegalStateException initError = assertThrows(IllegalStateException.class,
+                    () -> builder.buildRowPayloadBytes(table,
+                            cells,
+                            rowSlice,
+                            0L,
+                            0L),
+                    "Ожидается ошибка регистрации схемы при недоступном Schema Registry");
+    assertNotNull(initError);
     }
 
     @Test
@@ -185,8 +194,7 @@ class KafkaReplicationEndpointIntegrationTest {
         H2kConfig config = H2kConfig.from(cfg, "mock:9092", defaultMetadataProvider());
 
         Decoder decoder = defaultDecoder();
-        SchemaRegistryClientFactory factory = (urls, clientConfig, identityMapCapacity) -> new MockSchemaRegistryClient();
-        PayloadBuilder builder = new PayloadBuilder(decoder, config, factory);
+    PayloadBuilder builder = new PayloadBuilder(decoder, config, new MockSchemaRegistryClient());
 
         AtomicInteger ensureAttempts = new AtomicInteger();
         AtomicReference<RuntimeException> ensureFailure = new AtomicReference<>();

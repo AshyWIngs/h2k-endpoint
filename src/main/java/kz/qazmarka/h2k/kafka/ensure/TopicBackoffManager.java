@@ -68,7 +68,9 @@ public final class TopicBackoffManager {
             return policy.nextDelayNanos(baseDelayNs);
         }
         long jitterBound = Math.max(1L, baseMs);
-        long jitteredMs = baseMs + ThreadLocalRandom.current().nextLong(jitterBound);
+    // Джиттер предназначен исключительно для разнесения повторных ensure-запросов,
+    // криптографическая стойкость здесь не требуется, поэтому достаточно ThreadLocalRandom.
+    long jitteredMs = baseMs + ThreadLocalRandom.current().nextLong(jitterBound);
         long jitteredNs = TimeUnit.MILLISECONDS.toNanos(jitteredMs);
         return policy.nextDelayNanos(jitteredNs);
     }
