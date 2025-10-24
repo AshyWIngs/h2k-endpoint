@@ -27,7 +27,7 @@ public final class PhoenixPkParser {
 
     private static final Set<String> PK_WARNED =
             Collections.newSetFromMap(new ConcurrentHashMap<>());
-    private static final Set<ColWarnKey> PK_COLUMN_WARNED =
+    private static final Set<TableColumnKey> PK_COLUMN_WARNED =
             Collections.newSetFromMap(new ConcurrentHashMap<>());
 
     /**
@@ -248,7 +248,7 @@ public final class PhoenixPkParser {
     }
 
     private void warnPkColumnDecodeFailure(TableName table, String column, String message) {
-        ColWarnKey key = new ColWarnKey(table.getNameWithNamespaceInclAsString(), column);
+        TableColumnKey key = new TableColumnKey(table.getNameWithNamespaceInclAsString(), column);
         String text = (message == null || message.isEmpty()) ? "неизвестная ошибка" : message;
         if (PK_COLUMN_WARNED.add(key)) {
             LOG.warn("PK: пропускаю колонку {}.{} — {}", table.getNameWithNamespaceInclAsString(), column, text);
@@ -268,8 +268,8 @@ public final class PhoenixPkParser {
 
     static Set<WarnedColumn> pkColumnWarnedSnapshotForTest() {
         Set<WarnedColumn> snapshot = new HashSet<>(PK_COLUMN_WARNED.size());
-        for (ColWarnKey key : PK_COLUMN_WARNED) {
-            snapshot.add(new WarnedColumn(key.table, key.column));
+        for (TableColumnKey key : PK_COLUMN_WARNED) {
+            snapshot.add(new WarnedColumn(key));
         }
         return snapshot;
     }
@@ -305,51 +305,24 @@ public final class PhoenixPkParser {
         static ValSeg of(Object v, int p) { return new ValSeg(v, p, true, null); }
     }
 
-    private static final class ColWarnKey {
-        private final String table;
-        private final String column;
-        private final int hash;
-
-        ColWarnKey(String table, String column) {
-            this.table = table;
-            this.column = column;
-            this.hash = 31 * table.hashCode() + column.hashCode();
-        }
-
-        @Override
-        public int hashCode() {
-            return hash;
-        }
-
-        @Override
-        public boolean equals(Object o) {
-            if (this == o) return true;
-            if (o == null || o.getClass() != ColWarnKey.class) return false;
-            ColWarnKey other = (ColWarnKey) o;
-            return hash == other.hash && table.equals(other.table) && column.equals(other.column);
-        }
-    }
-
     static final class WarnedColumn {
-        private final String table;
-        private final String column;
+        private final TableColumnKey key;
 
-        WarnedColumn(String table, String column) {
-            this.table = table;
-            this.column = column;
+        WarnedColumn(TableColumnKey key) {
+            this.key = key;
         }
 
         String table() {
-            return table;
+            return key.table();
         }
 
         String column() {
-            return column;
+            return key.column();
         }
 
         @Override
         public int hashCode() {
-            return 31 * table.hashCode() + column.hashCode();
+            return key.hashCode();
         }
 
         @Override
@@ -361,7 +334,7 @@ public final class PhoenixPkParser {
                 return false;
             }
             WarnedColumn other = (WarnedColumn) o;
-            return table.equals(other.table) && column.equals(other.column);
+            return key.equals(other.key);
         }
     }
 

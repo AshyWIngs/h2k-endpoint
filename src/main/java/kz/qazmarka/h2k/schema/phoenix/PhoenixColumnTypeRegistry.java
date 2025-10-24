@@ -197,7 +197,7 @@ public final class PhoenixColumnTypeRegistry {
             this.ns = t.getNamespaceAsString();
             this.name = t.getNameAsString();
             this.qual = normalizeQualifier(qual);
-            this.hash = 31 * (31 * ns.hashCode() + name.hashCode()) + this.qual.hashCode();
+            this.hash = Objects.hash(this.ns, this.name, this.qual);
         }
 
         @Override
@@ -207,13 +207,17 @@ public final class PhoenixColumnTypeRegistry {
 
         @Override
         public boolean equals(Object o) {
-            if (this == o) return true;
-            if (o == null || o.getClass() != ColKey.class) return false;
+            if (this == o) {
+                return true;
+            }
+            if (!(o instanceof ColKey)) {
+                return false;
+            }
             ColKey other = (ColKey) o;
             return this.hash == other.hash
-                    && this.ns.equals(other.ns)
-                    && this.name.equals(other.name)
-                    && this.qual.equals(other.qual);
+                    && Objects.equals(this.ns, other.ns)
+                    && Objects.equals(this.name, other.name)
+                    && Objects.equals(this.qual, other.qual);
         }
     }
 

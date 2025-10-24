@@ -1,25 +1,86 @@
 {
   "maven.view": "hierarchical",
-  "codacy.cli.cliVersion": "latest",
-  
-  // === НАСТРОЙКА JAVA 1.8 ===
+
+  "java.format.enabled": false,
+  "java.codeGeneration.hashCodeEquals.useJava7Objects": true,
+  "java.compile.nullAnalysis.mode": "automatic",
+  "java.configuration.updateBuildConfiguration": "automatic",
+  "sonarlint.connectedMode.project": {
+    "connectionId": "ashywings",
+    "projectKey": "AshyWIngs_h2k-endpoint"
+  },
   "java.configuration.runtimes": [
     {
       "name": "JavaSE-1.8",
-      "path": "/Library/Java/JavaVirtualMachines/zulu-8.jdk/Contents/Home",
+      "path": "/usr/lib/jvm/java-8-openjdk-amd64",
       "default": true
+    },
+    {
+      "name": "JavaSE-17",
+      "path": "/usr/lib/jvm/java-17-openjdk-amd64"
     }
   ],
-  
-  // Отключаем проверки форматирования от Java Language Server
-  "java.completion.guessMethodArguments": "off",
-  "java.format.enabled": false,
-  "java.codeGeneration.hashCodeEquals.useJava7Objects": true,
-  "java.errors.incompleteClasspath.severity": "ignore",
-  "java.compile.nullAnalysis.mode": "automatic",
-  "sonarlint.connectedMode.project": {
-    "connectionId": "ashywings",
-    "projectKey": "AshyWIngs_etl"
+  "terminal.integrated.env.linux": {
+    "JAVA_HOME": "/usr/lib/jvm/java-8-openjdk-amd64",
+    "PATH": "${env:JAVA_HOME}/bin:${env:PATH}"
   },
-  "java.configuration.updateBuildConfiguration": "automatic"
+  "maven.terminal.customEnv": [
+    {
+      "environmentVariable": "JAVA_HOME",
+      "value": "/usr/lib/jvm/java-8-openjdk-amd64"
+    }
+  ],
+  "java.import.gradle.java.home": "/usr/lib/jvm/java-8-openjdk-amd64",
+
+  // MCP servers available for this workspace (Copilot MCP)
+  // Use npx-based servers so they work both in VSCode and CLI.
+  "github.copilot.mcpServers": {
+    // Serena MCP server (semantic code tools)
+    // Примечание: npx-пакета не найдено, оставляем uvx.
+    "Serena": {
+      "transport": "stdio",
+      "command": "uvx",
+      "args": [
+        "--from",
+        "serena-agent",
+        "serena-mcp-server",
+        "--transport",
+        "stdio",
+        "--project",
+        "${workspaceFolder}"
+      ],
+      "cwd": "${workspaceFolder}"
+    },
+
+    // Codacy MCP server (качество кода и безопасность)
+    // Работает через npx-пакет @codacy/codacy-mcp
+    "Codacy": {
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@codacy/codacy-mcp"],
+      "cwd": "${workspaceFolder}",
+      "env": {
+        "CODACY_ACCOUNT_TOKEN": "${env:CODACY_ACCOUNT_TOKEN}"
+      }
+    },
+
+    // Pylance MCP server (для Python-подпроектов)
+    // Примечание: npx-пакета не найдено, оставляем uvx.
+    "Pylance": {
+      "transport": "stdio",
+      "command": "/home/user/.local/bin/uvx",
+      "args": ["pylance-mcp", "serve"],
+      "cwd": "${workspaceFolder}"
+    },
+
+    // Upstash Context7 (актуальная документация/примеры по библиотекам)
+    // Рекомендуется передавать ключ через переменную окружения CONTEXT7_API_KEY.
+    // Если хотите прописать ключ явно, замените ${env:CONTEXT7_API_KEY} на ваш ключ.
+    "Context7": {
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp", "--api-key", "${env:CONTEXT7_API_KEY}"],
+      "cwd": "${workspaceFolder}"
+    }
+  }
 }
