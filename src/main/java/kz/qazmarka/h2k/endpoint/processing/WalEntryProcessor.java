@@ -88,64 +88,12 @@ public final class WalEntryProcessor {
             return;
         }
 
-        String topic = topicManager.resolveTopic(table);
-        topicManager.ensureTopicIfNeeded(topic);
+        EntryContext context = prepareEntryContext(entry, sender, includeWalMeta, table, tableOptions, cfSnapshot, filterConfigured);
+        processEntryCells(cells, context);
+        logEntrySummary(context);
 
-        WalMeta walMeta = includeWalMeta ? readWalMeta(entry) : WalMeta.EMPTY;
-
-        WalCounterService.EntryCounters counters = counterService.newEntryCounters();
-        WalCfFilterCache cfCache = prepareCfCache(filterConfigured ? cfSnapshot.families() : null);
-        boolean filterActive = filterConfigured && !cfCache.isEmpty();
-
-        WalRowProcessor.RowContext rowContext = new WalRowProcessor.RowContext(
-                topic,
-                table,
-                walMeta,
-                sender,
-                tableOptions,
-                cfCache,
-                counters);
-        ArrayList<Cell> rowBuf = prepareRowBuffer(cells.size());
-        RowKeySlice.Mutable rowKey = null;
-        byte[] currentArr = null;
-        int currentOff = -1;
-        int currentLen = -1;
-
-        for (Cell cell : cells) {
-            byte[] rowArray = cell.getRowArray();
-            int rowOffset = cell.getRowOffset();
-            int rowLength = cell.getRowLength();
-            boolean sameRow = rowKey != null
-                    && Objects.equals(rowArray, currentArr)
-                    && rowOffset == currentOff
-                    && rowLength == currentLen;
-
-            if (!sameRow) {
-                flushRow(rowKey, rowBuf, rowContext);
-                rowBuf.add(cell);
-                if (rowKey == null) {
-                    rowKey = new RowKeySlice.Mutable(rowArray, rowOffset, rowLength);
-                } else {
-                    rowKey.reset(rowArray, rowOffset, rowLength);
-                }
-                currentArr = rowArray;
-                currentOff = rowOffset;
-                currentLen = rowLength;
-                continue;
-            }
-
-            rowBuf.add(cell);
-        }
-
-        flushRow(rowKey, rowBuf, rowContext);
-
-        if (LOG.isDebugEnabled()) {
-            LOG.debug("Репликация: запись WAL обработана: таблица={}, топик={}, строк отправлено={}, ячеек отправлено={}, фильтр={}, ensure-включён={}",
-                    table, topic, counters.rowsSent, counters.cellsSent, filterActive, topicManager.ensureEnabled());
-        }
-
-        finalizeEntry(table, counters, filterActive, cfSnapshot, tableOptions);
-        counterService.logThroughput(counters, LOG);
+        finalizeEntry(context.table, context.counters, context.filterActive, context.cfSnapshot, context.tableOptions);
+        counterService.logThroughput(context.counters, LOG);
     }
 
     /**
@@ -184,6 +132,124 @@ public final class WalEntryProcessor {
         }
         buffer.ensureCapacity(capacity);
         return buffer;
+    }
+
+    private EntryContext prepareEntryContext(WAL.Entry entry,
+                                             BatchSender sender,
+                                             boolean includeWalMeta,
+                                             TableName table,
+                                             TableOptionsSnapshot tableOptions,
+                                             CfFilterSnapshot cfSnapshot,
+                                             boolean filterConfigured) {
+        String topic = topicManager.resolveTopic(table);
+        topicManager.ensureTopicIfNeeded(topic);
+        WalMeta walMeta = includeWalMeta ? readWalMeta(entry) : WalMeta.EMPTY;
+        WalCounterService.EntryCounters counters = counterService.newEntryCounters();
+        WalCfFilterCache cfCache = prepareCfCache(filterConfigured ? cfSnapshot.families() : null);
+        boolean filterActive = filterConfigured && !cfCache.isEmpty();
+
+        WalRowProcessor.RowContext rowContext = new WalRowProcessor.RowContext(
+                topic,
+                table,
+                walMeta,
+                sender,
+                tableOptions,
+                cfCache,
+                counters);
+
+        return new EntryContext(
+                table,
+                topic,
+                tableOptions,
+                cfSnapshot,
+                counters,
+                filterActive,
+                rowContext);
+    }
+
+    private void processEntryCells(List<Cell> cells, EntryContext context)
+            throws InterruptedException, ExecutionException, TimeoutException {
+        ArrayList<Cell> rowBuf = prepareRowBuffer(cells.size());
+        RowKeyState keyState = new RowKeyState();
+        for (Cell cell : cells) {
+            if (!keyState.sameRow(cell)) {
+                flushRow(keyState.rowKey(), rowBuf, context.rowContext);
+                keyState.startRow(cell, rowBuf);
+                continue;
+            }
+            rowBuf.add(cell);
+        }
+        flushRow(keyState.rowKey(), rowBuf, context.rowContext);
+    }
+
+    private void logEntrySummary(EntryContext context) {
+        if (!LOG.isDebugEnabled()) {
+            return;
+        }
+        WalCounterService.EntryCounters counters = context.counters;
+        LOG.debug("Репликация: запись WAL обработана: таблица={}, топик={}, строк отправлено={}, ячеек отправлено={}, фильтр={}, ensure-включён={}",
+                context.table, context.topic, counters.rowsSent, counters.cellsSent, context.filterActive, topicManager.ensureEnabled());
+    }
+
+    private static final class EntryContext {
+        final TableName table;
+        final String topic;
+        final TableOptionsSnapshot tableOptions;
+        final CfFilterSnapshot cfSnapshot;
+        final WalCounterService.EntryCounters counters;
+        final boolean filterActive;
+        final WalRowProcessor.RowContext rowContext;
+
+        EntryContext(TableName table,
+                     String topic,
+                     TableOptionsSnapshot tableOptions,
+                     CfFilterSnapshot cfSnapshot,
+                     WalCounterService.EntryCounters counters,
+                     boolean filterActive,
+                     WalRowProcessor.RowContext rowContext) {
+            this.table = table;
+            this.topic = topic;
+            this.tableOptions = tableOptions;
+            this.cfSnapshot = cfSnapshot;
+            this.counters = counters;
+            this.filterActive = filterActive;
+            this.rowContext = rowContext;
+        }
+    }
+
+    private static final class RowKeyState {
+        private RowKeySlice.Mutable rowKey;
+        private byte[] currentArray;
+        private int currentOffset = -1;
+        private int currentLength = -1;
+
+        RowKeySlice.Mutable rowKey() {
+            return rowKey;
+        }
+
+        boolean sameRow(Cell cell) {
+            if (rowKey == null) {
+                return false;
+            }
+            return currentArray == cell.getRowArray()
+                    && currentOffset == cell.getRowOffset()
+                    && currentLength == cell.getRowLength();
+        }
+
+        void startRow(Cell cell, ArrayList<Cell> buffer) {
+            buffer.add(cell);
+            byte[] rowArray = cell.getRowArray();
+            int rowOffset = cell.getRowOffset();
+            int rowLength = cell.getRowLength();
+            if (rowKey == null) {
+                rowKey = new RowKeySlice.Mutable(rowArray, rowOffset, rowLength);
+            } else {
+                rowKey.reset(rowArray, rowOffset, rowLength);
+            }
+            currentArray = rowArray;
+            currentOffset = rowOffset;
+            currentLength = rowLength;
+        }
     }
 
     private void flushRow(RowKeySlice.Mutable rowKey,

@@ -48,6 +48,7 @@ failsafe-reports/
 # === Codacy / Code Quality ===
 .codacy.yml
 codacy-analyze.sh
+codacy-lizard.json
 codacy-results.json
 codacy-results.sarif
 codacy-security.sarif

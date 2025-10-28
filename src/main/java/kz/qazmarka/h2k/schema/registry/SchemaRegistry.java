@@ -82,31 +82,24 @@ public interface SchemaRegistry {
         Objects.requireNonNull(qualifier, "qualifier");
 
         // 1) Прямая попытка — самая частая и без аллокаций
-        String t = columnType(table, qualifier);
-        if (t != null) return t;
+        String directType = columnType(table, qualifier);
+        if (directType != null) {
+            return directType;
+        }
 
-        // 2) Единый проход по символам: определяем наличие и нижних, и верхних букв
-        boolean hasLower = false;
-        boolean hasUpper = false;
-        for (int i = 0, n = qualifier.length(); i < n && !(hasLower && hasUpper); i++) {
-            char ch = qualifier.charAt(i);
-            if (!hasLower && Character.isLowerCase(ch)) {
-                hasLower = true;
-            } else if (!hasUpper && Character.isUpperCase(ch)) {
-                hasUpper = true;
+        CaseProfile profile = CaseProfile.analyze(qualifier);
+        if (profile.hasLower()) {
+            String upper = qualifier.toUpperCase(Locale.ROOT);
+            String candidate = columnType(table, upper);
+            if (candidate != null) {
+                return candidate;
             }
         }
-        if (hasLower) {
-            String upper = qualifier.toUpperCase(Locale.ROOT);
-            t = columnType(table, upper);
-            if (t != null) return t;
-        }
-        if (hasUpper) {
+        if (profile.hasUpper()) {
             String lower = qualifier.toLowerCase(Locale.ROOT);
-            t = columnType(table, lower);
+            return columnType(table, lower);
         }
-
-        return t;
+        return null;
     }
 
     /**
@@ -199,5 +192,40 @@ public interface SchemaRegistry {
      */
     static SchemaRegistry emptyRegistry() {
         return NOOP;
+    }
+
+    /**
+     * Профиль регистра qualifier: фиксирует наличие нижних/верхних символов без повторных проходов.
+     */
+    final class CaseProfile {
+        private final boolean hasLower;
+        private final boolean hasUpper;
+
+        private CaseProfile(boolean hasLower, boolean hasUpper) {
+            this.hasLower = hasLower;
+            this.hasUpper = hasUpper;
+        }
+
+        static CaseProfile analyze(CharSequence qualifier) {
+            boolean lower = false;
+            boolean upper = false;
+            for (int i = 0, n = qualifier.length(); i < n && !(lower && upper); i++) {
+                char ch = qualifier.charAt(i);
+                if (!lower && Character.isLowerCase(ch)) {
+                    lower = true;
+                } else if (!upper && Character.isUpperCase(ch)) {
+                    upper = true;
+                }
+            }
+            return new CaseProfile(lower, upper);
+        }
+
+        boolean hasLower() {
+            return hasLower;
+        }
+
+        boolean hasUpper() {
+            return hasUpper;
+        }
     }
 }
