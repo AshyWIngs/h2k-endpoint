@@ -245,7 +245,7 @@ Endpoint публикует события в формате Avro (Confluent Sch
 - `kz.qazmarka.h2k.endpoint` — точка входа `KafkaReplicationEndpoint`, инициализация и публичный API.
 - `kz.qazmarka.h2k.endpoint.internal` — `TopicManager`, метрики, вспомогательные сервисы endpoint’а.
 - `kz.qazmarka.h2k.endpoint.processing` — горячий путь WAL→Kafka: группировка строк, фильтрация CF, построение payload, счётчики.
-- `kz.qazmarka.h2k.kafka.ensure` — автоматическое создание/согласование топиков (ядро `TopicEnsureService`, фоновой `TopicEnsureExecutor`, управление бэкоффом `TopicBackoffManager`; подпакеты `admin`, `config`).
+- `kz.qazmarka.h2k.kafka.ensure` — автоматическое создание/согласование топиков (ядро `EnsureCoordinator`, фоновой `TopicEnsureExecutor`, управление бэкоффом `TopicBackoffManager`; подпакеты `admin`, `config`).
 - `kz.qazmarka.h2k.kafka.producer.batch` — минимальный буфер Kafka Futures с пороговым `flush`.
 - `kz.qazmarka.h2k.kafka.support` — общие Kafka-утилиты (например, `BackoffPolicy`).
 - `kz.qazmarka.h2k.payload.builder` — сборка Avro payload’ов и расчёт ёмкости.

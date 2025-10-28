@@ -15,16 +15,16 @@ import org.junit.jupiter.api.Test;
 import kz.qazmarka.h2k.kafka.ensure.config.TopicEnsureConfig;
 
 /**
- * Проверяет контракт {@link TopicEnsureService#getBackoffSnapshot()} на корректные значения и защиту от модификации.
+ * Проверяет контракт {@link EnsureCoordinator#getBackoffSnapshot()} на корректные значения и защиту от модификации.
  */
-class TopicEnsureServiceBackoffSnapshotTest {
+class EnsureCoordinatorBackoffSnapshotTest {
 
     @Test
     @DisplayName("Пустой backoff → неизменяемая пустая карта")
     void emptySnapshot() {
-        TopicEnsureState state = new TopicEnsureState();
-        try (TopicEnsureService service = service(state)) {
-            Map<String, Long> snapshot = service.getBackoffSnapshot();
+        EnsureRuntimeState state = new EnsureRuntimeState();
+        try (EnsureCoordinator coordinator = coordinator(state)) {
+            Map<String, Long> snapshot = coordinator.getBackoffSnapshot();
             assertTrue(snapshot.isEmpty(), "ожидается пустой снимок");
             assertEquals(Collections.emptyMap(), snapshot, "коллекция должна совпадать с emptyMap");
             UnsupportedOperationException putError = assertThrows(UnsupportedOperationException.class, () -> snapshot.put("x", 1L));
@@ -35,13 +35,13 @@ class TopicEnsureServiceBackoffSnapshotTest {
     @Test
     @DisplayName("Будущие дедлайны → положительные значения, прошедшие → 0, карта неизменяема")
     void snapshotValuesAreNonNegative() {
-        TopicEnsureState state = new TopicEnsureState();
+        EnsureRuntimeState state = new EnsureRuntimeState();
         long now = System.nanoTime();
         state.scheduleUnknown("topic.future", now + TimeUnit.MILLISECONDS.toNanos(120));
         state.scheduleUnknown("topic.past", now - TimeUnit.MILLISECONDS.toNanos(40));
 
-        try (TopicEnsureService service = service(state)) {
-            Map<String, Long> snapshot = service.getBackoffSnapshot();
+        try (EnsureCoordinator coordinator = coordinator(state)) {
+            Map<String, Long> snapshot = coordinator.getBackoffSnapshot();
 
             assertEquals(2, snapshot.size(), "должны присутствовать две темы");
             snapshot.values().forEach(v -> assertTrue(v >= 0L, "значения не могут быть отрицательными"));
@@ -52,7 +52,7 @@ class TopicEnsureServiceBackoffSnapshotTest {
         }
     }
 
-    private static TopicEnsureService service(TopicEnsureState state) {
+    private static EnsureCoordinator coordinator(EnsureRuntimeState state) {
         TopicEnsureConfig config = TopicEnsureConfig.builder()
                 .topicNameMaxLen(249)
                 .topicPartitions(1)
@@ -60,6 +60,6 @@ class TopicEnsureServiceBackoffSnapshotTest {
                 .adminTimeoutMs(1_000L)
                 .unknownBackoffMs(200L)
                 .build();
-        return new TopicEnsureService(null, config, state);
+        return new EnsureCoordinator(null, config, state);
     }
 }

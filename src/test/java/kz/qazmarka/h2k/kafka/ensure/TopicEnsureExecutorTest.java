@@ -41,14 +41,13 @@ class TopicEnsureExecutorTest {
     @DisplayName("submit(): тема создаётся асинхронно и кешируется")
     void submitExecutesAsync() {
         SimpleAdmin admin = new SimpleAdmin();
-        TopicEnsureState state = new TopicEnsureState();
-        try (TopicEnsureService service = new TopicEnsureService(admin, config(), state)) {
-            try (TopicEnsureExecutor executor = new TopicEnsureExecutor(service, state, "test-ensure")) {
-                assertTrue(executor.submit("orders"));
-                await(() -> state.ensured.contains("orders"));
-                assertEquals(1, admin.createCalls.get());
-                assertTrue(state.ensured.contains("orders"));
-            }
+        EnsureRuntimeState state = new EnsureRuntimeState();
+        try (EnsureCoordinator coordinator = new EnsureCoordinator(admin, config(), state);
+             TopicEnsureExecutor executor = new TopicEnsureExecutor(coordinator, "test-ensure")) {
+            assertTrue(executor.submit("orders"));
+            await(() -> state.isEnsured("orders"));
+            assertEquals(1, admin.createCalls.get());
+            assertTrue(state.isEnsured("orders"));
         }
     }
 
@@ -56,16 +55,15 @@ class TopicEnsureExecutorTest {
     @DisplayName("submit(): backoff учитывается при повторной постановке темы")
     void submitHonorsBackoff() {
         SimpleAdmin admin = new SimpleAdmin();
-        TopicEnsureState state = new TopicEnsureState();
-        try (TopicEnsureService service = new TopicEnsureService(admin, config(), state)) {
-            try (TopicEnsureExecutor executor = new TopicEnsureExecutor(service, state, "test-ensure")) {
-                long delayNs = TimeUnit.MILLISECONDS.toNanos(80);
-                state.scheduleUnknown("payments", System.nanoTime() + delayNs);
-                assertTrue(executor.submit("payments"));
-                assertNoCreateBefore(admin, TimeUnit.MILLISECONDS.toNanos(50));
-                await(() -> state.ensured.contains("payments"));
-                assertTrue(admin.createCalls.get() >= 1);
-            }
+        EnsureRuntimeState state = new EnsureRuntimeState();
+        try (EnsureCoordinator coordinator = new EnsureCoordinator(admin, config(), state);
+             TopicEnsureExecutor executor = new TopicEnsureExecutor(coordinator, "test-ensure")) {
+            long delayNs = TimeUnit.MILLISECONDS.toNanos(80);
+            state.scheduleUnknown("payments", System.nanoTime() + delayNs);
+            assertTrue(executor.submit("payments"));
+            assertNoCreateBefore(admin, TimeUnit.MILLISECONDS.toNanos(50));
+            await(() -> state.isEnsured("payments"));
+            assertTrue(admin.createCalls.get() >= 1);
         }
     }
 

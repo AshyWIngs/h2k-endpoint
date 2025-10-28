@@ -10,33 +10,25 @@ import org.slf4j.Logger;
  */
 final class TopicEnsureContext {
 
-    private final TopicEnsureState state;
     private final TopicBackoffManager backoffManager;
     private final long adminTimeoutMs;
     private final Map<String, String> topicConfigs;
     private final Consumer<String> markEnsured;
     private final Logger log;
+    private final EnsureMetricsSink metrics;
 
-    TopicEnsureContext(TopicEnsureState state,
-                       TopicBackoffManager backoffManager,
+    TopicEnsureContext(TopicBackoffManager backoffManager,
                        long adminTimeoutMs,
                        Map<String, String> topicConfigs,
                        Consumer<String> markEnsured,
+                       EnsureMetricsSink metrics,
                        Logger log) {
-        this.state = state;
         this.backoffManager = backoffManager;
         this.adminTimeoutMs = adminTimeoutMs;
         this.topicConfigs = topicConfigs;
         this.markEnsured = markEnsured;
+        this.metrics = metrics;
         this.log = log;
-    }
-
-    TopicEnsureState state() {
-        return state;
-    }
-
-    TopicBackoffManager backoffManager() {
-        return backoffManager;
     }
 
     long adminTimeoutMs() {
@@ -47,8 +39,16 @@ final class TopicEnsureContext {
         return topicConfigs;
     }
 
-    Consumer<String> markEnsured() {
-        return markEnsured;
+    void markEnsured(String topic) {
+        markEnsured.accept(topic);
+    }
+
+    long scheduleRetry(String topic) {
+        return backoffManager.scheduleRetry(topic);
+    }
+
+    EnsureMetricsSink metrics() {
+        return metrics;
     }
 
     Logger log() {

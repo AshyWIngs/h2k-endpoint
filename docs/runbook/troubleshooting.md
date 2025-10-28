@@ -41,7 +41,7 @@ log4j.logger.kz.qazmarka.h2k.config=DEBUG
 
 # === При необходимости можно включить DEBUG точечно для отдельных классов ===
 log4j.logger.kz.qazmarka.h2k.endpoint.processing.WalEntryProcessor=DEBUG
-log4j.logger.kz.qazmarka.h2k.kafka.ensure.TopicEnsureService=DEBUG
+log4j.logger.kz.qazmarka.h2k.kafka.ensure.EnsureCoordinator=DEBUG
 log4j.logger.kz.qazmarka.h2k.payload.serializer.avro.ConfluentAvroPayloadSerializer=DEBUG
 log4j.logger.kz.qazmarka.h2k.schema.registry.avro.phoenix.AvroPhoenixSchemaRegistry=DEBUG
 
@@ -100,7 +100,7 @@ log4j.logger.org.apache.phoenix=WARN
   - Проверить права у Kafka Admin.
   - Проверить h2k.topic.replication и h2k.topic.partitions.
   - Проверить h2k.admin.timeout.ms и h2k.ensure.unknown.backoff.ms.
-  - В логах TopicEnsureService ищите метрики `ensure.*`, `exists.*`, `create.*` — они показываются при DEBUG и
+  - В логах EnsureCoordinator ищите метрики `ensure.*`, `exists.*`, `create.*` — они показываются при DEBUG и
     доступны через `TopicManager.getMetrics()`. Поле `unknown.backoff.size` отражает размер очереди ожидания без
     лишних копий.
   - Для диагностики отказов репликации добавлены метрики `replicate.failures.total` и `replicate.last.failure.epoch.ms`.

@@ -105,18 +105,18 @@ final class TopicCreationSupport {
     }
 
     private void recordCreateSuccess(String topic) {
-        ctx.state().createOk.increment();
-        ctx.markEnsured().accept(topic);
+        ctx.metrics().recordCreateSuccess();
+        ctx.markEnsured(topic);
     }
 
     private void recordCreateRace(String topic) {
-        ctx.state().createRace.increment();
-        ctx.markEnsured().accept(topic);
+        ctx.metrics().recordCreateRace();
+        ctx.markEnsured(topic);
     }
 
     private void recordCreateFailure(String topic, Throwable cause) {
-        ctx.state().createFail.increment();
-        ctx.backoffManager().scheduleRetry(topic);
+        ctx.metrics().recordCreateFailure();
+        ctx.scheduleRetry(topic);
         if (ctx.log().isDebugEnabled()) {
             ctx.log().debug("Не удалось создать Kafka-топик '{}': {}", topic, safeCause(cause));
         }
@@ -139,16 +139,16 @@ final class TopicCreationSupport {
             return "без явных конфигов";
         }
         Map<String, String> configs = ctx.topicConfigs();
-        String retention = configs.get(TopicEnsureService.CFG_RETENTION_MS);
-        String cleanup   = configs.get(TopicEnsureService.CFG_CLEANUP_POLICY);
-        String comp      = configs.get(TopicEnsureService.CFG_COMPRESSION_TYPE);
-        String minIsr    = configs.get(TopicEnsureService.CFG_MIN_INSYNC_REPLICAS);
+        String retention = configs.get(EnsureCoordinator.CFG_RETENTION_MS);
+        String cleanup   = configs.get(EnsureCoordinator.CFG_CLEANUP_POLICY);
+        String comp      = configs.get(EnsureCoordinator.CFG_COMPRESSION_TYPE);
+        String minIsr    = configs.get(EnsureCoordinator.CFG_MIN_INSYNC_REPLICAS);
         StringBuilder sb = new StringBuilder(128);
         boolean first = true;
-        first = append(sb, TopicEnsureService.CFG_RETENTION_MS, retention, first);
-        first = append(sb, TopicEnsureService.CFG_CLEANUP_POLICY, cleanup, first);
-        first = append(sb, TopicEnsureService.CFG_COMPRESSION_TYPE, comp, first);
-        first = append(sb, TopicEnsureService.CFG_MIN_INSYNC_REPLICAS, minIsr, first);
+        first = append(sb, EnsureCoordinator.CFG_RETENTION_MS, retention, first);
+        first = append(sb, EnsureCoordinator.CFG_CLEANUP_POLICY, cleanup, first);
+        first = append(sb, EnsureCoordinator.CFG_COMPRESSION_TYPE, comp, first);
+        first = append(sb, EnsureCoordinator.CFG_MIN_INSYNC_REPLICAS, minIsr, first);
         int others = configs.size() - countNonNull(retention, cleanup, comp, minIsr);
         if (others > 0) {
             if (!first) sb.append(", ");

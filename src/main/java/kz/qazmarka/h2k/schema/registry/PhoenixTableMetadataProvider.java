@@ -6,6 +6,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.function.Consumer;
+import java.util.Locale;
 
 import org.apache.hadoop.hbase.TableName;
 
@@ -150,12 +151,20 @@ public interface PhoenixTableMetadataProvider {
             if (source == null || source.length == 0) {
                 return SchemaRegistry.EMPTY;
             }
-            if (source.length == 1 && source[0] == null) {
+            LinkedHashMap<String, String> deduplicated = new LinkedHashMap<>();
+            for (String value : source) {
+                if (value != null) {
+                    String trimmed = value.trim();
+                    if (!trimmed.isEmpty()) {
+                        String key = trimmed.toUpperCase(Locale.ROOT);
+                        deduplicated.putIfAbsent(key, trimmed);
+                    }
+                }
+            }
+            if (deduplicated.isEmpty()) {
                 return SchemaRegistry.EMPTY;
             }
-            return Arrays.stream(source)
-                    .filter(Objects::nonNull)
-                    .toArray(String[]::new);
+            return deduplicated.values().toArray(new String[deduplicated.size()]);
         }
 
         private static String[] copy(String[] source) {

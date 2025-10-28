@@ -11,7 +11,7 @@ import kz.qazmarka.h2k.config.TopicNamingSettings;
 /**
  * Иммутабельный набор параметров ensure-цикла: целевые партиции/репликация, набор конфигов,
  * таймауты и политики апгрейда. Формируется один раз из плоских DTO конфигурации и далее передаётся
- * во внутренние компоненты {@link kz.qazmarka.h2k.kafka.ensure.TopicEnsureService}.
+ * во внутренние компоненты {@link kz.qazmarka.h2k.kafka.ensure.EnsureCoordinator}.
  */
 public final class TopicEnsureConfig {
     private final int topicNameMaxLen;

@@ -112,6 +112,8 @@ PhoenixTableMetadataProvider provider = PhoenixTableMetadataProvider.builder()
         .build();                   // иммутабельный провайдер для всех таблиц
 ```
 
+Билдер автоматически триммит значения, отбрасывает пустые элементы и дубли (регистр игнорируется), поэтому можно передавать значения прямо из схем/конфигов без ручной очистки.
+
 Для тестов избегайте анонимных реализаций — используйте `builder()` и клоны массивов не понадобятся: билдер сам делает защитные копии (`columnFamilies`, `primaryKeyColumns`, `saltBytes`). Если нужно несколько таблиц, вызывайте `builder().table(...).done()` несколько раз перед `build()`.
 
 ---
@@ -135,7 +137,7 @@ PhoenixTableMetadataProvider provider = PhoenixTableMetadataProvider.builder()
 | **`h2k.admin.client.id`** | ClientId для админ‑клиента | Строка | `h2k-admin` |
 | **`h2k.ensure.unknown.backoff.ms`** | Бэкофф при «неизвестной теме» | `int` (ms) | `5000` |
 
-При `h2k.ensure.topics=true` создаётся связка `TopicEnsureService` + `TopicEnsureExecutor`: горячий путь лишь ставит темы в очередь, а отдельный поток проверяет `describeTopics()` и отвечает за создание. Флаг `h2k.ensure.increase.partitions` разрешает плановый апгрейд числа партиций, `h2k.ensure.diff.configs` — применение отличающихся конфигураций (например, `retention.ms`, `cleanup.policy`). Ключи `h2k.topic.config.*` проксируются в AdminClient как map `config → value`; используйте их для точечной настройки (`retention.ms`, `compression.type`, `min.insync.replicas`). Параметр `h2k.ensure.unknown.backoff.ms` задаёт базовый бэкофф при временных ошибках (таймаут, ACL, сеть) — значения уменьшаются джиттером в `TopicBackoffManager`.
+При `h2k.ensure.topics=true` создаётся связка `EnsureCoordinator` + `TopicEnsureExecutor`: горячий путь лишь ставит темы в очередь, а отдельный поток проверяет `describeTopics()` и отвечает за создание. Флаг `h2k.ensure.increase.partitions` разрешает плановый апгрейд числа партиций, `h2k.ensure.diff.configs` — применение отличающихся конфигураций (например, `retention.ms`, `cleanup.policy`). Ключи `h2k.topic.config.*` проксируются в AdminClient как map `config → value`; используйте их для точечной настройки (`retention.ms`, `compression.type`, `min.insync.replicas`). Параметр `h2k.ensure.unknown.backoff.ms` задаёт базовый бэкофф при временных ошибках (таймаут, ACL, сеть) — значения уменьшаются джиттером в `TopicBackoffManager`.
 
 Метрики ensure попадают в `TopicEnsurer#getMetrics()` и дальше в `TopicManager.getMetrics()`. Снимок содержит счётчики `ensure.*`, `exists.*`, `create.*`, а также размер кеша `state.ensured.count` и очередь задач (см. `TopicEnsurer#toString()`). Для диагностики включите DEBUG для `kz.qazmarka.h2k.kafka.ensure` — внутри пишутся решения об ensure, бэкоффе и апгрейдах конфигов.
 

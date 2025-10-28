@@ -11,15 +11,15 @@ import kz.qazmarka.h2k.kafka.support.BackoffPolicy;
  */
 public final class TopicBackoffManager {
 
-    private final TopicEnsureState state;
+    private final EnsureRuntimeState state;
     private final BackoffPolicy policy;
     private final long baseDelayNs;
 
-    public TopicBackoffManager(TopicEnsureState state, long baseDelayMs) {
+    public TopicBackoffManager(EnsureRuntimeState state, long baseDelayMs) {
         this(state, baseDelayMs, new BackoffPolicy(TimeUnit.MILLISECONDS.toNanos(1), 20));
     }
 
-    public TopicBackoffManager(TopicEnsureState state, long baseDelayMs, BackoffPolicy policy) {
+    public TopicBackoffManager(EnsureRuntimeState state, long baseDelayMs, BackoffPolicy policy) {
         this.state = state;
         this.policy = policy;
         this.baseDelayNs = TimeUnit.MILLISECONDS.toNanos(Math.max(0L, baseDelayMs));

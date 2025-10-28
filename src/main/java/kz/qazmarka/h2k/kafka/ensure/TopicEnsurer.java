@@ -5,6 +5,7 @@ import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Properties;
@@ -22,50 +23,60 @@ import kz.qazmarka.h2k.kafka.ensure.config.TopicEnsureConfig;
 
 /**
  * Высокоуровневый фасад ensure-логики Kafka-топиков.
- * Инкапсулирует {@link TopicEnsureService}, поставляя безопасный NOOP-экземпляр для сценариев,
+ * Инкапсулирует {@link EnsureCoordinator}, поставляя безопасный NOOP-экземпляр для сценариев,
  * когда ensure отключён конфигурацией или отсутствуют настройки bootstrap. Благодаря этому
  * вызывающий код не обязан проверять {@code null} и может работать с единым API.
  */
 public final class TopicEnsurer implements AutoCloseable {
     private static final Logger LOG = LoggerFactory.getLogger(TopicEnsurer.class);
 
+    private enum Mode { DISABLED, ENABLED, DELEGATE }
+
     private static final TopicEnsurer DISABLED = new TopicEnsurer();
 
-    private final TopicEnsureService service;
+    private final Mode mode;
+    private final EnsureCoordinator coordinator;
     private final TopicEnsureExecutor executor;
-    private final TopicEnsureState state;
-    private final boolean disabledMode;
+    private final EnsureRuntimeState state;
     private final EnsureDelegate ensureDelegate;
 
     private TopicEnsurer() {
-        this.service = null;
+        this.mode = Mode.DISABLED;
+        this.coordinator = null;
         this.executor = null;
         this.state = null;
-        this.disabledMode = true;
         this.ensureDelegate = null;
     }
 
     /**
      * Пакетный конструктор для модульных тестов и внутренних сборок.
-     * Позволяет напрямую подставлять {@link TopicEnsureService}, {@link TopicEnsureExecutor}
-     * и {@link TopicEnsureState} без создания AdminClient.
+     * Позволяет напрямую подставлять {@link EnsureCoordinator}, {@link TopicEnsureExecutor}
+     * и {@link EnsureRuntimeState} без создания AdminClient.
      */
-    TopicEnsurer(TopicEnsureService service,
+    TopicEnsurer(EnsureCoordinator coordinator,
                  TopicEnsureExecutor executor,
-                 TopicEnsureState state) {
-        this.service = service;
+                 EnsureRuntimeState state) {
+        this.mode = Mode.ENABLED;
+        this.coordinator = coordinator;
         this.executor = executor;
-        this.state = state;
-        this.disabledMode = false;
+        this.state = resolveState(state, coordinator);
         this.ensureDelegate = null;
     }
 
     private TopicEnsurer(EnsureDelegate delegate) {
-        this.service = null;
+        this.mode = Mode.DELEGATE;
+        this.coordinator = null;
         this.executor = null;
         this.state = null;
-        this.disabledMode = false;
         this.ensureDelegate = delegate;
+    }
+
+    private TopicEnsurer(EnsureLifecycle lifecycle) {
+        this.mode = Mode.ENABLED;
+        this.coordinator = lifecycle.coordinator;
+        this.executor = lifecycle.executor;
+        this.state = lifecycle.state;
+        this.ensureDelegate = null;
     }
 
     /**
@@ -110,53 +121,73 @@ public final class TopicEnsurer implements AutoCloseable {
         KafkaTopicAdmin admin = new KafkaTopicAdminClient(adminClient);
         TopicEnsureConfig config = TopicEnsureConfig.from(ensureSettings, topicSettings);
 
-        return EnsureComponentsBuilder.build(admin, config, clientId);
+        try (EnsureLifecycle lifecycle = EnsureLifecycle.create(admin, config, clientId)) {
+            TopicEnsurer ensurer = new TopicEnsurer(lifecycle);
+            lifecycle.transferOwnership();
+            return ensurer;
+        }
     }
 
     /**
      * Builder для безопасного создания компонентов TopicEnsurer с автоматическим cleanup при ошибках.
      */
-    private static final class EnsureComponentsBuilder implements AutoCloseable {
-        private TopicEnsureService service;
-        private TopicEnsureExecutor executor;
-        private boolean released;
+    private static final class EnsureLifecycle implements AutoCloseable {
+        final EnsureCoordinator coordinator;
+        final TopicEnsureExecutor executor;
+        final EnsureRuntimeState state;
+        private boolean transferred;
 
-        private EnsureComponentsBuilder() {
-            this.released = false;
+        private EnsureLifecycle(EnsureCoordinator coordinator,
+                                TopicEnsureExecutor executor,
+                                EnsureRuntimeState state) {
+            this.coordinator = coordinator;
+            this.executor = executor;
+            this.state = state;
+            this.transferred = false;
         }
 
-        static TopicEnsurer build(KafkaTopicAdmin admin, TopicEnsureConfig config, String clientId) {
-            try (EnsureComponentsBuilder builder = new EnsureComponentsBuilder()) {
-                TopicEnsureState state = new TopicEnsureState();
-                builder.service = new TopicEnsureService(admin, config, state);
-                builder.executor = new TopicEnsureExecutor(builder.service, state, clientId + "-ensure");
-                builder.executor.start();
-                
-                // Успешное создание - передаём владение ресурсами TopicEnsurer
-                builder.released = true;
-                return new TopicEnsurer(builder.service, builder.executor, state);
+        static EnsureLifecycle create(KafkaTopicAdmin admin, TopicEnsureConfig config, String clientId) {
+            EnsureRuntimeState state = new EnsureRuntimeState();
+            EnsureCoordinator coordinator = new EnsureCoordinator(admin, config, state);
+            try (ExecutorHolder holder = new ExecutorHolder(new TopicEnsureExecutor(coordinator, clientId + "-ensure"))) {
+                TopicEnsureExecutor executor = holder.detach();
+                return new EnsureLifecycle(coordinator, executor, state);
+            } catch (RuntimeException creationError) {
+                closeQuietly(coordinator);
+                throw creationError;
             }
+        }
+
+        void transferOwnership() {
+            this.transferred = true;
         }
 
         @Override
         public void close() {
-            if (released) {
-                // Ресурсы успешно переданы TopicEnsurer, не закрываем
+            if (transferred) {
                 return;
             }
-            // Ошибка при создании - очищаем временные ресурсы
             closeQuietly(executor);
-            closeQuietly(service);
+            closeQuietly(coordinator);
         }
-        
-        private static void closeQuietly(AutoCloseable closeable) {
-            if (closeable == null) {
-                return;
+
+        private static final class ExecutorHolder implements AutoCloseable {
+            private TopicEnsureExecutor executor;
+
+            ExecutorHolder(TopicEnsureExecutor executor) {
+                this.executor = executor;
             }
-            try {
-                closeable.close();
-            } catch (Exception ignored) {
-                // Игнорируем ошибки при закрытии в cleanup-блоке
+
+            TopicEnsureExecutor detach() {
+                TopicEnsureExecutor retained = executor;
+                executor = null;
+                return retained;
+            }
+
+            @Override
+            public void close() {
+                closeQuietly(executor);
+                executor = null;
             }
         }
     }
@@ -170,103 +201,116 @@ public final class TopicEnsurer implements AutoCloseable {
      * Инициирует ensure для одиночной темы; вызов безопасен, даже если ensure отключён (NOOP).
      */
     public void ensureTopic(String topic) {
-        if (!isEnabled()) {
+        if (mode == Mode.DISABLED) {
             return;
         }
-        if (ensureDelegate != null) {
+        if (mode == Mode.DELEGATE) {
             ensureDelegate.ensureTopic(topic);
             return;
         }
         if (executor == null) {
-            service.ensureTopic(topic);
-            return;
+            coordinator.ensureTopic(topic);
+        } else {
+            executor.submit(topic);
         }
-        executor.submit(topic);
     }
 
     /**
      * Проверяет наличие темы и при необходимости инициирует ensure; возвращает true только после подтверждения.
      */
     public boolean ensureTopicOk(String topic) {
-        if (!isEnabled()) {
+        if (mode == Mode.DISABLED) {
             return false;
         }
-        if (ensureDelegate != null) {
+        if (mode == Mode.DELEGATE) {
             return ensureDelegate.ensureTopicOk(topic);
         }
-        return service.ensureTopicOk(topic);
+        return coordinator.ensureTopicOk(topic);
     }
 
     /**
      * Пакетный ensure для набора тем; NOOP в отключённом режиме.
      */
     public void ensureTopics(Collection<String> topics) {
-        if (!isEnabled()) {
+        if (mode == Mode.DISABLED) {
             return;
         }
-        if (ensureDelegate != null) {
+        if (mode == Mode.DELEGATE) {
             ensureDelegate.ensureTopics(topics);
             return;
         }
-        service.ensureTopics(topics);
+        coordinator.ensureTopics(topics);
     }
 
     /**
      * Снимок внутренних метрик ensure-процесса; для NOOP-реализации возвращает пустую карту.
      */
     public Map<String, Long> getMetrics() {
-        if (!isEnabled()) {
+        if (mode == Mode.DISABLED) {
             return Collections.emptyMap();
         }
-        if (ensureDelegate != null) {
+        if (mode == Mode.DELEGATE) {
             return ensureDelegate.metrics();
         }
-        Map<String, Long> base = service.getMetrics();
-        if (state == null) {
-            return base;
+        Map<String, Long> base = coordinator != null ? coordinator.getMetrics() : Collections.emptyMap();
+        Map<String, Long> snapshot = new LinkedHashMap<>(base);
+        if (state != null) {
+            snapshot.put("state.ensured.count", (long) state.ensuredSize());
         }
-        Map<String, Long> snapshot = new java.util.LinkedHashMap<>(base);
-        snapshot.put("state.ensured.count", (long) state.ensured.size());
+        if (executor != null) {
+            snapshot.put("queue.pending", (long) executor.queuedTopics());
+        }
         return Collections.unmodifiableMap(snapshot);
     }
 
-    public boolean isEnabled() { return ensureDelegate != null || !disabledMode; }
+    public boolean isEnabled() { return mode != Mode.DISABLED; }
 
     @Override
     /**
-     * Закрывает обёрнутый {@link TopicEnsureService}; в режиме NOOP ничего не делает.
+     * Закрывает обёрнутый {@link EnsureCoordinator}; в режиме NOOP ничего не делает.
      */
     public void close() {
-        if (!isEnabled()) {
+        if (mode == Mode.DISABLED) {
             return;
         }
-        if (ensureDelegate != null) {
+        if (mode == Mode.DELEGATE) {
             ensureDelegate.close();
             return;
         }
-        if (executor != null) {
-            executor.close();
-        }
-        service.close();
+        closeQuietly(executor);
+        closeQuietly(coordinator);
     }
 
     @Override
     public String toString() {
-        if (!isEnabled()) {
+        if (mode == Mode.DISABLED) {
             return "TopicEnsurer[disabled]";
         }
-        if (ensureDelegate != null) {
+        if (mode == Mode.DELEGATE) {
             return "TopicEnsurer[test]";
         }
         if (executor == null) {
-            return service.toString();
+            return coordinator.toString();
         }
-        String base = service.toString();
+        String base = coordinator.toString();
         int idx = base.lastIndexOf('}');
         if (idx > 0) {
             return base.substring(0, idx) + ", queued=" + executor.queuedTopics() + '}';
         }
         return base + ", queued=" + executor.queuedTopics();
+    }
+
+    private static void closeQuietly(AutoCloseable closeable) {
+        if (closeable == null) {
+            return;
+        }
+        try {
+            closeable.close();
+        } catch (Exception ex) {
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("Ignoring exception while closing resource", ex);
+            }
+        }
     }
 
     /**
@@ -305,34 +349,41 @@ public final class TopicEnsurer implements AutoCloseable {
         return pid;
     }
 
-        /**
-         * Минимальный контракт ensure-логики для модульных тестов.
-         * Позволяет управлять поведением {@link TopicEnsurer} без доступа к внутренним финальным полям.
-         */
-        public interface EnsureDelegate extends AutoCloseable {
-            void ensureTopic(String topic);
+    private static EnsureRuntimeState resolveState(EnsureRuntimeState provided, EnsureCoordinator coordinator) {
+        if (provided != null) {
+            return provided;
+        }
+        return coordinator != null ? coordinator.state() : null;
+    }
 
-            default boolean ensureTopicOk(String topic) {
+    /**
+     * Минимальный контракт ensure-логики для модульных тестов.
+     * Позволяет управлять поведением {@link TopicEnsurer} без доступа к внутренним финальным полям.
+     */
+    public interface EnsureDelegate extends AutoCloseable {
+        void ensureTopic(String topic);
+
+        default boolean ensureTopicOk(String topic) {
+            ensureTopic(topic);
+            return false;
+        }
+
+        default void ensureTopics(Collection<String> topics) {
+            if (topics == null || topics.isEmpty()) {
+                return;
+            }
+            for (String topic : topics) {
                 ensureTopic(topic);
-                return false;
-            }
-
-            default void ensureTopics(Collection<String> topics) {
-                if (topics == null || topics.isEmpty()) {
-                    return;
-                }
-                for (String topic : topics) {
-                    ensureTopic(topic);
-                }
-            }
-
-            default Map<String, Long> metrics() {
-                return Collections.emptyMap();
-            }
-
-            @Override
-            default void close() {
-                // no-op
             }
         }
+
+        default Map<String, Long> metrics() {
+            return Collections.emptyMap();
+        }
+
+        @Override
+        default void close() {
+            // no-op
+        }
+    }
 }

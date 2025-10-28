@@ -20,19 +20,18 @@ final class TopicEnsureExecutor implements AutoCloseable {
 
     private static final Logger LOG = LoggerFactory.getLogger(TopicEnsureExecutor.class);
 
-    private final TopicEnsureService service;
-    private final TopicEnsureState state;
+    private final EnsureCoordinator coordinator;
+    private final EnsureRuntimeState state;
     private final BlockingQueue<EnsureTask> queue = new DelayQueue<>();
     private final ConcurrentMap<String, EnsureTask> scheduled = new ConcurrentHashMap<>();
     private final AtomicBoolean running = new AtomicBoolean(true);
     private final AtomicBoolean started = new AtomicBoolean(false);
     private final Thread worker;
 
-    TopicEnsureExecutor(TopicEnsureService service,
-                        TopicEnsureState state,
+    TopicEnsureExecutor(EnsureCoordinator coordinator,
                         String threadName) {
-        this.service = service;
-        this.state = state;
+        this.coordinator = coordinator;
+        this.state = coordinator.state();
         this.worker = new Thread(this::runLoop, threadName);
         this.worker.setDaemon(true);
         start();
@@ -108,7 +107,7 @@ final class TopicEnsureExecutor implements AutoCloseable {
 
     private void executeEnsure(String topic) {
         try {
-            service.ensureTopic(topic);
+            coordinator.ensureTopic(topic);
         } catch (RuntimeException ex) {
             LOG.warn("Ensure-поток: ошибка при обработке темы '{}': {}", topic, ex.getMessage());
             if (LOG.isDebugEnabled()) {
@@ -193,7 +192,7 @@ final class TopicEnsureExecutor implements AutoCloseable {
     }
 
     private boolean topicAlreadyEnsured(String topic) {
-        return state.ensured.contains(topic);
+        return state.isEnsured(topic);
     }
 
     private static boolean isBlank(String topic) {

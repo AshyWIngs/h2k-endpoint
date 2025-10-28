@@ -19,40 +19,47 @@ final class TopicCandidateChecker {
             "Некорректное имя Kafka-топика '{}': допускаются [a-zA-Z0-9._-], длина 1..{}, запрещены '.' и '..'";
 
     private final TopicEnsureConfig config;
-    private final TopicEnsureState state;
+    private final EnsureRuntimeState state;
     private final TopicBackoffManager backoffManager;
     private final Logger log;
     private final Function<String, String> sanitizer;
+    private final EnsureMetricsSink metrics;
 
     TopicCandidateChecker(TopicEnsureConfig config,
-                          TopicEnsureState state,
+                          EnsureRuntimeState state,
                           TopicBackoffManager backoffManager,
+                          EnsureMetricsSink metrics,
                           Logger log) {
         this.config = config;
         this.state = state;
         this.backoffManager = backoffManager;
+        this.metrics = metrics;
         this.log = log;
         this.sanitizer = config.topicSanitizer();
     }
 
     Candidate evaluate(String rawTopic) {
+        metrics.recordEvaluation();
         String normalized = normalize(rawTopic);
         if (normalized.isEmpty()) {
+            metrics.recordRejected();
             log.warn(WARN_EMPTY_TOPIC);
             return Candidate.skip();
         }
         if (!TopicNameValidator.isValid(normalized, config.topicNameMaxLen())) {
+            metrics.recordRejected();
             log.warn(WARN_INVALID_TOPIC, normalized, config.topicNameMaxLen());
             return Candidate.skip();
         }
-        if (state.ensured.contains(normalized)) {
-            state.ensureHitCache.increment();
+        if (state.isEnsured(normalized)) {
+            metrics.recordCacheHit();
             if (log.isDebugEnabled()) {
                 log.debug("Kafka-топик '{}' уже проверен ранее — пропускаю ensure", normalized);
             }
             return Candidate.alreadyEnsured(normalized);
         }
         if (backoffManager.shouldSkip(normalized)) {
+            metrics.recordRejected();
             return Candidate.skip();
         }
         return Candidate.accepted(normalized);

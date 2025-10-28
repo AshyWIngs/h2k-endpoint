@@ -109,7 +109,7 @@ final class TopicDescribeSupport {
                                                    boolean updateState) {
         Throwable cause = ex.getCause();
         if (cause instanceof org.apache.kafka.common.errors.UnknownTopicOrPartitionException) {
-            ctx.state().existsFalse.increment();
+            ctx.metrics().recordExistsFalse();
             return TopicExistence.FALSE;
         }
         long delayMs = scheduleDescribeUnknown(topic, updateState);
@@ -133,15 +133,15 @@ final class TopicDescribeSupport {
 
     private void markExistsTrue(String topic, boolean updateState) {
         if (updateState) {
-            ctx.state().existsTrue.increment();
+            ctx.metrics().recordExistsTrue();
         }
-        ctx.markEnsured().accept(topic);
+        ctx.markEnsured(topic);
     }
 
     private long scheduleDescribeUnknown(String topic, boolean updateState) {
         if (updateState) {
-            ctx.state().existsUnknown.increment();
+            ctx.metrics().recordExistsUnknown();
         }
-        return ctx.backoffManager().scheduleRetry(topic);
+        return ctx.scheduleRetry(topic);
     }
 }

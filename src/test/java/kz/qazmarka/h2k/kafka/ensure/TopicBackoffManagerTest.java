@@ -13,7 +13,7 @@ class TopicBackoffManagerTest {
     @Test
     @DisplayName("scheduleRetry → shouldSkip до истечения дедлайна")
     void scheduleRetrySkipsUntilDeadline() {
-        TopicEnsureState state = new TopicEnsureState();
+        EnsureRuntimeState state = new EnsureRuntimeState();
         TopicBackoffManager manager = new TopicBackoffManager(state, 50L); // 50 мс базовый backoff
 
         manager.scheduleRetry("topic");
@@ -27,7 +27,7 @@ class TopicBackoffManagerTest {
     @Test
     @DisplayName("markSuccess снимает топик с backoff")
     void markSuccessClearsBackoff() {
-        TopicEnsureState state = new TopicEnsureState();
+        EnsureRuntimeState state = new EnsureRuntimeState();
         TopicBackoffManager manager = new TopicBackoffManager(state, 10L);
 
         manager.scheduleRetry("topic");
@@ -39,7 +39,7 @@ class TopicBackoffManagerTest {
     @Test
     @DisplayName("computeDelayMillis с джиттером не выходит за расширенные пределы")
     void computeDelayWithinBand() {
-        TopicEnsureState state = new TopicEnsureState();
+        EnsureRuntimeState state = new EnsureRuntimeState();
         TopicBackoffManager manager = new TopicBackoffManager(state, 100L);
 
         for (int i = 0; i < 10; i++) {

@@ -56,7 +56,7 @@ import kz.qazmarka.h2k.kafka.ensure.config.TopicEnsureConfig;
  *  • Для Future'ов — {@link KafkaFutureImpl}: управляем завершением (успех/исключение) или намеренно
  *    оставляем незавершённым (для эмуляции таймаута).
  *  • Экземпляр {@link TopicEnsurer} создаётся через пакетный конструктор
- *    {@link TopicEnsurer#TopicEnsurer(TopicEnsureService, TopicEnsureExecutor, TopicEnsureState)},
+ *    {@link TopicEnsurer#TopicEnsurer(EnsureCoordinator, TopicEnsureExecutor, EnsureRuntimeState)},
  *    поэтому тесты не используют reflection и остаются изолированными от внутренних деталей.
  *
  * Производительность тестов:
@@ -259,10 +259,10 @@ class TopicEnsurerTest {
                 .unknownBackoffMs(unknownBackoffMs)
                 .build();
 
-        TopicEnsureState state = new TopicEnsureState();
-        TopicEnsureService service = new TopicEnsureService(fa, config, state);
+        EnsureRuntimeState state = new EnsureRuntimeState();
+        EnsureCoordinator coordinator = new EnsureCoordinator(fa, config, state);
 
-        return new TopicEnsurer(service, null, state);
+        return new TopicEnsurer(coordinator, null, state);
     }
 
     private static H2kConfig minimalConfig(String bootstrap, boolean ensureEnabled) {

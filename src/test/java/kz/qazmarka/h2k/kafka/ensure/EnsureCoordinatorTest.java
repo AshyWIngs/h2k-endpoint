@@ -34,7 +34,7 @@ import org.junit.jupiter.api.Test;
 import kz.qazmarka.h2k.kafka.ensure.admin.KafkaTopicAdmin;
 import kz.qazmarka.h2k.kafka.ensure.config.TopicEnsureConfig;
 
-class TopicEnsureServiceTest {
+class EnsureCoordinatorTest {
 
     @Test
     @DisplayName("ensureTopic(): увеличивает партиции, если текущее число меньше заданного")
@@ -52,7 +52,7 @@ class TopicEnsureServiceTest {
                 .unknownBackoffMs(10L)
                 .build();
 
-        try (TopicEnsureService svc = new TopicEnsureService(admin, cfg, new TopicEnsureState())) {
+        try (EnsureCoordinator svc = new EnsureCoordinator(admin, cfg, new EnsureRuntimeState())) {
             svc.ensureTopic("orders");
         }
 
@@ -79,7 +79,7 @@ class TopicEnsureServiceTest {
                 .unknownBackoffMs(10L)
                 .build();
 
-        try (TopicEnsureService svc = new TopicEnsureService(admin, cfg, new TopicEnsureState())) {
+        try (EnsureCoordinator svc = new EnsureCoordinator(admin, cfg, new EnsureRuntimeState())) {
             svc.ensureTopic("analytics");
         }
 
@@ -91,31 +91,31 @@ class TopicEnsureServiceTest {
     @DisplayName("ensureTopic(): повторный вызов использует кеш подтверждённой темы")
     void ensureTopicUsesCacheAfterSuccess() {
         FakeAdmin admin = new FakeAdmin().withPartitions(3);
-        TopicEnsureState state = new TopicEnsureState();
+        EnsureRuntimeState state = new EnsureRuntimeState();
         TopicEnsureConfig cfg = defaultConfigBuilder().build();
 
-        try (TopicEnsureService svc = new TopicEnsureService(admin, cfg, state)) {
+        try (EnsureCoordinator svc = new EnsureCoordinator(admin, cfg, state)) {
             svc.ensureTopic("analytics");
             svc.ensureTopic("analytics");
         }
 
         assertEquals(1, admin.describeRequests, "describeTopics должен вызываться один раз");
-        assertEquals(1L, state.ensureHitCache.longValue(), "повторное ensure должно отработать через кеш");
-        assertTrue(state.ensured.contains("analytics"), "тема должна быть помечена как подтверждённая");
+        assertEquals(1L, state.ensureHitCache().longValue(), "повторное ensure должно отработать через кеш");
+        assertTrue(state.isEnsured("analytics"), "тема должна быть помечена как подтверждённая");
     }
 
     @Test
     @DisplayName("ensureTopic(): ensureTopics=false пропускает вызов без изменения метрик")
     void ensureTopicSkipsWhenAdminDisabled() {
-        TopicEnsureState state = new TopicEnsureState();
+        EnsureRuntimeState state = new EnsureRuntimeState();
         TopicEnsureConfig cfg = defaultConfigBuilder().build();
 
-        try (TopicEnsureService svc = new TopicEnsureService(null, cfg, state)) {
+        try (EnsureCoordinator svc = new EnsureCoordinator(null, cfg, state)) {
             svc.ensureTopic("orders");
         }
 
-        assertEquals(0L, state.ensureInvocations.longValue(), "метрики не должны меняться при ensureTopics=false");
-        assertTrue(state.ensured.isEmpty(), "кеш ensured остаётся пустым");
+        assertEquals(0L, state.ensureInvocations().longValue(), "метрики не должны меняться при ensureTopics=false");
+        assertEquals(0, state.ensuredSize(), "кеш ensured остаётся пустым");
     }
 
     @Test
@@ -124,17 +124,17 @@ class TopicEnsureServiceTest {
         FakeAdmin admin = new FakeAdmin()
                 .withPartitions(3)
                 .whenDescribe("inventory", DescribeOutcome.MISSING);
-        TopicEnsureState state = new TopicEnsureState();
+        EnsureRuntimeState state = new EnsureRuntimeState();
         TopicEnsureConfig cfg = defaultConfigBuilder().build();
 
-        try (TopicEnsureService svc = new TopicEnsureService(admin, cfg, state)) {
+        try (EnsureCoordinator svc = new EnsureCoordinator(admin, cfg, state)) {
             svc.ensureTopic("inventory");
         }
 
         assertEquals(1, admin.createTopicCalls, "ожидается вызов createTopic");
-        assertEquals(1L, state.createOk.longValue(), "создание должно считаться успешным");
-        assertEquals(1L, state.existsFalse.longValue(), "describe фиксирует отсутствие темы");
-        assertTrue(state.ensured.contains("inventory"), "тема попадает в кеш ensured");
+        assertEquals(1L, state.createOk().longValue(), "создание должно считаться успешным");
+        assertEquals(1L, state.existsFalse().longValue(), "describe фиксирует отсутствие темы");
+        assertTrue(state.isEnsured("inventory"), "тема попадает в кеш ensured");
         assertEquals(0, state.unknownSize(), "backoff не назначается при успешном создании");
     }
 
@@ -145,17 +145,17 @@ class TopicEnsureServiceTest {
                 .withPartitions(3)
                 .whenDescribe("billing", DescribeOutcome.MISSING)
                 .failCreateWith(new ExecutionException(new TopicExistsException("billing already exists")));
-        TopicEnsureState state = new TopicEnsureState();
+        EnsureRuntimeState state = new EnsureRuntimeState();
         TopicEnsureConfig cfg = defaultConfigBuilder().build();
 
-        try (TopicEnsureService svc = new TopicEnsureService(admin, cfg, state)) {
+        try (EnsureCoordinator svc = new EnsureCoordinator(admin, cfg, state)) {
             svc.ensureTopic("billing");
         }
 
         assertEquals(1, admin.createTopicCalls, "должна быть предпринята попытка createTopic");
-        assertEquals(1L, state.createRace.longValue(), "гонка фиксируется метрикой createRace");
-        assertEquals(0L, state.createFail.longValue(), "ошибки создания не учитываются");
-        assertTrue(state.ensured.contains("billing"), "тема помечается как ensured после гонки");
+        assertEquals(1L, state.createRace().longValue(), "гонка фиксируется метрикой createRace");
+        assertEquals(0L, state.createFail().longValue(), "ошибки создания не учитываются");
+        assertTrue(state.isEnsured("billing"), "тема помечается как ensured после гонки");
     }
 
     @Test
@@ -165,16 +165,16 @@ class TopicEnsureServiceTest {
                 .withPartitions(3)
                 .whenDescribe("ledger", DescribeOutcome.MISSING)
                 .failCreateWith(new IllegalStateException("Симуляция сетевого сбоя при create"));
-        TopicEnsureState state = new TopicEnsureState();
+        EnsureRuntimeState state = new EnsureRuntimeState();
         TopicEnsureConfig cfg = defaultConfigBuilder().build();
 
-        try (TopicEnsureService svc = new TopicEnsureService(admin, cfg, state)) {
+        try (EnsureCoordinator svc = new EnsureCoordinator(admin, cfg, state)) {
             svc.ensureTopic("ledger");
         }
 
         assertEquals(1, admin.createTopicCalls, "создание пытались выполнить один раз");
-        assertEquals(1L, state.createFail.longValue(), "неуспех должен учитываться");
-        assertFalse(state.ensured.contains("ledger"), "тема не попадёт в кеш при ошибке");
+        assertEquals(1L, state.createFail().longValue(), "неуспех должен учитываться");
+        assertFalse(state.isEnsured("ledger"), "тема не попадёт в кеш при ошибке");
         assertEquals(1, state.unknownSize(), "backoff-планировщик получает запись");
     }
 
@@ -182,16 +182,16 @@ class TopicEnsureServiceTest {
     @DisplayName("ensureTopicOk(): кешированный результат возвращает true без повторного describe")
     void ensureTopicOkUsesCache() {
         FakeAdmin admin = new FakeAdmin().withPartitions(2);
-        TopicEnsureState state = new TopicEnsureState();
+        EnsureRuntimeState state = new EnsureRuntimeState();
         TopicEnsureConfig cfg = defaultConfigBuilder().build();
 
-        try (TopicEnsureService svc = new TopicEnsureService(admin, cfg, state)) {
+        try (EnsureCoordinator svc = new EnsureCoordinator(admin, cfg, state)) {
             assertTrue(svc.ensureTopicOk("audit"), "первая проверка должна вернуть true");
             assertTrue(svc.ensureTopicOk("audit"), "повторная проверка также true, но уже из кеша");
         }
 
         assertEquals(1, admin.describeRequests, "describeTopics выполняется только в первую проверку");
-        assertEquals(1L, state.ensureInvocations.longValue(), "ensureTopic вызывался один раз");
+        assertEquals(1L, state.ensureInvocations().longValue(), "ensureTopic вызывался один раз");
     }
 
     private static TopicEnsureConfig.Builder defaultConfigBuilder() {

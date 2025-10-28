@@ -12,8 +12,11 @@
 - Атрибуты (read‑only): нормализованные имена метрик, значения — `Long`
 
 Примеры атрибутов:
-- ensure.invocations → ensure_invocations
+- ensure.invocations.total → ensure_invocations_total
+- ensure.invocations.accepted → ensure_invocations_accepted
+- ensure.invocations.rejected → ensure_invocations_rejected
 - ensure.cache.hit → ensure_cache_hit
+- ensure.batch.count → ensure_batch_count
 - create.ok → create_ok
 - unknown.backoff.size → unknown_backoff_size
 - replicate.failures.total → replicate_failures_total
@@ -88,8 +91,11 @@ java -jar jmx_prometheus_httpserver.jar 9404 jmx_exporter_h2k.yml
 Проверка: откройте `http://localhost:9404/metrics` и убедитесь, что появились метрики `h2k_*`.
 
 Примеры ожидаемых метрик:
-- h2k_ensure_invocations
+- h2k_ensure_invocations_total
+- h2k_ensure_invocations_accepted
+- h2k_ensure_invocations_rejected
 - h2k_ensure_cache_hit
+- h2k_ensure_batch_count
 - h2k_exists_true / h2k_exists_false / h2k_exists_unknown
 - h2k_create_ok / h2k_create_race / h2k_create_fail
 - h2k_unknown_backoff_size
@@ -152,12 +158,16 @@ scrape_configs:
 ### 5. Карта всех метрик H2K
 
 Метрики ensure (Kafka топики):
-- ensure.invocations — число вызовов ensure
+- ensure.invocations.total — все обращения к ensure (включая отклонённые)
+- ensure.invocations.accepted — число реально запущенных ensure (совпадает со старым ensure.invocations)
+- ensure.invocations.rejected — фильтры кандидатов (пустые имена, невалидные, backoff)
 - ensure.cache.hit — попадания кеша ensure
+- ensure.batch.count — количество топиков, обработанных через batch ensure
 - exists.true / exists.false / exists.unknown — результаты проверки существования топика
 - create.ok / create.race / create.fail — исходы создания топика
 - unknown.backoff.size — размер очереди отложенных ensure
 - state.ensured.count — число тем в локальном кеше «подтверждённых» ensure
+- queue.pending — размер очереди фонового EnsureExecutor
 
 Метрики WAL/построения payload:
 - wal.entries.total — обработанные записи WAL
