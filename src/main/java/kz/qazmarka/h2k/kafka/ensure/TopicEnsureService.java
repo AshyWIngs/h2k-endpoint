@@ -4,7 +4,6 @@ import java.time.Duration;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -22,9 +21,6 @@ import kz.qazmarka.h2k.kafka.ensure.config.TopicEnsureConfig;
  */
 final class TopicEnsureService implements AutoCloseable {
     static final Logger LOG = LoggerFactory.getLogger(TopicEnsureService.class);
-    // Сообщение о некорректном имени топика (чтобы не дублировать литерал)
-    private static final String WARN_INVALID_TOPIC =
-            "Некорректное имя Kafka-топика '{}': допускаются [a-zA-Z0-9._-], длина 1..{}, запрещены '.' и '..'";
     static final String CFG_RETENTION_MS = "retention.ms";
     static final String CFG_CLEANUP_POLICY = "cleanup.policy";
     static final String CFG_COMPRESSION_TYPE = "compression.type";
@@ -42,6 +38,7 @@ final class TopicEnsureService implements AutoCloseable {
     private final Map<String, String> topicConfigs;
     private final TopicDescribeSupport describeSupport;
     private final TopicCreationSupport creationSupport;
+    private final TopicCandidateChecker candidateChecker;
 
     /** Минимальный интерфейс для админских вызовов Kafka, удобный для unit-тестов. */
     /**
@@ -74,6 +71,7 @@ final class TopicEnsureService implements AutoCloseable {
         TopicEnsureContext ctx = new TopicEnsureContext(state, backoffManager, adminTimeoutMs, this.topicConfigs, this::markEnsured, LOG);
         this.describeSupport = new TopicDescribeSupport(admin, ctx);
         this.creationSupport = new TopicCreationSupport(admin, config, ctx);
+        this.candidateChecker = new TopicCandidateChecker(config, state, backoffManager, LOG);
     }
 
     /**
@@ -85,50 +83,29 @@ final class TopicEnsureService implements AutoCloseable {
         }
         state.ensureInvocations.increment();
 
-        String t = normalizeTopicName(topic);
-        if (t.isEmpty()) {
-            LOG.warn("Пустое имя Kafka-топика — пропускаю ensure");
+        TopicCandidateChecker.Candidate candidate = candidateChecker.evaluate(topic);
+        if (candidate.status == TopicCandidateChecker.CandidateStatus.ALREADY_ENSURED) {
             return;
         }
-        if (!isTopicNameAllowed(t)) {
+        if (candidate.status != TopicCandidateChecker.CandidateStatus.ACCEPTED) {
             return;
         }
-        if (fastCacheHit(t)) {
-            return;       // уже успешно проверяли
-        }
-        if (backoffManager.shouldSkip(t)) {
-            return; // действует backoff
-        }
+        ensureAcceptedTopic(candidate.normalizedName());
+    }
 
-        TopicExistence ex = describeSupport.describeSingle(t);
+    private void ensureAcceptedTopic(String topic) {
+        TopicExistence ex = describeSupport.describeSingle(topic);
         switch (ex) {
             case TRUE:
-                creationSupport.ensureUpgrades(t);
+                creationSupport.ensureUpgrades(topic);
                 break;
             case UNKNOWN:
                 // повторная попытка назначена в describeSupport
                 break;
             case FALSE:
-                creationSupport.ensureTopicCreated(t);
+                creationSupport.ensureTopicCreated(topic);
                 break;
         }
-    }
-
-    /**
-     * Быстрая проверка кеша подтверждённых тем.
-     *
-     * @param t имя Kafka‑топика
-     * @return {@code true}, если тема уже была подтверждена ранее и повторная проверка не требуется
-     */
-    private boolean fastCacheHit(String t) {
-        if (state.ensured.contains(t)) {
-            state.ensureHitCache.increment();
-            if (LOG.isDebugEnabled()) {
-                LOG.debug("Kafka-топик '{}' уже проверен ранее — пропускаю ensure", t);
-            }
-            return true;
-        }
-        return false;
     }
 
     /**
@@ -142,68 +119,27 @@ final class TopicEnsureService implements AutoCloseable {
         if (admin == null) {
             return false;               // ensureTopics=false
         }
-        String t = normalizeTopicName(topic);
-        if (t.isEmpty()) {
-            return false;
-        }
-        if (!isTopicNameAllowed(t)) {
-            return false;
-        }
-        // Быстрый путь: уже проверяли/создавали ранее — тема точно есть
-        if (state.ensured.contains(t)) {
+        TopicCandidateChecker.Candidate candidate = candidateChecker.evaluate(topic);
+        if (candidate.status == TopicCandidateChecker.CandidateStatus.ALREADY_ENSURED) {
             return true;
         }
-        // Иначе выполняем ensure и затем проверяем кеш
-        ensureTopic(t);                                // ensureTopic сам валидирует имя и пр.
-        return state.ensured.contains(t);
+        if (candidate.status != TopicCandidateChecker.CandidateStatus.ACCEPTED) {
+            return false;
+        }
+        String normalized = candidate.normalizedName();
+        state.ensureInvocations.increment();
+        ensureAcceptedTopic(normalized);
+        return state.ensured.contains(normalized);
     }
 
     /** Batch-ensure нескольких тем с единичным describe и выборочным create. */
     public void ensureTopics(Collection<String> topics) {
         if (admin == null || topics == null || topics.isEmpty()) return;
-        Set<String> toCheck = normalizeCandidates(topics);
+        Set<String> toCheck = candidateChecker.select(topics);
         if (toCheck.isEmpty()) return;
         List<String> missing = describeSupport.describeMissing(toCheck);
         if (missing.isEmpty()) return;
         creationSupport.createMissingTopics(missing);
-    }
-    private LinkedHashSet<String> normalizeCandidates(Collection<String> topics) {
-        LinkedHashSet<String> toCheck = new LinkedHashSet<>(topics.size());
-        for (String raw : topics) {
-            String t = normalizeTopicName(raw);
-            boolean candidateOk = true;
-            if (t.isEmpty()) {
-                candidateOk = false; // пустые имена пропускаем молча
-            }
-            if (candidateOk && !isTopicNameAllowed(t)) {
-                candidateOk = false;
-            }
-            if (candidateOk && fastCacheHit(t)) {
-                candidateOk = false;
-            }
-            if (candidateOk && backoffManager.shouldSkip(t)) {
-                candidateOk = false; // действует backoff — пропускаем до следующего окна
-            }
-            if (candidateOk) {
-                toCheck.add(t);
-            }
-        }
-        return toCheck;
-    }
-
-    /** Приводит имя Kafka-топика к нормализованному виду с trim и санитайзером из конфигурации. */
-    private String normalizeTopicName(String topic) {
-        String base = (topic == null) ? "" : topic.trim();
-        return config.topicSanitizer().apply(base);
-    }
-
-    /** Проверяет соответствие имени ограничениям брокера и логирует предупреждение при нарушении. */
-    private boolean isTopicNameAllowed(String topic) {
-        if (TopicNameValidator.isValid(topic, config.topicNameMaxLen())) {
-            return true;
-        }
-        LOG.warn(WARN_INVALID_TOPIC, topic, config.topicNameMaxLen());
-        return false;
     }
 
 

@@ -97,6 +97,23 @@
 
 Используйте поле `"h2k.saltBytes"` в Avro‑схемах. Ключ `h2k.salt.map` удалён: приоритет у схем Phoenix/Avro.
 
+### PhoenixTableMetadataProvider: единый билдер
+
+`PhoenixTableMetadataProvider` теперь собирается через fluent‑билдер. Это избавляет от копипасты с анонимными классами в тестах и гарантирует одинаковое поведение в CLI/IDE. Минимальный пример:
+
+```java
+PhoenixTableMetadataProvider provider = PhoenixTableMetadataProvider.builder()
+        .table(TableName.valueOf("NS", "TABLE"))
+        .saltBytes(8)               // опционально
+        .capacityHint(4)            // опционально
+        .columnFamilies("d", "x")   // опционально, по умолчанию пустой массив
+        .primaryKeyColumns("id")    // обязательно
+        .done()                     // фиксирует настройки текущей таблицы
+        .build();                   // иммутабельный провайдер для всех таблиц
+```
+
+Для тестов избегайте анонимных реализаций — используйте `builder()` и клоны массивов не понадобятся: билдер сам делает защитные копии (`columnFamilies`, `primaryKeyColumns`, `saltBytes`). Если нужно несколько таблиц, вызывайте `builder().table(...).done()` несколько раз перед `build()`.
+
 ---
 
 ## Наблюдатели горячего пути

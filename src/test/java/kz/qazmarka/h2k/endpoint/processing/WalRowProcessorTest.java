@@ -145,27 +145,13 @@ class WalRowProcessorTest {
     }
 
     private static PhoenixTableMetadataProvider metadata() {
-        return new PhoenixTableMetadataProvider() {
-            @Override
-            public Integer saltBytes(TableName table) {
-                return null;
-            }
-
-            @Override
-            public Integer capacityHint(TableName table) {
-                return 4;
-            }
-
-            @Override
-            public String[] columnFamilies(TableName table) {
-                return new String[] { "d" };
-            }
-
-            @Override
-            public String[] primaryKeyColumns(TableName table) {
-                return new String[] { "id" };
-            }
-        };
+        return PhoenixTableMetadataProvider.builder()
+                .table(TABLE)
+                .capacityHint(4)
+                .columnFamilies("d")
+                .primaryKeyColumns("id")
+                .done()
+                .build();
     }
 
     private static Decoder decoder() {

@@ -59,27 +59,16 @@ class H2kConfigTest {
     @DisplayName("Avro metadata provider задаёт соль и capacity, если нет конфигурации")
     void metadataProviderProvidesSaltAndCapacity() {
         Configuration c = new Configuration(false);
-        PhoenixTableMetadataProvider provider = new PhoenixTableMetadataProvider() {
-            @Override
-            public Integer saltBytes(TableName table) {
-                if ("DEFAULT:T_META".equalsIgnoreCase(table.getNameAsString())) {
-                    return 3;
-                }
-                return null;
-            }
-
-            @Override
-            public Integer capacityHint(TableName table) {
-                if ("DEFAULT:T_META".equalsIgnoreCase(table.getNameAsString())) {
-                    return 42;
-                }
-                return null;
-            }
-        };
+        TableName table = TableName.valueOf("DEFAULT", "T_META");
+        PhoenixTableMetadataProvider provider = PhoenixTableMetadataProvider.builder()
+                .table(table)
+                .saltBytes(3)
+                .capacityHint(42)
+                .done()
+                .build();
 
         H2kConfig hc = fromCfg(c, provider);
 
-        TableName table = TableName.valueOf("DEFAULT", "T_META");
         assertEquals(3, hc.getSaltBytesFor(table));
         assertEquals(42, hc.getCapacityHintFor(table));
     }
@@ -112,22 +101,11 @@ class H2kConfigTest {
         Configuration cfg = new Configuration(false);
         TableName table = TableName.valueOf("ns", "tbl");
 
-        PhoenixTableMetadataProvider provider = new PhoenixTableMetadataProvider() {
-            @Override
-            public Integer saltBytes(TableName table) {
-                return null;
-            }
-
-            @Override
-            public Integer capacityHint(TableName table) {
-                return null;
-            }
-
-            @Override
-            public String[] columnFamilies(TableName table) {
-                return new String[]{"d", "b"};
-            }
-        };
+        PhoenixTableMetadataProvider provider = PhoenixTableMetadataProvider.builder()
+                .table(table)
+                .columnFamilies("d", "b")
+                .done()
+                .build();
 
         H2kConfig hc = fromCfg(cfg, provider);
         CfFilterSnapshot snapshot = hc.describeCfFilter(table);
@@ -163,16 +141,11 @@ class H2kConfigTest {
         Configuration cfg = new Configuration(false);
         TableName table = TableName.valueOf("ns", "tbl");
 
-        PhoenixTableMetadataProvider provider = new PhoenixTableMetadataProvider() {
-            @Override
-            public Integer saltBytes(TableName table) { return null; }
-
-            @Override
-            public Integer capacityHint(TableName table) { return null; }
-
-            @Override
-            public String[] columnFamilies(TableName table) { return SchemaRegistry.EMPTY; }
-        };
+        PhoenixTableMetadataProvider provider = PhoenixTableMetadataProvider.builder()
+                .table(table)
+                .columnFamilies(SchemaRegistry.EMPTY)
+                .done()
+                .build();
 
         H2kConfig hc = fromCfg(cfg, provider);
         CfFilterSnapshot snapshot = hc.describeCfFilter(table);

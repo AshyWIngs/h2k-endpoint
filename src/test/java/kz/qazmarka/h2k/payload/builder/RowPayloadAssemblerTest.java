@@ -223,29 +223,16 @@ class RowPayloadAssemblerTest {
     }
 
     private PhoenixTableMetadataProvider metadataProvider(final Integer saltBytes) {
-        return new PhoenixTableMetadataProvider() {
-            private final String[] pk = new String[]{"id"};
-
-            @Override
-            public Integer saltBytes(TableName table) {
-                return saltBytes;
-            }
-
-            @Override
-            public Integer capacityHint(TableName table) {
-                return 0;
-            }
-
-            @Override
-            public String[] columnFamilies(TableName table) {
-                return new String[]{"data"};
-            }
-
-            @Override
-            public String[] primaryKeyColumns(TableName table) {
-                return pk.clone();
-            }
-        };
+        PhoenixTableMetadataProvider.TableMetadataBuilder builder =
+                PhoenixTableMetadataProvider.builder()
+                        .table(TABLE)
+                        .columnFamilies("data")
+                        .primaryKeyColumns("id")
+                        .capacityHint(0);
+        if (saltBytes != null) {
+            builder.saltBytes(saltBytes);
+        }
+        return builder.done().build();
     }
 
     private Cell putCell(String qualifier, long ts, byte[] value) {

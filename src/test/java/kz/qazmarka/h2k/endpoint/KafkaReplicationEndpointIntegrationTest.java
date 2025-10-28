@@ -61,27 +61,14 @@ class KafkaReplicationEndpointIntegrationTest {
         cfg.set("h2k.avro.schema.dir", SCHEMA_DIR.toString());
         cfg.set("h2k.avro.sr.urls", "http://mock-sr");
 
-        PhoenixTableMetadataProvider metadata = new PhoenixTableMetadataProvider() {
-            @Override
-            public Integer saltBytes(TableName table) {
-                return null;
-            }
-
-            @Override
-            public Integer capacityHint(TableName table) {
-                return 4;
-            }
-
-            @Override
-            public String[] columnFamilies(TableName table) {
-                return new String[] { "d" };
-            }
-
-            @Override
-            public String[] primaryKeyColumns(TableName table) {
-                return new String[] { "id" };
-            }
-        };
+        TableName table = TableName.valueOf("INT_TEST_TABLE");
+        PhoenixTableMetadataProvider metadata = PhoenixTableMetadataProvider.builder()
+                .table(table)
+                .capacityHint(4)
+                .columnFamilies("d")
+                .primaryKeyColumns("id")
+                .done()
+                .build();
 
         H2kConfig config = H2kConfig.from(cfg, "mock:9092", metadata);
 
@@ -111,7 +98,6 @@ class KafkaReplicationEndpointIntegrationTest {
         MockProducer<byte[], byte[]> producer = new MockProducer<>(true, new ByteArraySerializer(), new ByteArraySerializer());
         WalEntryProcessor processor = new WalEntryProcessor(builder, topicManager, producer, config);
 
-        TableName table = TableName.valueOf("INT_TEST_TABLE");
         byte[] row = Bytes.toBytes("rk-777");
         long cellTs = 1_678_901_234L;
 
@@ -269,27 +255,13 @@ class KafkaReplicationEndpointIntegrationTest {
     }
 
     private static PhoenixTableMetadataProvider defaultMetadataProvider() {
-        return new PhoenixTableMetadataProvider() {
-            @Override
-            public Integer saltBytes(TableName table) {
-                return null;
-            }
-
-            @Override
-            public Integer capacityHint(TableName table) {
-                return 4;
-            }
-
-            @Override
-            public String[] columnFamilies(TableName table) {
-                return new String[]{"d"};
-            }
-
-            @Override
-            public String[] primaryKeyColumns(TableName table) {
-                return new String[]{"id"};
-            }
-        };
+        return PhoenixTableMetadataProvider.builder()
+                .table(TableName.valueOf("INT_TEST_TABLE"))
+                .capacityHint(4)
+                .columnFamilies("d")
+                .primaryKeyColumns("id")
+                .done()
+                .build();
     }
 
     /**

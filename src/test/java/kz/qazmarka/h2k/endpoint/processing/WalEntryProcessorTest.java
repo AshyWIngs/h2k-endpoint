@@ -312,24 +312,14 @@ class WalEntryProcessorTest {
     }
 
     private static PhoenixTableMetadataProvider provider(String[] cfFamilies) {
-        final String[] fams = cfFamilies == null ? new String[0] : cfFamilies.clone();
-        return new PhoenixTableMetadataProvider() {
-            @Override
-            public Integer saltBytes(TableName table) { return null; }
-
-            @Override
-            public Integer capacityHint(TableName table) { return null; }
-
-            @Override
-            public String[] columnFamilies(TableName table) {
-                return TABLE.getNameAsString().equalsIgnoreCase(table.getNameAsString()) ? fams.clone() : SchemaRegistry.EMPTY;
-            }
-
-            @Override
-            public String[] primaryKeyColumns(TableName table) {
-                return new String[]{"id"};
-            }
-        };
+        String[] fams = cfFamilies == null ? SchemaRegistry.EMPTY : cfFamilies.clone();
+        PhoenixTableMetadataProvider.TableMetadataBuilder tableBuilder = PhoenixTableMetadataProvider.builder()
+                .table(TABLE)
+                .primaryKeyColumns("id");
+        if (fams.length > 0) {
+            tableBuilder.columnFamilies(fams);
+        }
+        return tableBuilder.done().build();
     }
 
     private static Decoder decoder() {
