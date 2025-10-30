@@ -91,7 +91,7 @@ public final class WalEntryProcessor implements AutoCloseable {
         }
 
         EntryContext context = prepareEntryContext(entry, sender, table, tableOptions, cfSnapshot, filterConfigured);
-        ArrayList<Cell> localRowBuffer = prepareRowBuffer(cells.size());
+        ArrayList<Cell> localRowBuffer = prepareRowBuffer(cells.size(), context.tableOptions.capacityHint());
         processEntryCells(cells, context, localRowBuffer);
         logEntrySummary(context);
 
@@ -125,10 +125,14 @@ public final class WalEntryProcessor implements AutoCloseable {
      * @param expectedCells прогнозируемое количество ячеек в текущем rowkey
      * @return готовый буфер, принадлежащий текущему экземпляру процессора
      */
-    private ArrayList<Cell> prepareRowBuffer(int expectedCells) {
+    private ArrayList<Cell> prepareRowBuffer(int totalCells, int capacityHint) {
         ArrayList<Cell> buffer = this.rowBuffer;
         buffer.clear();
-        int capacity = Math.max(ROW_BUFFER_BASE_CAPACITY, expectedCells);
+        int preferredUpperBound = capacityHint > 0
+                ? Math.max(capacityHint, ROW_BUFFER_BASE_CAPACITY)
+                : ROW_BUFFER_TRIM_THRESHOLD;
+        int target = Math.min(totalCells, preferredUpperBound);
+        int capacity = Math.max(ROW_BUFFER_BASE_CAPACITY, target);
         if (capacity > rowBufferCapacity) {
             rowBufferUpsize.increment();
             rowBufferCapacity = capacity;

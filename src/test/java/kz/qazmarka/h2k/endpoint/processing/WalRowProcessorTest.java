@@ -35,6 +35,7 @@ class WalRowProcessorTest {
 
     private static final Path SCHEMA_DIR = Paths.get("src", "test", "resources", "avro").toAbsolutePath();
     private static final TableName TABLE = TableName.valueOf("INT_TEST_TABLE");
+    private static final String TEST_TOPIC = "test-topic";
 
     @Test
     @DisplayName("Пустой rowkey не приводит к отправке и метрики не изменяются")
@@ -48,7 +49,7 @@ class WalRowProcessorTest {
         WalCounterService counterService = new WalCounterService();
         WalCounterService.EntryCounters counters = counterService.newEntryCounters();
         WalRowProcessor.RowContext context = new WalRowProcessor.RowContext(
-                "test-topic",
+                TEST_TOPIC,
                 TABLE,
                 WalMeta.EMPTY,
                 new BatchSender(10, 5_000),
@@ -78,7 +79,7 @@ class WalRowProcessorTest {
         WalCounterService.EntryCounters counters = counterService.newEntryCounters();
         WalCfFilterCache cfCache = WalCfFilterCache.build(new byte[][] { Bytes.toBytes("allowed") });
         WalRowProcessor.RowContext context = new WalRowProcessor.RowContext(
-                "test-topic",
+                TEST_TOPIC,
                 TABLE,
                 WalMeta.EMPTY,
                 new BatchSender(10, 5_000),
@@ -111,7 +112,7 @@ class WalRowProcessorTest {
         WalCounterService.EntryCounters counters = counterService.newEntryCounters();
         BatchSender sender = new BatchSender(10, 5_000);
         WalRowProcessor.RowContext context = new WalRowProcessor.RowContext(
-                "test-topic",
+                TEST_TOPIC,
                 TABLE,
                 new WalMeta(100L, 200L),
                 sender,
@@ -130,7 +131,7 @@ class WalRowProcessorTest {
         assertEquals(0, counters.rowsFiltered);
         assertEquals(cells.size(), counters.cellsSent);
         assertEquals(1, producer.history().size(), "Kafka должен получить единственную строку");
-        assertEquals("test-topic", producer.history().get(0).topic());
+        assertEquals(TEST_TOPIC, producer.history().get(0).topic());
     }
 
     private static WalRowProcessor processor(H2kConfig config, MockProducer<RowKeySlice, byte[]> producer) {

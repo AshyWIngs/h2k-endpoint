@@ -9,6 +9,10 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.function.LongSupplier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadFactory;
 
 import org.apache.hadoop.hbase.TableName;
 import org.slf4j.Logger;
@@ -36,6 +40,7 @@ public final class TopicManager {
     private final ConcurrentMap<String, LongSupplier> extraMetrics = new ConcurrentHashMap<>(8);
     private final ConcurrentMap<String, EnsureState> ensureStates = new ConcurrentHashMap<>(8);
     private final LongAdder ensureSkipped = new LongAdder();
+    private final ExecutorService ensureExecutor;
 
     private static final long ENSURE_SUCCESS_COOLDOWN_MS = TimeUnit.MINUTES.toMillis(1);
     private static final long ENSURE_FAILURE_RETRY_MS = TimeUnit.SECONDS.toMillis(5);
@@ -43,6 +48,7 @@ public final class TopicManager {
     public TopicManager(TopicNamingSettings topicSettings, TopicEnsurer topicEnsurer) {
         this.topicSettings = Objects.requireNonNull(topicSettings, "настройки топиков h2k");
         this.topicEnsurer = topicEnsurer == null ? TopicEnsurer.disabled() : topicEnsurer;
+        this.ensureExecutor = this.topicEnsurer.isEnabled() ? newEnsureExecutor() : null;
     }
 
     /**
@@ -78,18 +84,7 @@ public final class TopicManager {
             ensureSkipped.increment();
             return;
         }
-        boolean success = false;
-        try {
-            topicEnsurer.ensureTopic(topic);
-            success = true;
-        } catch (RuntimeException e) {
-            LOG.warn("Проверка/создание топика '{}' не выполнена: {}. Репликацию не прерываю", topic, e.getMessage());
-            if (LOG.isDebugEnabled()) {
-                LOG.debug("Трассировка ошибки ensureTopic()", e);
-            }
-        } finally {
-            state.finish(success, System.currentTimeMillis());
-        }
+        scheduleEnsure(topic, state);
     }
 
     /**
@@ -164,9 +159,27 @@ public final class TopicManager {
     }
 
     /**
+     * Тестовый хук: принудительно обновляет состояние ensure для заданного топика.
+     * Используется только в unit-тестах TopicManager.
+     */
+    void resetEnsureStateForTest(String topic, boolean success, long timestamp) {
+        if (topic == null) {
+            return;
+        }
+        EnsureState state = ensureStates.get(topic);
+        if (state != null) {
+            state.resetForTest(success, timestamp);
+        }
+    }
+
+    /**
      * Закрывает обёрнутый {@link TopicEnsurer}, проглатывая исключения на случай остановки.
      */
     public void closeQuietly() {
+        ExecutorService executor = ensureExecutor;
+        if (executor != null) {
+            executor.shutdownNow();
+        }
         try {
             topicEnsurer.close();
         } catch (Exception e) {
@@ -174,6 +187,48 @@ public final class TopicManager {
                 LOG.debug("Ошибка при закрытии TopicEnsurer (игнорируется при остановке)", e);
             }
         }
+    }
+
+    private void scheduleEnsure(String topic, EnsureState state) {
+        ExecutorService executor = ensureExecutor;
+        if (executor == null) {
+            runEnsure(topic, state);
+            return;
+        }
+        try {
+            executor.submit(() -> runEnsure(topic, state));
+        } catch (RejectedExecutionException ex) {
+            ensureSkipped.increment();
+            state.finish(false, System.currentTimeMillis());
+            LOG.warn("EnsureTopic '{}' не запланирован: {}", topic, ex.getMessage());
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("EnsureTopic '{}' — трассировка отказа планирования", topic, ex);
+            }
+        }
+    }
+
+    private void runEnsure(String topic, EnsureState state) {
+        boolean success = false;
+        try {
+            topicEnsurer.ensureTopic(topic);
+            success = true;
+        } catch (RuntimeException e) {
+            LOG.warn("Проверка/создание топика '{}' не выполнена: {}. Репликацию не прерываю", topic, e.getMessage());
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("Трассировка ошибки ensureTopic()", e);
+            }
+        } finally {
+            state.finish(success, System.currentTimeMillis());
+        }
+    }
+
+    private ExecutorService newEnsureExecutor() {
+        ThreadFactory factory = r -> {
+            Thread t = new Thread(r, "h2k-topic-ensure");
+            t.setDaemon(true);
+            return t;
+        };
+        return Executors.newSingleThreadExecutor(factory);
     }
 
     /**
@@ -209,6 +264,17 @@ public final class TopicManager {
                 lastFailure = timestamp;
             }
             inProgress = false;
+        }
+
+        synchronized void resetForTest(boolean success, long timestamp) {
+            inProgress = false;
+            if (success) {
+                lastSuccess = timestamp;
+                lastFailure = NO_TIME;
+            } else {
+                lastFailure = timestamp;
+                lastSuccess = NO_TIME;
+            }
         }
     }
 }

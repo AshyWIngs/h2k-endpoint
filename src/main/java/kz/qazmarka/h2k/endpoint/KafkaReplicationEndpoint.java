@@ -401,8 +401,10 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
                 H2kMetricsJmx.unregisterQuietly(h2kJmxName);
                 h2kJmxName = null;
             }
-        } catch (RuntimeException ignore) {
-            // игнорируем при остановке
+        } catch (RuntimeException ex) {
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("doStop(): ошибка при снятии регистрации JMX-метрик H2K (игнорируется при завершении)", ex);
+            }
         }
         notifyStopped();
     }

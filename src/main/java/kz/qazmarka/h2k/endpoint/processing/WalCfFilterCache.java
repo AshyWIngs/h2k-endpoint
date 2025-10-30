@@ -1,6 +1,7 @@
 package kz.qazmarka.h2k.endpoint.processing;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Objects;
@@ -79,6 +80,7 @@ final class WalCfFilterCache {
             familiesByHash[idx] = bucket;
             idx++;
         }
+        sortBuckets(hashes, familiesByHash);
         return new WalCfFilterCache(source, false, hashes, familiesByHash);
     }
 
@@ -138,18 +140,33 @@ final class WalCfFilterCache {
                                              byte[][][] familiesByHash) {
         for (Cell cell : cells) {
             int cellHash = Bytes.hashCode(cell.getFamilyArray(), cell.getFamilyOffset(), cell.getFamilyLength());
-            for (int i = 0; i < hashBuckets.length; i++) {
-                if (cellHash == hashBuckets[i]) {
-                    byte[][] candidates = familiesByHash[i];
-                    for (byte[] family : candidates) {
-                        if (Bytes.equals(cell.getFamilyArray(), cell.getFamilyOffset(), cell.getFamilyLength(),
-                                family, 0, family.length)) {
-                            return true;
-                        }
-                    }
+            int bucketIndex = Arrays.binarySearch(hashBuckets, cellHash);
+            if (bucketIndex < 0) {
+                continue;
+            }
+            byte[][] candidates = familiesByHash[bucketIndex];
+            for (byte[] family : candidates) {
+                if (Bytes.equals(cell.getFamilyArray(), cell.getFamilyOffset(), cell.getFamilyLength(),
+                        family, 0, family.length)) {
+                    return true;
                 }
             }
         }
         return false;
+    }
+
+    private static void sortBuckets(int[] hashes, byte[][][] familiesByHash) {
+        for (int i = 1; i < hashes.length; i++) {
+            int key = hashes[i];
+            byte[][] bucket = familiesByHash[i];
+            int j = i - 1;
+            while (j >= 0 && hashes[j] > key) {
+                hashes[j + 1] = hashes[j];
+                familiesByHash[j + 1] = familiesByHash[j];
+                j--;
+            }
+            hashes[j + 1] = key;
+            familiesByHash[j + 1] = bucket;
+        }
     }
 }
