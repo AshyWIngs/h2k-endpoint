@@ -24,7 +24,7 @@
   <commons-io.version>2.15.1</commons-io.version>
     <confluent.sr.version>5.3.8</confluent.sr.version>
     <jackson.version>2.17.2</jackson.version>
-    <guava.version>24.1.1-jre</guava.version>
+    <guava.version>32.0.0-jre</guava.version>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <avro.mode>confluent</avro.mode>
   </properties>
