@@ -10,6 +10,7 @@ import java.util.concurrent.atomic.LongAdder;
 
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.TableName;
+import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.wal.WAL;
 import org.apache.kafka.clients.producer.Producer;
 import org.slf4j.Logger;
@@ -75,8 +76,7 @@ public final class WalEntryProcessor {
      * по CF, собирает payload и добавляет futures в переданный {@link BatchSender}.
      */
     public void process(WAL.Entry entry,
-                        BatchSender sender,
-                        boolean includeWalMeta)
+                        BatchSender sender)
             throws InterruptedException, ExecutionException, TimeoutException {
         List<Cell> cells = entry.getEdit().getCells();
         TableName table = entry.getKey().getTablename();
@@ -88,8 +88,9 @@ public final class WalEntryProcessor {
             return;
         }
 
-        EntryContext context = prepareEntryContext(entry, sender, includeWalMeta, table, tableOptions, cfSnapshot, filterConfigured);
-        processEntryCells(cells, context);
+        EntryContext context = prepareEntryContext(entry, sender, table, tableOptions, cfSnapshot, filterConfigured);
+        ArrayList<Cell> localRowBuffer = prepareRowBuffer(cells.size());
+        processEntryCells(cells, context, localRowBuffer);
         logEntrySummary(context);
 
         finalizeEntry(context.table, context.counters, context.filterActive, context.cfSnapshot, context.tableOptions);
@@ -136,14 +137,13 @@ public final class WalEntryProcessor {
 
     private EntryContext prepareEntryContext(WAL.Entry entry,
                                              BatchSender sender,
-                                             boolean includeWalMeta,
                                              TableName table,
                                              TableOptionsSnapshot tableOptions,
                                              CfFilterSnapshot cfSnapshot,
                                              boolean filterConfigured) {
         String topic = topicManager.resolveTopic(table);
         topicManager.ensureTopicIfNeeded(topic);
-        WalMeta walMeta = includeWalMeta ? readWalMeta(entry) : WalMeta.EMPTY;
+        WalMeta walMeta = readWalMeta(entry);
         WalCounterService.EntryCounters counters = counterService.newEntryCounters();
         WalCfFilterCache cfCache = prepareCfCache(filterConfigured ? cfSnapshot.families() : null);
         boolean filterActive = filterConfigured && !cfCache.isEmpty();
@@ -167,19 +167,9 @@ public final class WalEntryProcessor {
                 rowContext);
     }
 
-    private void processEntryCells(List<Cell> cells, EntryContext context)
+    private void processEntryCells(List<Cell> cells, EntryContext context, ArrayList<Cell> rowBuffer)
             throws InterruptedException, ExecutionException, TimeoutException {
-        ArrayList<Cell> rowBuf = prepareRowBuffer(cells.size());
-        RowKeyState keyState = new RowKeyState();
-        for (Cell cell : cells) {
-            if (!keyState.sameRow(cell)) {
-                flushRow(keyState.rowKey(), rowBuf, context.rowContext);
-                keyState.startRow(cell, rowBuf);
-                continue;
-            }
-            rowBuf.add(cell);
-        }
-        flushRow(keyState.rowKey(), rowBuf, context.rowContext);
+        new RowAggregator(context, rowBuffer).aggregate(cells);
     }
 
     private void logEntrySummary(EntryContext context) {
@@ -231,9 +221,21 @@ public final class WalEntryProcessor {
             if (rowKey == null) {
                 return false;
             }
-            return currentArray == cell.getRowArray()
+            if (currentArray == cell.getRowArray()
                     && currentOffset == cell.getRowOffset()
-                    && currentLength == cell.getRowLength();
+                    && currentLength == cell.getRowLength()) {
+                return true;
+            }
+            if (currentLength != cell.getRowLength()) {
+                return false;
+            }
+            if (Bytes.equals(rowKey.getArray(), rowKey.getOffset(), currentLength,
+                    cell.getRowArray(), cell.getRowOffset(), currentLength)) {
+                currentArray = cell.getRowArray();
+                currentOffset = cell.getRowOffset();
+                return true;
+            }
+            return false;
         }
 
         void startRow(Cell cell, ArrayList<Cell> buffer) {
@@ -252,38 +254,48 @@ public final class WalEntryProcessor {
         }
     }
 
-    private void flushRow(RowKeySlice.Mutable rowKey,
-                          ArrayList<Cell> rowBuffer,
-                          WalRowProcessor.RowContext rowContext)
-            throws InterruptedException, ExecutionException, TimeoutException {
-        if (rowKey == null || rowBuffer.isEmpty()) {
-            return;
+    private final class RowAggregator {
+        private final EntryContext context;
+        private final ArrayList<Cell> rowBuffer;
+        private final RowKeyState keyState = new RowKeyState();
+
+        RowAggregator(EntryContext context, ArrayList<Cell> rowBuffer) {
+            this.context = context;
+            this.rowBuffer = rowBuffer;
         }
-        int processedCells = rowBuffer.size();
-        rowProcessor.processRow(rowKey, rowBuffer, rowContext);
-        resetRowBuffer(rowBuffer, processedCells);
-    }
 
-    /**
-     * Очищает буфер строки, при необходимости усаживает ёмкость и обновляет диагностические счётчики.
-     * Используется в обработке и тестах для проверки поведения trim.
-     */
-    void resetRowBufferForTest(ArrayList<Cell> rowBuffer, int processedCells) {
-        resetRowBuffer(rowBuffer, processedCells);
-    }
+        void aggregate(List<Cell> cells)
+                throws InterruptedException, ExecutionException, TimeoutException {
+            for (Cell cell : cells) {
+                if (!keyState.sameRow(cell)) {
+                    flushCurrentRow();
+                    keyState.startRow(cell, rowBuffer);
+                } else {
+                    rowBuffer.add(cell);
+                }
+            }
+            flushCurrentRow();
+        }
 
-    /** Возвращает порог усадки rowBuffer (используется в модульных тестах). */
-    static int rowBufferTrimThresholdForTest() {
-        return ROW_BUFFER_TRIM_THRESHOLD;
-    }
+        private void flushCurrentRow()
+                throws InterruptedException, ExecutionException, TimeoutException {
+            RowKeySlice.Mutable currentKey = keyState.rowKey();
+            if (currentKey == null || rowBuffer.isEmpty()) {
+                return;
+            }
+            int processedCells = rowBuffer.size();
+            rowProcessor.processRow(currentKey, rowBuffer, context.rowContext);
+            resetBuffer(processedCells);
+        }
 
-    private void resetRowBuffer(ArrayList<Cell> rowBuffer, int processedCells) {
-        rowBuffer.clear();
-        if (processedCells >= ROW_BUFFER_TRIM_THRESHOLD) {
-            rowBuffer.trimToSize();
-            rowBuffer.ensureCapacity(ROW_BUFFER_BASE_CAPACITY);
-            rowBufferTrim.increment();
-            rowBufferCapacity = ROW_BUFFER_BASE_CAPACITY;
+        private void resetBuffer(int processedCells) {
+            rowBuffer.clear();
+            if (processedCells >= ROW_BUFFER_TRIM_THRESHOLD) {
+                rowBuffer.trimToSize();
+                rowBuffer.ensureCapacity(ROW_BUFFER_BASE_CAPACITY);
+                WalEntryProcessor.this.rowBufferTrim.increment();
+                WalEntryProcessor.this.rowBufferCapacity = ROW_BUFFER_BASE_CAPACITY;
+            }
         }
     }
 

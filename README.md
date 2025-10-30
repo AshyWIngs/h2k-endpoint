@@ -197,6 +197,11 @@ Endpoint публикует события в формате Avro (Confluent Sch
 
 > Режим сериализации фиксирован: используется только Confluent Schema Registry. Ключ `h2k.avro.mode` удалён; локальные `.avsc` служат источником Phoenix‑метаданных и кешем схем.
 
+> При кратковременной недоступности Schema Registry Endpoint не блокирует горячий путь: сериализатор берёт
+> последний зарегистрированный `schemaId` из локального кеша и ставит повторную регистрацию схемы в фоновый поток
+> (экспоненциальный бэкофф, максимум 8 попыток). Готовность SR отслеживайте по метрикам
+> `SchemaRegistryMetrics.registrationFailures` и WARN-логам `Schema Registry недоступен...`.
+
 При старте endpoint выводит строку уровня INFO вида `Payload: payload.format=AVRO_BINARY, serializer.class=..., schema.registry.urls=...` — по ней видно, что активен Confluent SR и какие URL используются.
 
 Метрики `schema.registry.register.success` и `schema.registry.register.failures`, публикуемые через `TopicManager.getMetrics()`, напрямую отражают работу сериализатора Avro Confluent: успехи и ошибки регистрации схем в Schema Registry заметны без дополнительных логов.
@@ -218,6 +223,16 @@ Endpoint публикует события в формате Avro (Confluent Sch
 4. **Метрики endpoint.** `TopicManager.getMetrics()` возвращает счётчики ensure и свежие показатели `wal.*`, `schema.registry.*`; `wal.rowbuffer.upsizes` и `wal.rowbuffer.trims` помогают заметить широкие строки (более 32 ячеек) и редкие «гигантские» записи (≥4096 ячеек), а INFO-лог `Скорость WAL: ...` появляется примерно каждые 5 секунд и показывает фактическую скорость строк/сек.
 5. **Расширение.** После 1–2 часов без аномалий включайте остальные RS и таблицы; держите предыдущую версию JAR в каталоге `lib/backup` до полного завершения миграции.
 6. **Откат.** При необходимости отключите peer (`disable_peer`), удалите новый JAR, верните предыдущий и перезапустите RS.
+
+### Поток обработки WAL
+
+- `ReplicationExecutor` получает батч `ReplicationEndpoint.ReplicateContext`. Пустые списки сразу подтверждаются, чтобы не трогать Kafka.
+- Для непустых партий формируется `ReplicationBatch`: из настроек `ProducerAwaitSettings` вычисляются `awaitEvery/awaitTimeoutMs`, о чём пишет DEBUG‑лог. Создаётся `BatchSender`, который сам заботится о пороговом `flush()` и закрытии.
+- Каждый `WAL.Entry` прогоняется через `WalEntryProcessor.process(entry, sender)`. Процессор:
+  1. Разрешает имя топика и при необходимости запускает Ensure-топик.
+  2. Считывает метаданные WAL (sequenceId/writeTime) — дополнительный флаг `includeWalMeta` больше не требуется.
+  3. Собирает CF‑фильтр, группирует ячейки по rowkey и отправляет строки в Kafka, накапливая futures в `BatchSender`.
+- `ReplicationExecutor` ловит исключения, пишет WARN/ERROR и увеличивает метрики `replicate.failures.*`; DEBUG‑лог содержит стек. Метрики доступны через `TopicManager.getMetrics()` и JMX.
 
 ### Разработка (IDE)
 

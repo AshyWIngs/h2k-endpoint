@@ -2,7 +2,6 @@ package kz.qazmarka.h2k.endpoint.processing;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Paths;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -22,7 +21,7 @@ import org.apache.hadoop.hbase.wal.WALKey;
 import org.apache.kafka.clients.producer.MockProducer;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 import org.junit.jupiter.api.DisplayName;
@@ -177,16 +176,32 @@ class WalEntryProcessorTest {
 
         WalEntryProcessor.WalMetrics metrics = scenario.processor.metrics();
         assertEquals(cellsCount, metrics.cells(), "Все ячейки должны быть обработаны");
-        assertEquals(cellsCount, metrics.rows(), "Все строки должны быть учтены в метриках");
-    assertTrue(scenario.processor.rowBufferUpsizeCount() > 0,
-        "Ожидается увеличение буфера");
-    assertFalse(scenario.producer.history().isEmpty(),
-        "После отправки большого набора строк Kafka должна получить сообщения");
-
-        int trimThreshold = WalEntryProcessor.rowBufferTrimThresholdForTest();
-        forceRowBufferTrim(scenario, trimThreshold);
+        assertEquals(1, metrics.rows(), "Ожидается одна строка для большого rowkey");
+        assertTrue(scenario.processor.rowBufferUpsizeCount() > 0,
+                "Ожидается увеличение буфера");
         assertTrue(scenario.processor.rowBufferTrimCount() > 0,
-                "Ожидается усадка буфера после ручного сброса");
+                "Усадка буфера должна сработать для длинной строки");
+        assertEquals(1, scenario.producer.history().size(),
+                "Kafka должна получить ровно одну запись для длинной строки");
+    }
+
+    @Test
+    @DisplayName("BatchSender обрабатывает батч из 1200 записей без потерь")
+    void largeBatchFlushesSuccessfully() throws Exception {
+        WalScenario scenario = createScenario(new String[]{"d"});
+        int entryCount = 1_200;
+        try (BatchSender sender = new BatchSender(500, 5_000)) {
+            for (int i = 0; i < entryCount; i++) {
+                WAL.Entry entry = walEntry("row-batch-" + i, "d");
+                scenario.processor.process(entry, sender);
+            }
+        }
+
+        WalEntryProcessor.WalMetrics metrics = scenario.processor.metrics();
+        assertEquals(entryCount, metrics.rows(), "Каждая строка должна быть учтена");
+        assertEquals(entryCount, metrics.cells(), "Для тестового батча одна ячейка на строку");
+        assertEquals(entryCount, scenario.producer.history().size(),
+                "Kafka должна получить все записи батча");
     }
 
     @Test
@@ -265,33 +280,25 @@ class WalEntryProcessorTest {
         WAL.Entry entry = new Entry(key, edit);
 
         // Ожидаем ExecutionException из-за exceptional future продьюсера
-        ExecutionException thrown = org.junit.jupiter.api.Assertions.assertThrows(ExecutionException.class, () -> {
+        ExecutionException thrown = assertThrows(ExecutionException.class, () -> {
             try (BatchSender sender = new BatchSender(1, 500)) {
-                processor.process(entry, sender, false);
+                processor.process(entry, sender);
             }
         });
-        org.junit.jupiter.api.Assertions.assertTrue(thrown.getCause() instanceof IllegalStateException,
+        assertTrue(thrown.getCause() instanceof IllegalStateException,
                 "Причина должна сохранять исходное исключение отправки");
-        org.junit.jupiter.api.Assertions.assertEquals("simulated send failure", thrown.getCause().getMessage());
+        assertEquals("simulated send failure", thrown.getCause().getMessage());
     }
 
     private static void processWalEntry(WalEntryProcessor processor, WAL.Entry entry, int batchSize) {
         try (BatchSender sender = new BatchSender(batchSize, 1_000)) {
-            processor.process(entry, sender, false);
+            processor.process(entry, sender);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             fail("Обработка WAL прервана: " + e.getMessage(), e);
         } catch (ExecutionException | TimeoutException e) {
             fail("Не удалось обработать WAL: " + e.getMessage(), e);
         }
-    }
-
-    private static void forceRowBufferTrim(WalScenario scenario, int trimThreshold) {
-        ArrayList<Cell> buffer = new ArrayList<>(trimThreshold);
-        for (int i = 0; i < trimThreshold; i++) {
-            buffer.add(null);
-        }
-        scenario.processor.resetRowBufferForTest(buffer, trimThreshold);
     }
 
     private static WalScenario createScenario(String[] cfFamilies) {

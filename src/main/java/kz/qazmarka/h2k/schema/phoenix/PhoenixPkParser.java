@@ -240,21 +240,31 @@ public final class PhoenixPkParser {
         return currentByte == 0xFF && index + 1 < end;
     }
 
+    /**
+     * Копирует байт после escape-последовательности в результирующий буфер.
+     *
+     * @param source     исходный массив Phoenix rowkey
+     * @param target     буфер назначения
+     * @param writeIndex текущая позиция записи (не мутируется — метод возвращает смещённый индекс)
+     * @param escapeIndex позиция байта после 0xFF-эскейпа
+     * @return следующая позиция записи после добавления байтов
+     */
     private static int appendEscapedByte(byte[] source, byte[] target, int writeIndex, int escapeIndex) {
+        int nextIndex = writeIndex;
         int escapeValue = source[escapeIndex] & 0xFF;
         switch (escapeValue) {
             case 0x00:
-                target[writeIndex++] = 0x00;
+                target[nextIndex++] = 0x00;
                 break;
             case 0xFF:
-                target[writeIndex++] = (byte) 0xFF;
+                target[nextIndex++] = (byte) 0xFF;
                 break;
             default:
-                target[writeIndex++] = source[escapeIndex - 1];
-                target[writeIndex++] = source[escapeIndex];
+                target[nextIndex++] = source[escapeIndex - 1];
+                target[nextIndex++] = source[escapeIndex];
                 break;
         }
-        return writeIndex;
+        return nextIndex;
     }
 
     private static byte[] trim(byte[] buffer, int size) {

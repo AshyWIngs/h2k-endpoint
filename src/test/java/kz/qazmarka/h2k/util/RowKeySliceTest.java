@@ -1,11 +1,14 @@
 package kz.qazmarka.h2k.util;
 
+import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.util.Bytes;
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -221,12 +224,12 @@ class RowKeySliceTest {
         }
 
         @Override
-        public String columnType(org.apache.hadoop.hbase.TableName table, String qualifier) {
+        public String columnType(TableName table, String qualifier) {
             return cols.get(qualifier);
         }
 
         @Override
-        public String[] primaryKeyColumns(org.apache.hadoop.hbase.TableName table) {
+        public String[] primaryKeyColumns(TableName table) {
             return new String[0];
         }
     }
@@ -234,13 +237,13 @@ class RowKeySliceTest {
     /**
      * refresh(): проверяем, что вызовы не теряются и считаются корректно.
      */
-    @org.junit.jupiter.api.Test
+    @Test
     void refreshIncrementsCounter() {
         CountingRegistry r = new CountingRegistry();
         r.refresh();
         r.refresh();
         r.refresh();
-        org.junit.jupiter.api.Assertions.assertEquals(3, r.calls.get(),
+        assertEquals(3, r.calls.get(),
                 "refresh() должен инкрементировать счётчик каждый вызов");
     }
 
@@ -249,21 +252,21 @@ class RowKeySliceTest {
      * не должно находиться по другому регистру. Набор проверок оформлен как
      * мини‑параметризация через assertAll.
      */
-    @org.junit.jupiter.api.Test
+    @Test
     void exactLookupIsCaseSensitiveMatrix() {
         CountingRegistry r = new CountingRegistry();
         r.cols.put("FOO", "INT");
         r.cols.put("bar", "VARCHAR");
-        org.apache.hadoop.hbase.TableName tbl = org.apache.hadoop.hbase.TableName.valueOf("T");
+        TableName tbl = TableName.valueOf("T");
 
-        org.junit.jupiter.api.Assertions.assertAll(
-                () -> org.junit.jupiter.api.Assertions.assertEquals("INT", r.columnType(tbl, "FOO"),
+        assertAll(
+                () -> assertEquals("INT", r.columnType(tbl, "FOO"),
                         "Должны находить точное совпадение в верхнем регистре"),
-                () -> org.junit.jupiter.api.Assertions.assertNull(r.columnType(tbl, "foo"),
+                () -> assertNull(r.columnType(tbl, "foo"),
                         "Нельзя находить через иной регистр, если нет relaxed‑логики"),
-                () -> org.junit.jupiter.api.Assertions.assertEquals("VARCHAR", r.columnType(tbl, "bar"),
+                () -> assertEquals("VARCHAR", r.columnType(tbl, "bar"),
                         "Должны находить точное совпадение в нижнем регистре"),
-                () -> org.junit.jupiter.api.Assertions.assertNull(r.columnType(tbl, "BAR"),
+                () -> assertNull(r.columnType(tbl, "BAR"),
                         "Нельзя находить через иной регистр, если нет relaxed‑логики")
         );
     }

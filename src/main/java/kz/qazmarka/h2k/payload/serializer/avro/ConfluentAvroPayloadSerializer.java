@@ -10,6 +10,9 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.LongAdder;
 
@@ -34,8 +37,11 @@ import kz.qazmarka.h2k.schema.registry.avro.local.AvroSchemaRegistry;
 /**
  * Сериализует Avro {@link GenericData.Record} в формат Confluent (magic byte + schema id + payload).
  * Регистрация схем выполняется лениво; локальные схемы читаются через {@link AvroSchemaRegistry}.
+ * Если Schema Registry временно недоступен, сериализатор использует последний зарегистрированный идентификатор
+ * схемы и размещает задачу повторной регистрации в фоновом потоке (с экспоненциальным бэкоффом).
+ * Это позволяет не блокировать горячий путь репликации и повышает устойчивость при кратковременных сбоях SR.
  */
-public final class ConfluentAvroPayloadSerializer {
+public final class ConfluentAvroPayloadSerializer implements AutoCloseable {
 
     private static final Logger LOG = LoggerFactory.getLogger(ConfluentAvroPayloadSerializer.class);
     private static final byte MAGIC_BYTE = 0x0;
@@ -44,6 +50,14 @@ public final class ConfluentAvroPayloadSerializer {
     private static final String SCHEMA_REGISTRY_BASIC_AUTH_USER_INFO = "schema.registry.basic.auth.user.info";
     /** Максимальный размер буфера, который удерживаем в ThreadLocal (байты). */
     private static final int MAX_THREADLOCAL_BUFFER = 1 << 20;
+    /** Начальная задержка (мс) между повторными попытками регистрации схемы. */
+    private static final long INITIAL_RETRY_DELAY_MS = 1_000L;
+    /** Максимальная задержка (мс) между повторными попытками регистрации схемы. */
+    private static final long MAX_RETRY_DELAY_MS = 30_000L;
+    /** Верхняя граница числа повторных попыток регистрации одной схемы. */
+    private static final int MAX_RETRY_ATTEMPTS = 8;
+    private static final RetrySettings DEFAULT_RETRY_SETTINGS =
+            RetrySettings.defaultSettings(INITIAL_RETRY_DELAY_MS, MAX_RETRY_DELAY_MS, MAX_RETRY_ATTEMPTS);
 
     private final AvroSchemaRegistry localRegistry;
     private final List<String> registryUrls;
@@ -61,6 +75,11 @@ public final class ConfluentAvroPayloadSerializer {
 
     private final ConcurrentHashMap<String, SchemaInfo> cache = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, RemoteSchemaFingerprint> remoteFingerprints = new ConcurrentHashMap<>();
+    private final RetrySettings retrySettings;
+    /**
+     * Отдельный исполнитель для повторных попыток регистрации схем. Поток демонический и не блокирует остановку приложения.
+     */
+    private final ScheduledExecutorService retryExecutor;
 
     /**
      * @param avroSettings неизменяемые настройки Avro и Schema Registry
@@ -68,7 +87,7 @@ public final class ConfluentAvroPayloadSerializer {
      */
     public ConfluentAvroPayloadSerializer(AvroSettings avroSettings,
                                           AvroSchemaRegistry localRegistry) {
-        this(avroSettings, localRegistry, null);
+        this(avroSettings, localRegistry, null, DEFAULT_RETRY_SETTINGS);
     }
 
     /**
@@ -77,8 +96,16 @@ public final class ConfluentAvroPayloadSerializer {
     public ConfluentAvroPayloadSerializer(AvroSettings avroSettings,
                                           AvroSchemaRegistry localRegistry,
                                           SchemaRegistryClient clientOverride) {
+        this(avroSettings, localRegistry, clientOverride, DEFAULT_RETRY_SETTINGS);
+    }
+
+    ConfluentAvroPayloadSerializer(AvroSettings avroSettings,
+                                   AvroSchemaRegistry localRegistry,
+                                   SchemaRegistryClient clientOverride,
+                                   RetrySettings retrySettings) {
         this.localRegistry = Objects.requireNonNull(localRegistry, "localRegistry");
         Objects.requireNonNull(avroSettings, "avroSettings");
+        this.retrySettings = Objects.requireNonNull(retrySettings, "retrySettings");
 
         this.registryUrls = normalizeRegistryUrls(avroSettings.getRegistryUrls());
         Map<String, String> auth = avroSettings.getRegistryAuth();
@@ -93,8 +120,24 @@ public final class ConfluentAvroPayloadSerializer {
         this.schemaRegistryClient = clientOverride != null
                 ? clientOverride
                 : new CachedSchemaRegistryClient(this.registryUrls, identityMapCapacity, schemaRegistryClientConfig);
+        this.retryExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
+            Thread t = new Thread(r, "h2k-schema-registry-retry");
+            t.setDaemon(true);
+            return t;
+        });
     }
 
+    /**
+     * Сериализует запись в формат Confluent Avro (magic byte + schemaId + payload).
+     * Если Schema Registry недоступен, метод пытается использовать локально закешированный идентификатор
+     * или последний успешно зарегистрированный fingerprint и параллельно запускает повторную регистрацию
+     * во внутреннем планировщике.
+     *
+     * @param table таблица HBase, по которой вычисляется subject
+     * @param avroRecord готовая Avro-запись с ожидаемой схемой
+     * @return бинарное представление формата Confluent Avro
+     * @throws IllegalStateException если схема неожиданная либо Schema Registry недоступен и нет подходящего кэша
+     */
     public byte[] serialize(TableName table, GenericData.Record avroRecord) {
         Objects.requireNonNull(table, "не передано имя таблицы");
         Objects.requireNonNull(avroRecord, "record == null");
@@ -126,6 +169,10 @@ public final class ConfluentAvroPayloadSerializer {
         return out;
     }
 
+    /**
+     * Возвращает счётчики регистрации схем: сколько попыток завершилось успехом и сколько — ошибкой.
+     * Метод потоко-безопасен и не обнуляет счётчики; значения пригодны для экспонирования в метриках.
+     */
     public SchemaRegistryMetrics metrics() {
         return new SchemaRegistryMetrics(schemaRegisterSuccess.sum(), schemaRegisterFailure.sum());
     }
@@ -135,14 +182,36 @@ public final class ConfluentAvroPayloadSerializer {
         Schema schema = loadSchema(tableKey);
         long localFingerprint = SchemaNormalization.parsingFingerprint64(schema);
         maybeLogSchemaComparison(subject, localFingerprint);
-        int schemaId = registerSchema(subject, schema);
-        LOG.debug("Avro Confluent: схема зарегистрирована: subject={}, id={}.", subject, schemaId);
-        if (firstSuccessLogged.compareAndSet(false, true)) {
-            LOG.debug("Avro Confluent: первая успешная регистрация схемы — subject={}, id={}, urls={}",
-                    subject, schemaId, registryUrls);
+        SchemaInfo cached = cache.get(subject);
+        try {
+            int schemaId = schemaRegistryClient.register(subject, schema);
+            LOG.debug("Avro Confluent: схема зарегистрирована: subject={}, id={}.", subject, schemaId);
+            if (firstSuccessLogged.compareAndSet(false, true)) {
+                LOG.debug("Avro Confluent: первая успешная регистрация схемы — subject={}, id={}, urls={}",
+                        subject, schemaId, registryUrls);
+            }
+            remoteFingerprints.put(subject, new RemoteSchemaFingerprint(schemaId, -1, localFingerprint));
+            schemaRegisterSuccess.increment();
+            return new SchemaInfo(schemaId, schema);
+        } catch (RestClientException | IOException ex) {
+            schemaRegisterFailure.increment();
+            handleRegistrationFailure(subject, schema, localFingerprint, ex);
+            RemoteSchemaFingerprint fingerprint = remoteFingerprints.get(subject);
+            if (fingerprint != null && fingerprint.fingerprint == localFingerprint) {
+                SchemaInfo fallback = new SchemaInfo(fingerprint.schemaId, schema);
+                cache.put(subject, fallback);
+                LOG.warn("Avro Confluent: использую локально закешированный schemaId={} для subject={} (Schema Registry недоступен)", fingerprint.schemaId, subject);
+                return fallback;
+            }
+            if (cached != null) {
+                LOG.warn("Avro Confluent: Schema Registry недоступен, использую ранее зарегистрированный id={} для subject={}, регистрация выполнится в фоне", cached.schemaId, subject);
+                return cached;
+            }
+            throw new IllegalStateException("Avro: не удалось зарегистрировать схему '" + subject + "' — подключение к Schema Registry недоступно", ex);
+        } catch (RuntimeException ex) {
+            schemaRegisterFailure.increment();
+            throw new IllegalStateException("Avro: не удалось зарегистрировать схему '" + subject + "'", ex);
         }
-        remoteFingerprints.put(subject, new RemoteSchemaFingerprint(schemaId, -1, localFingerprint));
-        return new SchemaInfo(schemaId, schema);
     }
 
     private Schema loadSchema(String tableKey) {
@@ -151,22 +220,6 @@ public final class ConfluentAvroPayloadSerializer {
         } catch (IllegalStateException ex) {
             throw new IllegalStateException(
                     "Avro: не удалось прочитать локальную схему для таблицы '" + tableKey + "': " + ex.getMessage(), ex);
-        }
-    }
-
-    private int registerSchema(String subject, Schema schema) {
-        try {
-            return schemaRegistryClient.register(subject, schema);
-        } catch (RestClientException | IOException e) {
-            schemaRegisterFailure.increment();
-            if (firstFailureLogged.compareAndSet(false, true)) {
-                LOG.warn("Avro Confluent: первая ошибка регистрации схемы — subject={}, urls={}, error={}",
-                        subject, registryUrls, e.getMessage());
-            }
-            throw new IllegalStateException("Avro: не удалось зарегистрировать схему '" + subject + "'", e);
-        } catch (RuntimeException e) {
-            schemaRegisterFailure.increment();
-            throw new IllegalStateException("Avro: не удалось зарегистрировать схему '" + subject + "'", e);
         }
     }
 
@@ -231,6 +284,52 @@ public final class ConfluentAvroPayloadSerializer {
         }
         if (LOG.isDebugEnabled()) {
             LOG.debug("Трассировка ошибки сравнения fingerprint для subject={}", subject, ex);
+        }
+    }
+
+    private void handleRegistrationFailure(String subject,
+                                            Schema schema,
+                                            long localFingerprint,
+                                            Exception error) {
+        if (firstFailureLogged.compareAndSet(false, true)) {
+            LOG.warn("Avro Confluent: первая ошибка регистрации схемы — subject={}, urls={}, error={}",
+                    subject, registryUrls, error.getMessage());
+        } else if (LOG.isDebugEnabled()) {
+            LOG.debug("Avro Confluent: повторная ошибка регистрации subject={}: {}", subject, error.getMessage());
+        }
+        if (!retrySettings.retryEnabled()) {
+            LOG.warn("Avro Confluent: повторные попытки регистрации отключены (maxAttempts={}): subject={}",
+                    retrySettings.maxAttempts, subject);
+            return;
+        }
+        scheduleRetry(subject, schema, localFingerprint, 1);
+    }
+
+    private void scheduleRetry(String subject, Schema schema, long fingerprint, int attempt) {
+        long delay = retrySettings.delayMsForAttempt(attempt);
+        retryExecutor.schedule(() -> retryRegistration(subject, schema, fingerprint, attempt), delay, TimeUnit.MILLISECONDS);
+    }
+
+    private void retryRegistration(String subject, Schema schema, long fingerprint, int attempt) {
+        try {
+            int schemaId = schemaRegistryClient.register(subject, schema);
+            schemaRegisterSuccess.increment();
+            cache.compute(subject, (key, existing) -> existing != null ? existing : new SchemaInfo(schemaId, schema));
+            remoteFingerprints.put(subject, new RemoteSchemaFingerprint(schemaId, -1, fingerprint));
+            LOG.info("Avro Confluent: схема subject={} успешно зарегистрирована после {} попыток", subject, attempt);
+        } catch (RestClientException | IOException ex) {
+            schemaRegisterFailure.increment();
+            if (attempt >= retrySettings.maxAttempts) {
+                LOG.error("Avro Confluent: регистрация схемы subject={} окончательно провалилась после {} попыток: {}",
+                        subject, attempt, ex.getMessage());
+                return;
+            }
+            LOG.warn("Avro Confluent: повторная регистрация схемы subject={} не удалась (попытка {}): {}",
+                    subject, attempt, ex.getMessage());
+            scheduleRetry(subject, schema, fingerprint, attempt + 1);
+        } catch (RuntimeException ex) {
+            schemaRegisterFailure.increment();
+            LOG.error("Avro Confluent: критическая ошибка при повторной регистрации схемы subject={}", subject, ex);
         }
     }
 
@@ -464,5 +563,55 @@ public final class ConfluentAvroPayloadSerializer {
 
         public long registeredSchemas() { return registered; }
         public long registrationFailures() { return failures; }
+    }
+
+    @Override
+    public void close() {
+        retryExecutor.shutdownNow();
+    }
+
+    static final class RetrySettings {
+        private final long initialDelayMs;
+        private final long maxDelayMs;
+        private final int maxAttempts;
+
+        private RetrySettings(long initialDelayMs, long maxDelayMs, int maxAttempts) {
+            if (initialDelayMs <= 0) {
+                throw new IllegalArgumentException("initialDelayMs должен быть > 0");
+            }
+            if (maxDelayMs < initialDelayMs) {
+                throw new IllegalArgumentException("maxDelayMs не может быть меньше initialDelayMs");
+            }
+            if (maxAttempts < 0) {
+                throw new IllegalArgumentException("maxAttempts должен быть >= 0");
+            }
+            this.initialDelayMs = initialDelayMs;
+            this.maxDelayMs = maxDelayMs;
+            this.maxAttempts = maxAttempts;
+        }
+
+        static RetrySettings defaultSettings(long initialDelayMs, long maxDelayMs, int maxAttempts) {
+            return new RetrySettings(initialDelayMs, maxDelayMs, maxAttempts);
+        }
+
+        static RetrySettings forTests(long initialDelayMs, long maxDelayMs, int maxAttempts) {
+            return new RetrySettings(initialDelayMs, maxDelayMs, maxAttempts);
+        }
+
+        long delayMsForAttempt(int attempt) {
+            if (attempt <= 0) {
+                return initialDelayMs;
+            }
+            long exp = initialDelayMs << Math.min(Math.max(attempt - 1, 0), 8);
+            return Math.min(maxDelayMs, exp);
+        }
+
+        boolean retryEnabled() {
+            return maxAttempts > 0;
+        }
+
+        int maxAttempts() {
+            return maxAttempts;
+        }
     }
 }

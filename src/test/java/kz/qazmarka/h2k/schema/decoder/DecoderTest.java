@@ -28,8 +28,8 @@ import kz.qazmarka.h2k.util.RowKeySlice;
  *  • Зафиксировать поведение «быстрой» перегрузки с срезами:
  *    - qualifier всегда строится как String в кодировке UTF‑8;
  *    - value всегда копируется (изоляция от внешних мутаций), независимо от смещений.
- *  • Проверить удобные обёртки {@link Decoder#decode(org.apache.hadoop.hbase.TableName, byte[], byte[])}
- *    и {@link Decoder#decodeOrDefault(org.apache.hadoop.hbase.TableName, String, byte[], Object)}.
+ *  • Проверить удобные обёртки {@link Decoder#decode(TableName, byte[], byte[])}
+ *    и {@link Decoder#decodeOrDefault(TableName, String, byte[], Object)}.
  *
  * Контракт:
  * • Параметры table и qualifier обязательны (не null) для всех перегрузок; при null — NPE (fail‑fast).
@@ -45,7 +45,7 @@ class DecoderTest {
 
     /**
      * Вспомогательный контейнер для проверки того, что базовая перегрузка
-     * {@link Decoder#decode(org.apache.hadoop.hbase.TableName, String, byte[])}
+     * {@link Decoder#decode(TableName, String, byte[])}
      * получила ожидаемые данные.
      *
      * qualifier — строка, собранная из байтов UTF‑8;
@@ -64,7 +64,7 @@ class DecoderTest {
      */
     private static final class EchoDecoder implements Decoder {
         @Override
-        public Object decode(org.apache.hadoop.hbase.TableName table, String qualifier, byte[] value) {
+        public Object decode(TableName table, String qualifier, byte[] value) {
             Objects.requireNonNull(table, "table");
             Objects.requireNonNull(qualifier, "qualifier");
             return new Holder(qualifier, value);
@@ -73,29 +73,29 @@ class DecoderTest {
 
     /**
      * Тестовый декодер, всегда возвращающий {@code null}.
-     * Используется для проверки поведения {@link Decoder#decodeOrDefault(org.apache.hadoop.hbase.TableName, String, byte[], Object)}.
+     * Используется для проверки поведения {@link Decoder#decodeOrDefault(TableName, String, byte[], Object)}.
      */
     private static final class NullDecoder implements Decoder {
         @Override
-        public Object decode(org.apache.hadoop.hbase.TableName table, String qualifier, byte[] value) {
+        public Object decode(TableName table, String qualifier, byte[] value) {
             return null;
         }
     }
 
     /**
-     * Тестовая реализация контракта для {@link Decoder#decodeRowKey(org.apache.hadoop.hbase.TableName, kz.qazmarka.h2k.util.RowKeySlice, int, java.util.Map)}.
+     * Тестовая реализация контракта для {@link Decoder#decodeRowKey(TableName, RowKeySlice, int, java.util.Map)}.
      * Не зависит от реальной схемы: PK фиксированы как ["c","t","opd"], а формат rowkey —
      * c(UTF-8) | t(1 байт беззнаковый) | opd(8 байт big-endian millis).
      */
     private static final class ContractDecoder implements Decoder {
         @Override
-        public Object decode(org.apache.hadoop.hbase.TableName table, String qualifier, byte[] value) {
+        public Object decode(TableName table, String qualifier, byte[] value) {
             // В этом контрактном тесте базовый decode не используется.
             // Возвращаем null, чтобы явно не влиять на поведение decodeOrDefault и других тестов.
             return null;
         }
         @Override
-        public void decodeRowKey(TableName table, kz.qazmarka.h2k.util.RowKeySlice slice, int pkCount, Map<String, Object> out) {
+        public void decodeRowKey(TableName table, RowKeySlice slice, int pkCount, Map<String, Object> out) {
             Objects.requireNonNull(table, "table");
             Objects.requireNonNull(slice, "slice");
             Objects.requireNonNull(out, "out");
@@ -131,7 +131,7 @@ class DecoderTest {
 
     /**
      * Проверяет, что «быстрая» перегрузка
-     * {@link Decoder#decode(org.apache.hadoop.hbase.TableName, byte[], int, int, byte[], int, int)}
+     * {@link Decoder#decode(TableName, byte[], int, int, byte[], int, int)}
      * при передаче полных массивов:
      *  • собирает qualifier как строку UTF‑8;
      *  • копирует весь массив value (другая ссылка);
@@ -180,7 +180,7 @@ class DecoderTest {
     }
 
     /**
-     * Проверяет удобную перегрузку {@link Decoder#decode(org.apache.hadoop.hbase.TableName, byte[], byte[])},
+     * Проверяет удобную перегрузку {@link Decoder#decode(TableName, byte[], byte[])},
      * что она делегирует «быстрой» версии, формирует строковый qualifier и копирует массив value.
      */
     @Test
@@ -197,7 +197,7 @@ class DecoderTest {
     }
 
     /**
-     * Проверяет, что {@link Decoder#decodeOrDefault(org.apache.hadoop.hbase.TableName, String, byte[], Object)}
+     * Проверяет, что {@link Decoder#decodeOrDefault(TableName, String, byte[], Object)}
      * возвращает значение по умолчанию, если декодер вернул {@code null}.
      */
     @Test

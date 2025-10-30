@@ -27,34 +27,52 @@ final class H2kConfigLoader {
      * @throws IllegalArgumentException если bootstrap не задан
      */
     H2kConfig load(Configuration cfg, String bootstrap, PhoenixTableMetadataProvider metadataProvider) {
+        String sanitizedBootstrap = sanitizeBootstrap(bootstrap);
+        ConfigSections sections = ConfigSections.collect(cfg);
+        return assembleConfig(metadataProvider, sanitizedBootstrap, sections);
+    }
+
+    private static String sanitizeBootstrap(String bootstrap) {
         if (bootstrap == null || bootstrap.trim().isEmpty()) {
             throw new IllegalArgumentException("Отсутствует обязательный параметр bootstrap.servers: h2k.kafka.bootstrap.servers пустой или не задан");
         }
-        String sanitizedBootstrap = bootstrap.trim();
+        return bootstrap.trim();
+    }
 
-        TopicSection topic = TopicSection.from(cfg);
-        AvroSection avro = AvroSection.from(cfg);
-        EnsureSection ensure = EnsureSection.from(cfg);
-        ProducerBatchSection batch = ProducerBatchSection.from(cfg);
-        Map<String, String> topicConfigs = Parsers.readWithPrefix(cfg, H2kConfig.Keys.TOPIC_CONFIG_PREFIX);
-
+    private H2kConfig assembleConfig(PhoenixTableMetadataProvider metadataProvider,
+                                     String sanitizedBootstrap,
+                                     ConfigSections sections) {
         H2kConfigBuilder builder = new H2kConfigBuilder(sanitizedBootstrap);
+        builder.tableMetadataProvider(metadataProvider);
 
+        applyTopicSection(builder, sections.topic, sections.topicConfigs);
+        applyAvroSection(builder, sections.avro);
+        applyEnsureSection(builder, sections.ensure);
+        applyProducerSection(builder, sections.batch);
+        builder.observersEnabled(sections.observersEnabled);
+        return builder.build();
+    }
+
+    private static void applyTopicSection(H2kConfigBuilder builder,
+                                          TopicSection topic,
+                                          Map<String, String> topicConfigs) {
         builder.topic()
                 .pattern(topic.topicPattern)
                 .maxLength(topic.topicMaxLength)
                 .configs(topicConfigs)
                 .done();
+    }
 
-        builder.tableMetadataProvider(metadataProvider);
-
+    private static void applyAvroSection(H2kConfigBuilder builder, AvroSection avro) {
         builder.avro()
                 .schemaDir(avro.schemaDir)
                 .schemaRegistryUrls(avro.schemaRegistryUrls)
                 .schemaRegistryAuth(avro.auth)
                 .properties(avro.props)
                 .done();
+    }
 
+    private static void applyEnsureSection(H2kConfigBuilder builder, EnsureSection ensure) {
         builder.ensure()
                 .enabled(ensure.ensureTopics)
                 .allowIncreasePartitions(ensure.ensureIncreasePartitions)
@@ -65,18 +83,48 @@ final class H2kConfigLoader {
                 .adminClientId(ensure.adminClientId)
                 .unknownBackoffMs(ensure.unknownBackoffMs)
                 .done();
+    }
 
+    private static void applyProducerSection(H2kConfigBuilder builder, ProducerBatchSection batch) {
         builder.producer()
                 .awaitEvery(batch.awaitEvery)
                 .awaitTimeoutMs(batch.awaitTimeoutMs)
                 .done();
+    }
 
-        boolean observersEnabled = Parsers.readBoolean(
-                cfg,
-                H2kConfig.Keys.OBSERVERS_ENABLED,
-                H2kConfig.DEFAULT_OBSERVERS_ENABLED);
-        builder.observersEnabled(observersEnabled);
+    private static final class ConfigSections {
+        final TopicSection topic;
+        final AvroSection avro;
+        final EnsureSection ensure;
+        final ProducerBatchSection batch;
+        final Map<String, String> topicConfigs;
+        final boolean observersEnabled;
 
-        return builder.build();
+        private ConfigSections(TopicSection topic,
+                               AvroSection avro,
+                               EnsureSection ensure,
+                               ProducerBatchSection batch,
+                               Map<String, String> topicConfigs,
+                               boolean observersEnabled) {
+            this.topic = topic;
+            this.avro = avro;
+            this.ensure = ensure;
+            this.batch = batch;
+            this.topicConfigs = topicConfigs;
+            this.observersEnabled = observersEnabled;
+        }
+
+        static ConfigSections collect(Configuration cfg) {
+            TopicSection topic = TopicSection.from(cfg);
+            AvroSection avro = AvroSection.from(cfg);
+            EnsureSection ensure = EnsureSection.from(cfg);
+            ProducerBatchSection batch = ProducerBatchSection.from(cfg);
+            Map<String, String> topicConfigs = Parsers.readWithPrefix(cfg, H2kConfig.Keys.TOPIC_CONFIG_PREFIX);
+            boolean observersEnabled = Parsers.readBoolean(
+                    cfg,
+                    H2kConfig.Keys.OBSERVERS_ENABLED,
+                    H2kConfig.DEFAULT_OBSERVERS_ENABLED);
+            return new ConfigSections(topic, avro, ensure, batch, topicConfigs, observersEnabled);
+        }
     }
 }

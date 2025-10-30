@@ -279,94 +279,86 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
      */
     @Override
     public boolean replicate(ReplicationEndpoint.ReplicateContext ctx) {
-        final List<WAL.Entry> entries = ctx.getEntries();
-        if (entries == null || entries.isEmpty()) {
-            return true;
-        }
-
-        try {
-            replicateOnce(entries);
-            return true;
-        } catch (InterruptedException ie) {
-            Thread.currentThread().interrupt();
-            failReplicate("Репликация: поток прерван; запросим повтор партии", ie, true);
-            return false;
-        } catch (ExecutionException | TimeoutException ex) {
-            failReplicate("Репликация: ошибка при ожидании подтверждений Kafka", ex, false);
-            return false;
-        } catch (org.apache.kafka.common.KafkaException ex) {
-            failReplicate("Репликация: ошибка продьюсера Kafka", ex, false);
-            return false;
-        } catch (RuntimeException ex) {
-            failReplicate("Репликация: непредвиденная ошибка", ex, false);
-            return false;
-        }
+        return new ReplicationExecutor(ctx.getEntries()).execute();
     }
 
-    /**
-     * Унифицированная обработка отказа replicate(): краткое сообщение на WARN/ERROR и стек на DEBUG.
-     * @param prefix краткий текст события
-     * @param ex исключение
-     * @param warn если true — писать WARN; иначе ERROR
-     * @return всегда false, чтобы попросить HBase повторить партию
-     */
-    private void failReplicate(String prefix, Throwable ex, boolean warn) {
-        if (warn) {
-            LOG.warn("{}: {}", prefix, ex.getMessage());
-        } else {
-            LOG.error("{}: {}", prefix, ex.getMessage());
-        }
-        if (LOG.isDebugEnabled()) {
-            LOG.debug("Трассировка ошибки в replicate()", ex);
-        }
-        onReplicateFailure();
-    }
+    private final class ReplicationExecutor {
+        private final List<WAL.Entry> entries;
 
-    /**
-     * Фиксирует отказ репликации для метрик и диагностики.
-     * Вызывается из обработчиков исключений в replicate().
-     */
-    private void onReplicateFailure() {
-        replicateFailures.increment();
-        lastReplicateFailureAt.set(System.currentTimeMillis());
-    }
-
-    private void replicateOnce(List<WAL.Entry> entries)
-            throws InterruptedException, ExecutionException, TimeoutException {
-    // Контракт: отправляет события в Kafka, периодически ожидая подтверждения по awaitEvery/awaitTimeoutMs.
-    // Исключения пробрасываются наружу и обрабатываются в replicate(). Никаких sleep/побочных потоков.
-    final int awaitEvery = producerSettings.getAwaitEvery();
-    final int awaitTimeoutMs = producerSettings.getAwaitTimeoutMs();
-
-        if (LOG.isDebugEnabled()) {
-            LOG.debug("Репликация: записей={}, awaitEvery={}, awaitTimeoutMs={}",
-                    entries.size(), awaitEvery, awaitTimeoutMs);
+        ReplicationExecutor(List<WAL.Entry> entries) {
+            this.entries = entries;
         }
 
-        final boolean includeWalMeta = false;
-
-        try (BatchSender sender = new BatchSender(
-                awaitEvery,
-                awaitTimeoutMs)) {
-            for (WAL.Entry entry : entries) {
-                processEntry(entry, sender, includeWalMeta);
+        boolean execute() {
+            if (entries == null || entries.isEmpty()) {
+                return true;
+            }
+            try {
+                new ReplicationBatch(entries).process();
+                return true;
+            } catch (InterruptedException ie) {
+                return handleInterrupted(ie);
+            } catch (ExecutionException | TimeoutException ex) {
+                return handleFailure("Репликация: ошибка при ожидании подтверждений Kafka", ex, false);
+            } catch (org.apache.kafka.common.KafkaException ex) {
+                return handleFailure("Репликация: ошибка продьюсера Kafka", ex, false);
+            } catch (RuntimeException ex) {
+                return handleFailure("Репликация: непредвиденная ошибка", ex, false);
             }
         }
+
+        private boolean handleInterrupted(InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            return handleFailure("Репликация: поток прерван; запросим повтор партии", ie, true);
+        }
+
+        private boolean handleFailure(String prefix, Throwable ex, boolean warn) {
+            failReplicate(prefix, ex, warn);
+            return false;
+        }
+
+        /**
+         * Унифицированная обработка отказа replicate(): краткое сообщение на WARN/ERROR и стек на DEBUG.
+         * Фиксирует отказ в метриках.
+         */
+        private void failReplicate(String prefix, Throwable ex, boolean warn) {
+            if (warn) {
+                LOG.warn("{}: {}", prefix, ex.getMessage());
+            } else {
+                LOG.error("{}: {}", prefix, ex.getMessage());
+            }
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("Трассировка ошибки в replicate()", ex);
+            }
+            KafkaReplicationEndpoint.this.replicateFailures.increment();
+            KafkaReplicationEndpoint.this.lastReplicateFailureAt.set(System.currentTimeMillis());
+        }
     }
 
-    /**
-     * Обрабатывает один {@link WAL.Entry}: вычисляет имя топика, безопасно проверяет/создаёт тему,
-     * формирует и отправляет сообщения по строкам.
-     *
-     * @param entry         запись WAL
-     * @param sender        батч‑отправитель для ожидания ack по порогам
-     * @param includeWalMeta включать ли метаданные WAL в payload
-     */
-    private void processEntry(WAL.Entry entry,
-                              BatchSender sender,
-                              boolean includeWalMeta)
-            throws InterruptedException, ExecutionException, TimeoutException {
-        walEntryProcessor.process(entry, sender, includeWalMeta);
+    private final class ReplicationBatch {
+        private final List<WAL.Entry> entries;
+
+        ReplicationBatch(List<WAL.Entry> entries) {
+            this.entries = entries;
+        }
+
+        void process() throws InterruptedException, ExecutionException, TimeoutException {
+            try (BatchSender sender = createSender(entries.size())) {
+                for (WAL.Entry entry : entries) {
+                    walEntryProcessor.process(entry, sender);
+                }
+            }
+        }
+
+        private BatchSender createSender(int entryCount) {
+            int awaitEvery = producerSettings.getAwaitEvery();
+            int awaitTimeoutMs = producerSettings.getAwaitTimeoutMs();
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("Репликация: записей={}, awaitEvery={}, awaitTimeoutMs={}",
+                        entryCount, awaitEvery, awaitTimeoutMs);
+            }
+            return new BatchSender(awaitEvery, awaitTimeoutMs);
+        }
     }
 
     /** В HBase 1.4 {@code Context} не предоставляет getPeerUUID(); сигнатура метода требуется API базового класса.

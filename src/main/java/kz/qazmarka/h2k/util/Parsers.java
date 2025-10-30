@@ -7,11 +7,14 @@ package kz.qazmarka.h2k.util;
 import java.net.InetAddress;
 import java.net.UnknownHostException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 import org.apache.hadoop.conf.Configuration;
@@ -25,6 +28,18 @@ import org.apache.hadoop.conf.Configuration;
 public final class Parsers {
 
     private static final Pattern TOPIC_SANITIZE = Pattern.compile("[^a-zA-Z0-9._-]");
+    /**
+     * Значения, которые трактуем как {@code true} при разборе конфигурации.
+     */
+    private static final Set<String> TRUE_TOKENS = Collections.unmodifiableSet(new HashSet<>(Arrays.asList(
+            "true", "1", "yes", "on"
+    )));
+    /**
+     * Значения, которые трактуем как {@code false} при разборе конфигурации.
+     */
+    private static final Set<String> FALSE_TOKENS = Collections.unmodifiableSet(new HashSet<>(Arrays.asList(
+            "false", "0", "no", "off"
+    )));
 
     private Parsers() {}
 
@@ -115,12 +130,6 @@ public final class Parsers {
         }
         return defVal;
     }
-
-    private static final java.util.Set<String> TRUE_TOKENS = new java.util.HashSet<>(java.util.Arrays.asList(
-            "true", "1", "yes", "on"));
-
-    private static final java.util.Set<String> FALSE_TOKENS = new java.util.HashSet<>(java.util.Arrays.asList(
-            "false", "0", "no", "off"));
 
     /**
      * Читает и нормализует шаблон имени топика: применяет {@code getTrimmed} и подставляет дефолт.

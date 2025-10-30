@@ -100,12 +100,28 @@ Ensure: ok (create retries=0)
 - Прогоните `./codacy-analyze.sh` и убедитесь в отсутствии замечаний.
 - При необходимости перегенерируйте тестовые схемы командой `./scripts/refresh-test-avro.sh` (если схема менялась).
 
+### 4.2 Горячий путь replicate()
+
+1. **`ReplicationExecutor`** — точка входа из `ReplicationEndpoint.replicate()`. Пустые батчи (`entries.isEmpty()`) завершаются немедленно без обращения к Kafka.
+2. **`ReplicationBatch`** — для непустых списков формирует `BatchSender` на основе `ProducerAwaitSettings` (`awaitEvery`, `awaitTimeoutMs`). Значения логируются на уровне DEBUG, что помогает подтвердить актуальность конфигурации.
+3. **`WalEntryProcessor.process(entry, sender)`**:
+   - Разрешает имя топика, при необходимости вызывает ensure-топик.
+   - Всегда читает метаданные WAL (`sequenceId`, `writeTime`) и передаёт их дальше (флаг `includeWalMeta` больше не используется).
+   - Собирает CF-фильтр, группирует ячейки по rowkey и добавляет futures в `BatchSender`.
+4. **`BatchSender`** — накапливает Futures и блокирующе вызывает `flush()` при достижении порога `awaitEvery`. При закрытии (`try-with-resources`) гарантирует обработку оставшихся записей.
+5. **Обработка ошибок** — любые исключения ловит `ReplicationExecutor.failReplicate(...)`: пишет WARN/ERROR (stacktrace в DEBUG) и обновляет метрики `replicate.failures.total` и `replicate.last.failure.epoch.ms`. Эти показатели видны через `TopicManager.getMetrics()` и JMX (`H2kMetricsJmx`).
+
+> Админам: при анализе инцидентов фиксируйте DEBUG‑лог `"Репликация: записей=..., awaitEvery=..., awaitTimeoutMs=..."` и текущее значение `replicate.failures.total` — это ускоряет поиск узкого места.
+
 ## 5. Мониторинг
 
 - `status 'replication'` — `SizeOfLogQueue`, `AgeOfLastShippedOp`.
 - Метрики `TopicEnsurer` (через JMX или логи).
 - `TopicManager.getMetrics()`/JMX: отслеживайте `wal.rowbuffer.upsizes` (широкие строки требуют >32 ячеек) и `wal.rowbuffer.trims` (гигантские строки ≥4096 ячеек). Эти счётчики должны расти медленно; резкий рост указывает, что CF-фильтр пропускает слишком много данных.
 - Schema Registry: `curl $SR/subjects`, latency, ошибки 4xx/5xx.
+- При падении SR Endpoint продолжает отправку с последним зарегистрированным `schemaId` и запускает фоновые
+  попытки повторной регистрации (экспоненциальный бэкофф до 8 шагов). Следите за счётчиком
+  `SchemaRegistryMetrics.registrationFailures` и логами `Schema Registry недоступен, использую ранее зарегистрированный id`.
 - Лог `KafkaReplicationEndpoint` выводит throughput каждые 5 с (`Скорость WAL…`).
 
 Добавление Prometheus JMX exporter — см. раздел «Сбор метрик» в [`docs/runbook/troubleshooting.md`](troubleshooting.md#сбор-метрик-через-prometheus).

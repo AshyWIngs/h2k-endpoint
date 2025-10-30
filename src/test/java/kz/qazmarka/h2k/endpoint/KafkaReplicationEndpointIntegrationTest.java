@@ -107,7 +107,7 @@ class KafkaReplicationEndpointIntegrationTest {
         Entry entry = walEntry(table, row, cells);
 
         try (BatchSender sender = new BatchSender(1, 5_000)) {
-            processor.process(entry, sender, false);
+            processor.process(entry, sender);
         }
 
         List<ProducerRecord<byte[], byte[]>> history = producer.history();
@@ -198,7 +198,7 @@ class KafkaReplicationEndpointIntegrationTest {
             Entry entry = walEntry(table, row, cells);
 
             try (BatchSender sender = new BatchSender(1, 5_000)) {
-                processor.process(entry, sender, false);
+                processor.process(entry, sender);
             }
 
             assertEquals(1, producer.history().size(), "Сообщение должно быть отправлено несмотря на ошибку ensure");

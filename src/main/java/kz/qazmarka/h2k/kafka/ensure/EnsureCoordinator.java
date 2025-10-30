@@ -33,7 +33,6 @@ final class EnsureCoordinator implements AutoCloseable {
     private final long adminTimeoutMs;
     private final long unknownBackoffMs;
     private final TopicBackoffManager backoffManager;
-    private final Map<String, String> topicConfigs;
     private final EnsureMetricsSink metrics;
     private final TopicDescribeSupport describeSupport;
     private final TopicCreationSupport creationSupport;
@@ -46,9 +45,9 @@ final class EnsureCoordinator implements AutoCloseable {
         this.adminTimeoutMs = config.adminTimeoutMs();
         this.unknownBackoffMs = config.unknownBackoffMs();
         this.backoffManager = new TopicBackoffManager(state, config.unknownBackoffMs());
-        this.topicConfigs = config.topicConfigs();
+        Map<String, String> topicConfigs = config.topicConfigs();
         this.metrics = new EnsureMetricsSink(state);
-        TopicEnsureContext ctx = new TopicEnsureContext(backoffManager, adminTimeoutMs, this.topicConfigs, this::markEnsured, metrics, LOG);
+        TopicEnsureContext ctx = new TopicEnsureContext(backoffManager, adminTimeoutMs, topicConfigs, this::markEnsured, metrics, LOG);
         this.describeSupport = new TopicDescribeSupport(admin, ctx);
         this.creationSupport = new TopicCreationSupport(admin, config, ctx);
         this.candidateChecker = new TopicCandidateChecker(config, state, backoffManager, metrics, LOG);
