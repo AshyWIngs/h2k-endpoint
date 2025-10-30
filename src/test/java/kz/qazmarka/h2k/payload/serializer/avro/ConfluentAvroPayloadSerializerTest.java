@@ -434,27 +434,28 @@ class ConfluentAvroPayloadSerializerTest {
             }
         };
 
-        PayloadBuilder builder = new PayloadBuilder(decoder, cfg, client);
-        TableName table = TableName.valueOf("default", "T_ROW");
-        byte[] row = Bytes.toBytes("rk-1");
-        byte[] family = Bytes.toBytes("data");
-        byte[] payload = "binary-data".getBytes(StandardCharsets.UTF_8);
-        Cell payloadCell = new KeyValue(row, family, Bytes.toBytes("payload"), 123L, payload);
+        try (PayloadBuilder builder = new PayloadBuilder(decoder, cfg, client)) {
+            TableName table = TableName.valueOf("default", "T_ROW");
+            byte[] row = Bytes.toBytes("rk-1");
+            byte[] family = Bytes.toBytes("data");
+            byte[] payload = "binary-data".getBytes(StandardCharsets.UTF_8);
+            Cell payloadCell = new KeyValue(row, family, Bytes.toBytes("payload"), 123L, payload);
 
-        byte[] serialized = builder.buildRowPayloadBytes(
-                table,
-                Collections.singletonList(payloadCell),
-                RowKeySlice.whole(row),
-                1L,
-                2L);
+            byte[] serialized = builder.buildRowPayloadBytes(
+                    table,
+                    Collections.singletonList(payloadCell),
+                    RowKeySlice.whole(row),
+                    1L,
+                    2L);
 
-        assertNotNull(serialized, "Сериализация BinarySlice не должна возвращать null");
+            assertNotNull(serialized, "Сериализация BinarySlice не должна возвращать null");
 
-        ByteBuffer payloadBuffer = deserializePayload(serialized, client, "payload");
-        assertEquals(payload.length, payloadBuffer.remaining(), "Размер payload должен совпадать");
-        byte[] restored = new byte[payloadBuffer.remaining()];
-        payloadBuffer.duplicate().get(restored);
-        assertEquals("binary-data", new String(restored, StandardCharsets.UTF_8));
+            ByteBuffer payloadBuffer = deserializePayload(serialized, client, "payload");
+            assertEquals(payload.length, payloadBuffer.remaining(), "Размер payload должен совпадать");
+            byte[] restored = new byte[payloadBuffer.remaining()];
+            payloadBuffer.duplicate().get(restored);
+            assertEquals("binary-data", new String(restored, StandardCharsets.UTF_8));
+        }
     }
 
     private static H2kConfig configWithCacheCapacity(int capacity) {

@@ -33,6 +33,7 @@ import kz.qazmarka.h2k.endpoint.processing.WalEntryProcessor.WalMetrics;
 import kz.qazmarka.h2k.endpoint.topic.TopicManager;
 import kz.qazmarka.h2k.kafka.ensure.TopicEnsurer;
 import kz.qazmarka.h2k.kafka.producer.batch.BatchSender;
+import kz.qazmarka.h2k.kafka.serializer.RowKeySliceSerializer;
 import kz.qazmarka.h2k.payload.builder.PayloadBuilder;
 import kz.qazmarka.h2k.schema.decoder.Decoder;
 import kz.qazmarka.h2k.schema.decoder.TestRawDecoder;
@@ -227,9 +228,9 @@ class WalEntryProcessorTest {
         sender.flush();
 
         assertEquals(1, scenario.producer.history().size(), "Ожидается публикация строки");
-        org.apache.kafka.clients.producer.ProducerRecord<byte[], byte[]> produced = scenario.producer.history().get(0);
+        org.apache.kafka.clients.producer.ProducerRecord<RowKeySlice, byte[]> produced = scenario.producer.history().get(0);
         assertEquals(scenario.topicManager.resolveTopic(TABLE), produced.topic());
-        assertTrue(java.util.Arrays.equals(row, produced.key()), "Ключ должен совпасть с rowkey");
+        assertTrue(java.util.Arrays.equals(row, produced.key().toByteArray()), "Ключ должен совпасть с rowkey");
         assertTrue(produced.value() != null && produced.value().length > 0, "Payload не должен быть пустым");
     }
 
@@ -246,18 +247,18 @@ class WalEntryProcessorTest {
 
         H2kConfig h2kConfig = H2kConfig.from(cfg, "mock:9092", provider);
 
-    PayloadBuilder payloadBuilder = new PayloadBuilder(decoder(), h2kConfig, new MockSchemaRegistryClient());
+        PayloadBuilder payloadBuilder = new PayloadBuilder(decoder(), h2kConfig, new MockSchemaRegistryClient());
         TopicManager topicManager = new TopicManager(h2kConfig.getTopicSettings(), TopicEnsurer.disabled());
 
         // Продьюсер, у которого send() всегда возвращает exceptional future
-        class FailingProducer implements org.apache.kafka.clients.producer.Producer<byte[], byte[]> {
+        class FailingProducer implements org.apache.kafka.clients.producer.Producer<RowKeySlice, byte[]> {
             private java.util.concurrent.CompletableFuture<org.apache.kafka.clients.producer.RecordMetadata> failedFuture() {
                 java.util.concurrent.CompletableFuture<org.apache.kafka.clients.producer.RecordMetadata> cf = new java.util.concurrent.CompletableFuture<>();
                 cf.completeExceptionally(new IllegalStateException("simulated send failure"));
                 return cf;
             }
-            @Override public java.util.concurrent.Future<org.apache.kafka.clients.producer.RecordMetadata> send(org.apache.kafka.clients.producer.ProducerRecord<byte[], byte[]> rec) { return failedFuture(); }
-            @Override public java.util.concurrent.Future<org.apache.kafka.clients.producer.RecordMetadata> send(org.apache.kafka.clients.producer.ProducerRecord<byte[], byte[]> rec, org.apache.kafka.clients.producer.Callback cb) { return failedFuture(); }
+            @Override public java.util.concurrent.Future<org.apache.kafka.clients.producer.RecordMetadata> send(org.apache.kafka.clients.producer.ProducerRecord<RowKeySlice, byte[]> rec) { return failedFuture(); }
+            @Override public java.util.concurrent.Future<org.apache.kafka.clients.producer.RecordMetadata> send(org.apache.kafka.clients.producer.ProducerRecord<RowKeySlice, byte[]> rec, org.apache.kafka.clients.producer.Callback cb) { return failedFuture(); }
             @Override public void flush() { /* no-op for test */ }
             @Override public List<org.apache.kafka.common.PartitionInfo> partitionsFor(String topic) { return Collections.emptyList(); }
             @Override public Map<org.apache.kafka.common.MetricName, ? extends org.apache.kafka.common.Metric> metrics() { return Collections.emptyMap(); }
@@ -269,25 +270,25 @@ class WalEntryProcessorTest {
             @Override public void abortTransaction() { throw new UnsupportedOperationException("not used in test"); }
             @Override public void sendOffsetsToTransaction(Map<org.apache.kafka.common.TopicPartition, org.apache.kafka.clients.consumer.OffsetAndMetadata> offsets, String consumerGroupId) { throw new UnsupportedOperationException("not used in test"); }
         }
-        org.apache.kafka.clients.producer.Producer<byte[], byte[]> failingProducer = new FailingProducer();
+        org.apache.kafka.clients.producer.Producer<RowKeySlice, byte[]> failingProducer = new FailingProducer();
 
-        WalEntryProcessor processor = new WalEntryProcessor(payloadBuilder, topicManager, failingProducer, h2kConfig);
+        try (WalEntryProcessor processor = new WalEntryProcessor(payloadBuilder, topicManager, failingProducer, h2kConfig)) {
+            byte[] row = bytes("rk-fail");
+            WALKey key = new WALKey(row, TABLE, 1L);
+            WALEdit edit = new WALEdit();
+            edit.add(new KeyValue(row, Bytes.toBytes("d"), Bytes.toBytes("q"), 1L, Bytes.toBytes("v")));
+            WAL.Entry entry = new Entry(key, edit);
 
-        byte[] row = bytes("rk-fail");
-        WALKey key = new WALKey(row, TABLE, 1L);
-        WALEdit edit = new WALEdit();
-        edit.add(new KeyValue(row, Bytes.toBytes("d"), Bytes.toBytes("q"), 1L, Bytes.toBytes("v")));
-        WAL.Entry entry = new Entry(key, edit);
-
-        // Ожидаем ExecutionException из-за exceptional future продьюсера
-        ExecutionException thrown = assertThrows(ExecutionException.class, () -> {
-            try (BatchSender sender = new BatchSender(1, 500)) {
-                processor.process(entry, sender);
-            }
-        });
-        assertTrue(thrown.getCause() instanceof IllegalStateException,
-                "Причина должна сохранять исходное исключение отправки");
-        assertEquals("simulated send failure", thrown.getCause().getMessage());
+            // Ожидаем ExecutionException из-за exceptional future продьюсера
+            ExecutionException thrown = assertThrows(ExecutionException.class, () -> {
+                try (BatchSender sender = new BatchSender(1, 500)) {
+                    processor.process(entry, sender);
+                }
+            });
+            assertTrue(thrown.getCause() instanceof IllegalStateException,
+                    "Причина должна сохранять исходное исключение отправки");
+            assertEquals("simulated send failure", thrown.getCause().getMessage());
+        }
     }
 
     private static void processWalEntry(WalEntryProcessor processor, WAL.Entry entry, int batchSize) {
@@ -313,7 +314,7 @@ class WalEntryProcessorTest {
 
     PayloadBuilder payloadBuilder = new PayloadBuilder(decoder(), h2kConfig, new MockSchemaRegistryClient());
         TopicManager topicManager = new TopicManager(h2kConfig.getTopicSettings(), TopicEnsurer.disabled());
-        MockProducer<byte[], byte[]> producer = new MockProducer<>(true, new ByteArraySerializer(), new ByteArraySerializer());
+        MockProducer<RowKeySlice, byte[]> producer = new MockProducer<>(true, new RowKeySliceSerializer(), new ByteArraySerializer());
         WalEntryProcessor processor = new WalEntryProcessor(payloadBuilder, topicManager, producer, h2kConfig);
         return new WalScenario(processor, producer, payloadBuilder, topicManager);
     }
@@ -373,12 +374,12 @@ class WalEntryProcessorTest {
 
     private static final class WalScenario {
         final WalEntryProcessor processor;
-        final MockProducer<byte[], byte[]> producer;
+        final MockProducer<RowKeySlice, byte[]> producer;
         final PayloadBuilder builder;
         final TopicManager topicManager;
 
         WalScenario(WalEntryProcessor processor,
-                    MockProducer<byte[], byte[]> producer,
+                    MockProducer<RowKeySlice, byte[]> producer,
                     PayloadBuilder builder,
                     TopicManager topicManager) {
             this.processor = processor;

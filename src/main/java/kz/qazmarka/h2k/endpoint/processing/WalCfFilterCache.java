@@ -1,6 +1,7 @@
 package kz.qazmarka.h2k.endpoint.processing;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Objects;
 
@@ -13,20 +14,25 @@ import org.apache.hadoop.hbase.util.Bytes;
  * Содержит предвычисленные хеши семейств и позволяет быстро проверять, разрешена ли строка.
  */
 final class WalCfFilterCache {
-    static final WalCfFilterCache EMPTY = new WalCfFilterCache(null, null, null);
+    static final WalCfFilterCache EMPTY = new WalCfFilterCache(null, true, new int[0], new byte[0][][]);
 
     private final byte[][] sourceRef;
-    private final byte[][] families;
-    private final int[] hashes;
+    private final boolean noFamilies;
+    private final int[] hashBuckets;
+    private final byte[][][] familiesByHash;
 
-    private WalCfFilterCache(byte[][] sourceRef, byte[][] families, int[] hashes) {
+    private WalCfFilterCache(byte[][] sourceRef,
+                             boolean empty,
+                             int[] hashBuckets,
+                             byte[][][] familiesByHash) {
         this.sourceRef = sourceRef;
-        this.families = families;
-        this.hashes = hashes;
+        this.noFamilies = empty;
+        this.hashBuckets = hashBuckets;
+        this.familiesByHash = familiesByHash;
     }
 
     boolean isEmpty() {
-        return families == null || families.length == 0;
+        return noFamilies;
     }
 
     boolean matches(byte[][] candidate) {
@@ -41,14 +47,10 @@ final class WalCfFilterCache {
         if (cells.isEmpty()) {
             return false;
         }
-        int count = families.length;
-        if (count == 1) {
-            return containsFamily(cells, families[0]);
+        if (hashBuckets.length == 1 && familiesByHash[0].length == 1) {
+            return containsFamily(cells, familiesByHash[0][0]);
         }
-        if (count == 2) {
-            return containsFamily(cells, families[0]) || containsFamily(cells, families[1]);
-        }
-        return containsAnyFamily(cells, families, hashes);
+        return containsAnyFamily(cells, hashBuckets, familiesByHash);
     }
 
     static WalCfFilterCache build(byte[][] source) {
@@ -59,8 +61,25 @@ final class WalCfFilterCache {
         if (unique.length == 0) {
             return EMPTY;
         }
-        int[] hashes = computeHashes(unique);
-        return new WalCfFilterCache(source, unique, hashes);
+        LinkedHashMap<Integer, List<byte[]>> grouped = groupByHash(unique);
+        int size = grouped.size();
+        int[] hashes = new int[size];
+        byte[][][] familiesByHash = new byte[size][][];
+        int idx = 0;
+        for (java.util.Map.Entry<Integer, List<byte[]>> entry : grouped.entrySet()) {
+            hashes[idx] = entry.getKey();
+            List<byte[]> families = entry.getValue();
+            byte[][] bucket = new byte[families.size()][];
+            for (int j = 0; j < families.size(); j++) {
+                byte[] fam = families.get(j);
+                byte[] copy = new byte[fam.length];
+                System.arraycopy(fam, 0, copy, 0, fam.length);
+                bucket[j] = copy;
+            }
+            familiesByHash[idx] = bucket;
+            idx++;
+        }
+        return new WalCfFilterCache(source, false, hashes, familiesByHash);
     }
 
     private static byte[][] sanitizeFamilies(byte[][] source) {
@@ -96,7 +115,16 @@ final class WalCfFilterCache {
         return unique;
     }
 
-    static boolean containsFamily(List<Cell> cells, byte[] family) {
+    private static LinkedHashMap<Integer, List<byte[]>> groupByHash(byte[][] families) {
+        LinkedHashMap<Integer, List<byte[]>> grouped = new LinkedHashMap<>(families.length);
+        for (byte[] family : families) {
+            int hash = Bytes.hashCode(family, 0, family.length);
+            grouped.computeIfAbsent(hash, h -> new ArrayList<>()).add(family);
+        }
+        return grouped;
+    }
+
+    private static boolean containsFamily(List<Cell> cells, byte[] family) {
         for (Cell cell : cells) {
             if (CellUtil.matchingFamily(cell, family)) {
                 return true;
@@ -105,26 +133,23 @@ final class WalCfFilterCache {
         return false;
     }
 
-    static boolean containsAnyFamily(List<Cell> cells, byte[][] families, int[] hashes) {
+    private static boolean containsAnyFamily(List<Cell> cells,
+                                             int[] hashBuckets,
+                                             byte[][][] familiesByHash) {
         for (Cell cell : cells) {
             int cellHash = Bytes.hashCode(cell.getFamilyArray(), cell.getFamilyOffset(), cell.getFamilyLength());
-            for (int i = 0; i < families.length; i++) {
-                if (cellHash == hashes[i]
-                        && Bytes.equals(cell.getFamilyArray(), cell.getFamilyOffset(), cell.getFamilyLength(),
-                        families[i], 0, families[i].length)) {
-                    return true;
+            for (int i = 0; i < hashBuckets.length; i++) {
+                if (cellHash == hashBuckets[i]) {
+                    byte[][] candidates = familiesByHash[i];
+                    for (byte[] family : candidates) {
+                        if (Bytes.equals(cell.getFamilyArray(), cell.getFamilyOffset(), cell.getFamilyLength(),
+                                family, 0, family.length)) {
+                            return true;
+                        }
+                    }
                 }
             }
         }
         return false;
-    }
-
-    static int[] computeHashes(byte[][] families) {
-        int[] hashes = new int[families.length];
-        for (int i = 0; i < families.length; i++) {
-            byte[] cf = families[i];
-            hashes[i] = cf == null ? 0 : Bytes.hashCode(cf, 0, cf.length);
-        }
-        return hashes;
     }
 }

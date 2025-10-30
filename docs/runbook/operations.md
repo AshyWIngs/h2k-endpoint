@@ -122,6 +122,7 @@ Ensure: ok (create retries=0)
 - При падении SR Endpoint продолжает отправку с последним зарегистрированным `schemaId` и запускает фоновые
   попытки повторной регистрации (экспоненциальный бэкофф до 8 шагов). Следите за счётчиком
   `SchemaRegistryMetrics.registrationFailures` и логами `Schema Registry недоступен, использую ранее зарегистрированный id`.
+- Ensure-topic: метрика `ensure.cooldown.skipped` показывает количество пропусков ensure-вызовов, заблокированных cooldown-логикой. Если она растёт — ensure срабатывает часто, но находится в окне удержания (1 минута после последнего успеха, 5 секунд после ошибки). Проверьте журналы Kafka или вручную инициируйте ensure для проблемного топика.
 - Лог `KafkaReplicationEndpoint` выводит throughput каждые 5 с (`Скорость WAL…`).
 
 Добавление Prometheus JMX exporter — см. раздел «Сбор метрик» в [`docs/runbook/troubleshooting.md`](troubleshooting.md#сбор-метрик-через-prometheus).

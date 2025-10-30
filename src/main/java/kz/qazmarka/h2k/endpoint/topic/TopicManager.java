@@ -6,6 +6,8 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.LongAdder;
 import java.util.function.LongSupplier;
 
 import org.apache.hadoop.hbase.TableName;
@@ -32,6 +34,12 @@ public final class TopicManager {
      */
     private final ConcurrentMap<String, String> topicCache = new ConcurrentHashMap<>(8);
     private final ConcurrentMap<String, LongSupplier> extraMetrics = new ConcurrentHashMap<>(8);
+    private final ConcurrentMap<String, EnsureState> ensureStates = new ConcurrentHashMap<>(8);
+    private final LongAdder ensureSkipped = new LongAdder();
+
+    private static final long ENSURE_SUCCESS_COOLDOWN_MS = TimeUnit.MINUTES.toMillis(1);
+    private static final long ENSURE_FAILURE_RETRY_MS = TimeUnit.SECONDS.toMillis(5);
+
     public TopicManager(TopicNamingSettings topicSettings, TopicEnsurer topicEnsurer) {
         this.topicSettings = Objects.requireNonNull(topicSettings, "настройки топиков h2k");
         this.topicEnsurer = topicEnsurer == null ? TopicEnsurer.disabled() : topicEnsurer;
@@ -64,13 +72,23 @@ public final class TopicManager {
         if (!topicEnsurer.isEnabled()) {
             return;
         }
+        long now = System.currentTimeMillis();
+        EnsureState state = ensureStates.computeIfAbsent(topic, key -> new EnsureState());
+        if (!state.tryAcquire(now)) {
+            ensureSkipped.increment();
+            return;
+        }
+        boolean success = false;
         try {
             topicEnsurer.ensureTopic(topic);
+            success = true;
         } catch (RuntimeException e) {
             LOG.warn("Проверка/создание топика '{}' не выполнена: {}. Репликацию не прерываю", topic, e.getMessage());
             if (LOG.isDebugEnabled()) {
                 LOG.debug("Трассировка ошибки ensureTopic()", e);
             }
+        } finally {
+            state.finish(success, System.currentTimeMillis());
         }
     }
 
@@ -111,9 +129,19 @@ public final class TopicManager {
     public Map<String, Long> getMetrics() {
         Map<String, Long> ensureMetrics = topicEnsurer.getMetrics();
         if (extraMetrics.isEmpty()) {
-            return ensureMetrics;
+            if (ensureSkipped.sum() == 0) {
+                return ensureMetrics;
+            }
+            Map<String, Long> snapshot = new LinkedHashMap<>(ensureMetrics.size() + 1);
+            snapshot.putAll(ensureMetrics);
+            snapshot.put("ensure.cooldown.skipped", ensureSkipped.sum());
+            return Collections.unmodifiableMap(snapshot);
         }
-        Map<String, Long> snapshot = new LinkedHashMap<>(ensureMetrics.size() + extraMetrics.size());
+        int extra = extraMetrics.size();
+        if (ensureSkipped.sum() > 0) {
+            extra++;
+        }
+        Map<String, Long> snapshot = new LinkedHashMap<>(ensureMetrics.size() + extra);
         snapshot.putAll(ensureMetrics);
         for (Map.Entry<String, LongSupplier> e : extraMetrics.entrySet()) {
             try {
@@ -125,7 +153,14 @@ public final class TopicManager {
                 }
             }
         }
+        if (ensureSkipped.sum() > 0) {
+            snapshot.put("ensure.cooldown.skipped", ensureSkipped.sum());
+        }
         return Collections.unmodifiableMap(snapshot);
+    }
+
+    public long ensureSkippedCount() {
+        return ensureSkipped.sum();
     }
 
     /**
@@ -138,6 +173,42 @@ public final class TopicManager {
             if (LOG.isDebugEnabled()) {
                 LOG.debug("Ошибка при закрытии TopicEnsurer (игнорируется при остановке)", e);
             }
+        }
+    }
+
+    /**
+     * Сохраняет информацию о последних ensure-вызовах и предотвращает частые повторы.
+     * Использует синхронизацию на уровне экземпляра; нагрузка невелика, поскольку ensure вызывается редко.
+     */
+    private static final class EnsureState {
+        private static final long NO_TIME = Long.MIN_VALUE;
+
+        private long lastSuccess = NO_TIME;
+        private long lastFailure = NO_TIME;
+        private boolean inProgress;
+
+        synchronized boolean tryAcquire(long now) {
+            if (inProgress) {
+                return false;
+            }
+            if (lastSuccess != NO_TIME && (now - lastSuccess) < ENSURE_SUCCESS_COOLDOWN_MS) {
+                return false;
+            }
+            if (lastFailure != NO_TIME && (now - lastFailure) < ENSURE_FAILURE_RETRY_MS) {
+                return false;
+            }
+            inProgress = true;
+            return true;
+        }
+
+        synchronized void finish(boolean success, long timestamp) {
+            if (success) {
+                lastSuccess = timestamp;
+                lastFailure = NO_TIME;
+            } else {
+                lastFailure = timestamp;
+            }
+            inProgress = false;
         }
     }
 }

@@ -21,7 +21,7 @@ import kz.qazmarka.h2k.util.RowKeySlice;
  * Управляет построением карты payload и выбором сериализатора. Вся тяжёлая логика сборки
  * вынесена в {@link RowPayloadAssembler}, что упрощает поддержку и уменьшает нагрузку на горячем пути.
  */
-public final class PayloadBuilder {
+public final class PayloadBuilder implements AutoCloseable {
 
     private final ConfluentAvroPayloadSerializer serializer;
     private final AvroSettings avroSettings;
@@ -100,6 +100,15 @@ public final class PayloadBuilder {
             sb.append(", schema.registry.props=").append(avroSettings.getProperties().keySet());
         }
         return sb.toString();
+    }
+
+    /**
+     * Завершает работу сериализатора Avro/Schema Registry и освобождает связанные фоновые ресурсы.
+     * Безопасно вызывать несколько раз.
+     */
+    @Override
+    public void close() {
+        serializer.close();
     }
 
     private Path resolveSchemaDir(AvroSettings settings) {

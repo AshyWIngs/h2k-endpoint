@@ -41,6 +41,7 @@ import kz.qazmarka.h2k.endpoint.topic.TopicManager;
 import kz.qazmarka.h2k.kafka.ensure.TopicEnsurer;
 import kz.qazmarka.h2k.kafka.ensure.TopicEnsurer.EnsureDelegate;
 import kz.qazmarka.h2k.kafka.producer.batch.BatchSender;
+import kz.qazmarka.h2k.kafka.serializer.RowKeySliceSerializer;
 import kz.qazmarka.h2k.payload.builder.PayloadBuilder;
 import kz.qazmarka.h2k.schema.decoder.Decoder;
 import kz.qazmarka.h2k.schema.registry.PhoenixTableMetadataProvider;
@@ -95,7 +96,7 @@ class KafkaReplicationEndpointIntegrationTest {
 
         PayloadBuilder builder = new PayloadBuilder(decoder, config, mockClient);
         TopicManager topicManager = new TopicManager(config.getTopicSettings(), TopicEnsurer.disabled());
-        MockProducer<byte[], byte[]> producer = new MockProducer<>(true, new ByteArraySerializer(), new ByteArraySerializer());
+        MockProducer<RowKeySlice, byte[]> producer = new MockProducer<>(true, new RowKeySliceSerializer(), new ByteArraySerializer());
         WalEntryProcessor processor = new WalEntryProcessor(builder, topicManager, producer, config);
 
         byte[] row = Bytes.toBytes("rk-777");
@@ -106,13 +107,14 @@ class KafkaReplicationEndpointIntegrationTest {
 
         Entry entry = walEntry(table, row, cells);
 
-        try (BatchSender sender = new BatchSender(1, 5_000)) {
-            processor.process(entry, sender);
+        try (WalEntryProcessor autoclose = processor;
+             BatchSender sender = new BatchSender(1, 5_000)) {
+            autoclose.process(entry, sender);
         }
 
-        List<ProducerRecord<byte[], byte[]>> history = producer.history();
+        List<ProducerRecord<RowKeySlice, byte[]>> history = producer.history();
         assertEquals(1, history.size(), "ожидается единственная продюсерская запись");
-        ProducerRecord<byte[], byte[]> produced = history.get(0);
+        ProducerRecord<RowKeySlice, byte[]> produced = history.get(0);
         assertEquals("INT_TEST_TABLE", produced.topic(), "имя топика должно совпадать с шаблоном по умолчанию");
 
         GenericData.Record avro = decodeAvro(mockClient, produced.value());
@@ -153,12 +155,12 @@ class KafkaReplicationEndpointIntegrationTest {
         throw new IllegalStateException("SR down");
         }
     };
-    PayloadBuilder builder = new PayloadBuilder(decoder, config, failingClient);
-    TableName table = TableName.valueOf("INT_TEST_TABLE");
-    byte[] row = Bytes.toBytes("rk-fail");
-    List<Cell> cells = new ArrayList<>();
-    cells.add(new KeyValue(row, Bytes.toBytes("d"), Bytes.toBytes("value_long"), Bytes.toBytes(1L)));
-    RowKeySlice rowSlice = RowKeySlice.whole(row);
+    try (PayloadBuilder builder = new PayloadBuilder(decoder, config, failingClient)) {
+        TableName table = TableName.valueOf("INT_TEST_TABLE");
+        byte[] row = Bytes.toBytes("rk-fail");
+        List<Cell> cells = new ArrayList<>();
+        cells.add(new KeyValue(row, Bytes.toBytes("d"), Bytes.toBytes("value_long"), Bytes.toBytes(1L)));
+        RowKeySlice rowSlice = RowKeySlice.whole(row);
             IllegalStateException initError = assertThrows(IllegalStateException.class,
                     () -> builder.buildRowPayloadBytes(table,
                             cells,
@@ -167,6 +169,7 @@ class KafkaReplicationEndpointIntegrationTest {
                             0L),
                     "Ожидается ошибка регистрации схемы при недоступном Schema Registry");
     assertNotNull(initError);
+    }
     }
 
     @Test
@@ -180,15 +183,16 @@ class KafkaReplicationEndpointIntegrationTest {
         H2kConfig config = H2kConfig.from(cfg, "mock:9092", defaultMetadataProvider());
 
         Decoder decoder = defaultDecoder();
-    PayloadBuilder builder = new PayloadBuilder(decoder, config, new MockSchemaRegistryClient());
+        PayloadBuilder builder = new PayloadBuilder(decoder, config, new MockSchemaRegistryClient());
 
         AtomicInteger ensureAttempts = new AtomicInteger();
         AtomicReference<RuntimeException> ensureFailure = new AtomicReference<>();
-        MockProducer<byte[], byte[]> producer = new MockProducer<>(true, new ByteArraySerializer(), new ByteArraySerializer());
+        MockProducer<RowKeySlice, byte[]> producer = new MockProducer<>(true, new RowKeySliceSerializer(), new ByteArraySerializer());
 
-        try (TopicEnsurer failingEnsurer = makeFailingEnsurer(ensureAttempts, ensureFailure)) {
+        try (PayloadBuilder autocloseBuilder = builder;
+             TopicEnsurer failingEnsurer = makeFailingEnsurer(ensureAttempts, ensureFailure)) {
             TopicManager topicManager = new TopicManager(config.getTopicSettings(), failingEnsurer);
-            WalEntryProcessor processor = new WalEntryProcessor(builder, topicManager, producer, config);
+            WalEntryProcessor processor = new WalEntryProcessor(autocloseBuilder, topicManager, producer, config);
 
             TableName table = TableName.valueOf("INT_TEST_TABLE");
             byte[] row = Bytes.toBytes("rk-ensure");
@@ -197,8 +201,9 @@ class KafkaReplicationEndpointIntegrationTest {
             cells.add(new KeyValue(row, Bytes.toBytes("d"), Bytes.toBytes("value_long"), ts, Bytes.toBytes(1L)));
             Entry entry = walEntry(table, row, cells);
 
-            try (BatchSender sender = new BatchSender(1, 5_000)) {
-                processor.process(entry, sender);
+            try (WalEntryProcessor autoclose = processor;
+                 BatchSender sender = new BatchSender(1, 5_000)) {
+                autoclose.process(entry, sender);
             }
 
             assertEquals(1, producer.history().size(), "Сообщение должно быть отправлено несмотря на ошибку ensure");

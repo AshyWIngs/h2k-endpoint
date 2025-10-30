@@ -63,16 +63,6 @@
         "CODACY_ACCOUNT_TOKEN": "${env:CODACY_ACCOUNT_TOKEN}"
       }
     },
-
-    // Pylance MCP server (для Python-подпроектов)
-    // Примечание: npx-пакета не найдено, оставляем uvx.
-    "Pylance": {
-      "transport": "stdio",
-      "command": "/home/user/.local/bin/uvx",
-      "args": ["pylance-mcp", "serve"],
-      "cwd": "${workspaceFolder}"
-    },
-
     // Upstash Context7 (актуальная документация/примеры по библиотекам)
     // Рекомендуется передавать ключ через переменную окружения CONTEXT7_API_KEY.
     // Если хотите прописать ключ явно, замените ${env:CONTEXT7_API_KEY} на ваш ключ.

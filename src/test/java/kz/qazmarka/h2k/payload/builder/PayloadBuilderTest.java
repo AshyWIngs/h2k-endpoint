@@ -43,7 +43,7 @@ class PayloadBuilderTest {
     @Test
     @DisplayName("PK добавляется в payload, null-значения ячеек игнорируются")
     void pkInjectedAndNullValuesSkipped() {
-        PayloadBuilder builder = new PayloadBuilder(new StubDecoder(), configWithSr(), new MockSchemaRegistryClient());
+        try (PayloadBuilder builder = new PayloadBuilder(new StubDecoder(), configWithSr(), new MockSchemaRegistryClient())) {
 
         List<Cell> cells = new ArrayList<>();
         byte[] row = Bytes.toBytes("rk-1");
@@ -60,14 +60,15 @@ class PayloadBuilderTest {
             "схема не содержит неожиданных полей")
         );
     }
+    }
 
     @Test
     @DisplayName("Повторное использование списка ячеек не влияет на собранный payload")
     void rowBufferReuseDoesNotAffectPayload() {
-    Decoder decoder = (table, qualifier, value) -> value == null
-        ? null
-        : new String(value, StandardCharsets.UTF_8);
-    PayloadBuilder builder = new PayloadBuilder(decoder, configWithSr(), new MockSchemaRegistryClient());
+        Decoder decoder = (table, qualifier, value) -> value == null
+                ? null
+                : new String(value, StandardCharsets.UTF_8);
+        try (PayloadBuilder builder = new PayloadBuilder(decoder, configWithSr(), new MockSchemaRegistryClient())) {
 
         List<Cell> cells = new ArrayList<>();
         byte[] row = Bytes.toBytes("rk-2");
@@ -79,18 +80,20 @@ class PayloadBuilderTest {
         cells.clear();
 
         assertEquals("value", String.valueOf(avroRecord.get("value")));
+        }
     }
 
     @Test
     @DisplayName("describeSerializer() описывает Avro Confluent без legacy-ключа avro.mode")
     void describeSerializerHighlightsAvroMode() {
-        PayloadBuilder builder = new PayloadBuilder(TestRawDecoder.INSTANCE, configWithSr(), new MockSchemaRegistryClient());
+        try (PayloadBuilder builder = new PayloadBuilder(TestRawDecoder.INSTANCE, configWithSr(), new MockSchemaRegistryClient())) {
 
         String info = builder.describeSerializer();
         assertTrue(info.contains("payload.format=AVRO_BINARY"), info);
         assertTrue(info.contains("schema.registry.urls=[http://mock]"), info);
         assertTrue(info.contains("schema.registry.auth=disabled"), info);
         assertEquals(-1, info.indexOf("avro.mode"), "diagnostic summary не должен содержать legacy поле avro.mode");
+        }
     }
 
     private static final class StubDecoder implements Decoder {

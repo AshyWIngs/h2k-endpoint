@@ -37,12 +37,14 @@ import kz.qazmarka.h2k.endpoint.processing.WalEntryProcessor;
 import kz.qazmarka.h2k.endpoint.topic.TopicManager;
 import kz.qazmarka.h2k.kafka.ensure.TopicEnsurer;
 import kz.qazmarka.h2k.kafka.producer.batch.BatchSender;
+import kz.qazmarka.h2k.kafka.serializer.RowKeySliceSerializer;
 import kz.qazmarka.h2k.payload.builder.PayloadBuilder;
 import kz.qazmarka.h2k.schema.decoder.Decoder;
 import kz.qazmarka.h2k.schema.decoder.ValueCodecPhoenix;
 import kz.qazmarka.h2k.schema.registry.PhoenixTableMetadataProvider;
 import kz.qazmarka.h2k.schema.registry.avro.local.AvroSchemaRegistry;
 import kz.qazmarka.h2k.schema.registry.avro.phoenix.AvroPhoenixSchemaRegistry;
+import kz.qazmarka.h2k.util.RowKeySlice;
 
 
 /**
@@ -73,8 +75,8 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
     private static final Logger LOG = LoggerFactory.getLogger(KafkaReplicationEndpoint.class);
 
     // ядро
-    /** Kafka Producer для отправки событий; ключ/значение сериализуются как байты. */
-    private Producer<byte[], byte[]> producer;
+    /** Kafka Producer для отправки событий; ключ сериализуется через RowKeySliceSerializer, значение — как byte[]. */
+    private Producer<RowKeySlice, byte[]> producer;
 
     // вынесенная конфигурация и сервисы
     /** Плоские DTO-выкладки конфигурации для быстрого доступа без повторных геттеров. */
@@ -193,6 +195,7 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
         registerMetric("schema.registry.register.failures", payload::schemaRegistryFailedCount);
         registerMetric("wal.rowbuffer.upsizes", walProcessor::rowBufferUpsizeCount);
         registerMetric("wal.rowbuffer.trims", walProcessor::rowBufferTrimCount);
+        registerMetric("ensure.cooldown.skipped", topicManager::ensureSkippedCount);
         // Метрики отказов репликации
         registerMetric("replicate.failures.total", replicateFailures::sum);
         registerMetric("replicate.last.failure.epoch.ms", lastReplicateFailureAt::get);
@@ -377,6 +380,7 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
      * Исключения при закрытии не пробрасываются и логируются на уровне DEBUG.
      */
     @Override protected void doStop() {
+        closeWalEntryProcessor();
         try {
             if (producer != null) {
                 producer.flush();
@@ -402,6 +406,22 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
         }
         notifyStopped();
     }
+
+    private void closeWalEntryProcessor() {
+        WalEntryProcessor processor = this.walEntryProcessor;
+        if (processor == null) {
+            return;
+        }
+        try {
+            processor.close();
+        } catch (Exception ex) {
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("KafkaReplicationEndpoint: ошибка при закрытии WalEntryProcessor (игнорируется)", ex);
+            }
+        } finally {
+            this.walEntryProcessor = null;
+        }
+    }
     /**
      * Построитель настроек {@link KafkaProducer}. Выполняется один раз при старте; не участвует в горячем пути.
      * Собирает безопасные дефолты и применяет переопределения из префикса {@code h2k.producer.*}
@@ -421,6 +441,7 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
          * @return заполненный набор свойств для конструктора продьюсера
          */
         private static final String BYTE_ARRAY_SERIALIZER = "org.apache.kafka.common.serialization.ByteArraySerializer";
+        private static final String ROW_KEY_SERIALIZER = RowKeySliceSerializer.class.getName();
         private static final Set<String> H2K_INTERNAL_KEYS = new HashSet<>(
                 Arrays.asList(
                         "await.every",
@@ -441,7 +462,7 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
         private static Properties createBaseProperties(String bootstrap) {
             Properties props = new Properties();
             props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap);
-            props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, BYTE_ARRAY_SERIALIZER);
+            props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, ROW_KEY_SERIALIZER);
             props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, BYTE_ARRAY_SERIALIZER);
             return props;
         }

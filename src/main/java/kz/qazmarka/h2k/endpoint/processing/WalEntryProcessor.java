@@ -34,7 +34,7 @@ import kz.qazmarka.h2k.util.RowKeySlice;
  * - счётчики основаны на {@link java.util.concurrent.atomic.LongAdder} и потокобезопасны, их можно опрашивать
  *   из TopicManager или через JMX без дополнительной синхронизации.
  */
-public final class WalEntryProcessor {
+public final class WalEntryProcessor implements AutoCloseable {
 
     private static final Logger LOG = LoggerFactory.getLogger(WalEntryProcessor.class);
     /**
@@ -48,6 +48,7 @@ public final class WalEntryProcessor {
     private static final int ROW_BUFFER_TRIM_THRESHOLD = 4_096;
 
     private final TopicManager topicManager;
+    private final PayloadBuilder payloadBuilder;
     private final TableMetadataView metadata;
     private final ArrayList<Cell> rowBuffer = new ArrayList<>(ROW_BUFFER_BASE_CAPACITY);
     private final LongAdder rowBufferUpsize = new LongAdder();
@@ -62,9 +63,10 @@ public final class WalEntryProcessor {
 
     public WalEntryProcessor(PayloadBuilder payloadBuilder,
                              TopicManager topicManager,
-                             Producer<byte[], byte[]> producer,
+                             Producer<RowKeySlice, byte[]> producer,
                              TableMetadataView metadata) {
         this.topicManager = topicManager;
+        this.payloadBuilder = Objects.requireNonNull(payloadBuilder, "payloadBuilder");
         this.metadata = Objects.requireNonNull(metadata, "метаданные таблиц");
         this.rowDispatcher = new WalRowDispatcher(payloadBuilder, producer);
         this.observers = WalObserverHub.create(metadata);
@@ -312,6 +314,21 @@ public final class WalEntryProcessor {
      */
     public long rowBufferTrimCount() {
         return rowBufferTrim.sum();
+    }
+
+    /**
+     * Освобождает ресурсы, связанные с построением payload (в частности, фоновые ретраи Schema Registry).
+     * Метод безопасно вызывается при остановке {@link KafkaReplicationEndpoint}.
+     */
+    @Override
+    public void close() {
+        try {
+            payloadBuilder.close();
+        } catch (Exception ex) {
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("WalEntryProcessor: ошибка при закрытии PayloadBuilder (игнорируется)", ex);
+            }
+        }
     }
 
     private WalCfFilterCache prepareCfCache(byte[][] cfFamilies) {

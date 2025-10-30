@@ -1,6 +1,10 @@
 package kz.qazmarka.h2k.endpoint.topic;
 
+import java.lang.reflect.Field;
 import java.util.Map;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.TableName;
@@ -66,8 +70,8 @@ class TopicManagerTest {
     @Test
     @DisplayName("ensureTopicIfNeeded подавляет исключения TopicEnsurer")
     void ensureTopicSwallowsExceptions() {
-    TopicEnsurer throwingEnsurer = enabledEnsurerWithNullService();
-    TopicManager manager = new TopicManager(topicSettings(), throwingEnsurer);
+        TopicEnsurer throwingEnsurer = enabledEnsurerWithNullService();
+        TopicManager manager = new TopicManager(topicSettings(), throwingEnsurer);
 
         manager.ensureTopicIfNeeded("valid-topic"); // NPE внутри TopicEnsurer.ensureTopic() не должен выплыть
         assertTrue(manager.ensureEnabled(), "Ensure должен считаться включённым для кастомного энсюрера");
@@ -79,12 +83,51 @@ class TopicManagerTest {
         TopicManager disabled = topicManager();
         assertFalse(disabled.ensureEnabled(), "Для TopicEnsurer.disabled() ensureEnabled=false");
 
-    TopicManager enabled = new TopicManager(topicSettings(), enabledEnsurerWithNullService());
+        TopicManager enabled = new TopicManager(topicSettings(), enabledEnsurerWithNullService());
         assertTrue(enabled.ensureEnabled(), "Кастомный TopicEnsurer с disabledMode=false должен считаться активным");
     }
 
+    @Test
+    @DisplayName("ensureTopicIfNeeded ограничивает повторные ensure вызовы успешных тем")
+    void ensureTopicHonoursSuccessCooldown() throws Exception {
+        AtomicInteger attempts = new AtomicInteger();
+        TopicEnsurer delegate = TopicEnsurer.testingDelegate(topic -> attempts.incrementAndGet());
+        TopicManager manager = new TopicManager(topicSettings(), delegate);
+
+        manager.ensureTopicIfNeeded("hot-topic");
+        manager.ensureTopicIfNeeded("hot-topic");
+        assertEquals(1, attempts.get(), "повторное ensure должно ожидать cooldown");
+        assertEquals(1L, manager.ensureSkippedCount(), "пропущенные ensure должны учитываться в метрике");
+
+        rewindEnsureState(manager, "hot-topic", true);
+        manager.ensureTopicIfNeeded("hot-topic");
+        assertEquals(2, attempts.get(), "после истечения cooldown ensure должен повториться");
+        assertEquals(1L, manager.ensureSkippedCount(), "успешное ensure не увеличивает счётчик пропусков");
+    }
+
+    @Test
+    @DisplayName("ensureTopicIfNeeded повторяет попытку после сбоя с учётом cooldown")
+    void ensureTopicRetriesAfterFailureCooldown() throws Exception {
+        AtomicInteger attempts = new AtomicInteger();
+        TopicEnsurer failing = TopicEnsurer.testingDelegate(topic -> {
+            attempts.incrementAndGet();
+            throw new RuntimeException("fail");
+        });
+        TopicManager manager = new TopicManager(topicSettings(), failing);
+
+        manager.ensureTopicIfNeeded("flaky-topic");
+        manager.ensureTopicIfNeeded("flaky-topic");
+        assertEquals(1, attempts.get(), "повторение сразу после сбоя должно блокироваться");
+        assertEquals(1L, manager.ensureSkippedCount(), "сбойное ensure также учитывается в пропусках");
+
+        rewindEnsureState(manager, "flaky-topic", false);
+        manager.ensureTopicIfNeeded("flaky-topic");
+        assertEquals(2, attempts.get(), "после истечения cooldown повторная попытка должна выполниться");
+        assertEquals(1L, manager.ensureSkippedCount(), "повторная попытка не должна увеличивать пропуски");
+    }
+
     private static TopicManager topicManager() {
-    return new TopicManager(topicSettings(), TopicEnsurer.disabled());
+        return new TopicManager(topicSettings(), TopicEnsurer.disabled());
     }
 
     private static H2kConfig h2kConfig() {
@@ -100,5 +143,35 @@ class TopicManagerTest {
 
     private static TopicEnsurer enabledEnsurerWithNullService() {
         return TopicEnsurer.testingDelegate(topic -> { /* no-op для теста */ });
+    }
+
+    private static void rewindEnsureState(TopicManager manager, String topic, boolean success) throws Exception {
+        Field field = TopicManager.class.getDeclaredField("ensureStates");
+        field.setAccessible(true);
+        Object mapObj = field.get(manager);
+        if (!(mapObj instanceof ConcurrentMap)) {
+            throw new IllegalStateException("ensureStates не является ConcurrentMap");
+        }
+        ConcurrentMap<?, ?> states = (ConcurrentMap<?, ?>) mapObj;
+        Object state = states.get(topic);
+        if (state == null) {
+            throw new IllegalStateException("ensure state для '" + topic + "' не найден");
+        }
+        Field inProgress = state.getClass().getDeclaredField("inProgress");
+        inProgress.setAccessible(true);
+        inProgress.setBoolean(state, false);
+
+        Field lastSuccess = state.getClass().getDeclaredField("lastSuccess");
+        Field lastFailure = state.getClass().getDeclaredField("lastFailure");
+        lastSuccess.setAccessible(true);
+        lastFailure.setAccessible(true);
+        long rewindTs = System.currentTimeMillis() - TimeUnit.MINUTES.toMillis(2);
+        if (success) {
+            lastSuccess.setLong(state, rewindTs);
+            lastFailure.setLong(state, Long.MIN_VALUE);
+        } else {
+            lastFailure.setLong(state, rewindTs);
+            lastSuccess.setLong(state, Long.MIN_VALUE);
+        }
     }
 }

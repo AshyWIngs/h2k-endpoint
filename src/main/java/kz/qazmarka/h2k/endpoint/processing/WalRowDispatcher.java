@@ -20,9 +20,9 @@ import kz.qazmarka.h2k.util.RowKeySlice;
 final class WalRowDispatcher {
 
     private final PayloadBuilder payloadBuilder;
-    private final Producer<byte[], byte[]> producer;
+    private final Producer<RowKeySlice, byte[]> producer;
 
-    WalRowDispatcher(PayloadBuilder payloadBuilder, Producer<byte[], byte[]> producer) {
+    WalRowDispatcher(PayloadBuilder payloadBuilder, Producer<RowKeySlice, byte[]> producer) {
         this.payloadBuilder = payloadBuilder;
         this.producer = producer;
     }
@@ -34,8 +34,7 @@ final class WalRowDispatcher {
                   List<Cell> cells,
                   BatchSender sender)
             throws InterruptedException, ExecutionException, TimeoutException {
-        byte[] keyBytes = rowKey.toByteArray();
         byte[] valueBytes = payloadBuilder.buildRowPayloadBytes(table, cells, rowKey, walMeta.seq, walMeta.writeTime);
-        sender.add(producer.send(new ProducerRecord<>(topic, keyBytes, valueBytes)));
+        sender.add(producer.send(new ProducerRecord<>(topic, rowKey, valueBytes)));
     }
 }
