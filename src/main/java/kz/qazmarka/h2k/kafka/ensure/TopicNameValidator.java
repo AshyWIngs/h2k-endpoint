@@ -31,11 +31,16 @@ public final class TopicNameValidator {
     }
 
     private static boolean isAllowedTopicChar(char ch) {
-        return (ch >= 'a' && ch <= 'z')
-                || (ch >= 'A' && ch <= 'Z')
-                || (ch >= '0' && ch <= '9')
-                || ch == '.'
-                || ch == '-'
-                || ch == '_';
+        if (Character.isAlphabetic(ch) || Character.isDigit(ch)) {
+            return true;
+        }
+        switch (ch) {
+            case '.':
+            case '-':
+            case '_':
+                return true;
+            default:
+                return false;
+        }
     }
 }

@@ -108,6 +108,21 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
     private TableMetadata loadMetadata(TableName table) {
         Path schemaPath = avroRegistry.schemaPath(table.getNameAsString());
         Schema schema = avroRegistry.getByTable(table.getNameAsString());
+        Map<String, String> types = extractColumnTypes(schema);
+        String[] pk = readPk(schema);
+        Integer salt = readSaltBytes(schema, table);
+        Integer capacity = readCapacityHint(schema, table);
+        String[] cfFamilies = readColumnFamilies(schema, table);
+        SchemaDebugInfo debugInfo = new SchemaDebugInfo(table, schema, schemaPath, logger())
+                .withPk(pk)
+                .withSalt(salt)
+                .withCapacity(capacity)
+                .withCfFamilies(cfFamilies);
+        logSchemaDetails(debugInfo);
+        return new TableMetadata(types, pk, salt, capacity, cfFamilies);
+    }
+
+    private Map<String, String> extractColumnTypes(Schema schema) {
         Map<String, String> types = new HashMap<>(Math.max(8, schema.getFields().size()));
         for (Field field : schema.getFields()) {
             String type = field.getProp(PROP_TYPE);
@@ -118,27 +133,69 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
             String name = normalizeColumnKey(field.name());
             types.put(name, trimmed);
         }
-        String[] pk = readPk(schema);
-        Integer salt = readSaltBytes(schema, table);
-        Integer capacity = readCapacityHint(schema, table);
-        String[] cfFamilies = readColumnFamilies(schema, table);
-        Logger log = logger();
-        if (log.isDebugEnabled()) {
-            String pkText = pk.length == 0 ? "-" : String.join(",", pk);
-            String saltText = salt == null ? "-" : salt.toString();
-            String capacityText = capacity == null ? "-" : capacity.toString();
-            String cfText = cfFamilies.length == 0 ? "-" : String.join(",", cfFamilies);
-            log.debug("Avro-схема {} загружена: файл={}, полей={}, pk={}, соль={}, capacity={}, cf={}, cacheSize={}",
-                    table.getNameAsString(),
-                    schemaPath.toAbsolutePath(),
-                    schema.getFields().size(),
-                    pkText,
-                    saltText,
-                    capacityText,
-                    cfText,
-                    avroRegistry.cacheSize());
+        return types;
+    }
+
+    private static final class SchemaDebugInfo {
+        final TableName table;
+        final Schema schema;
+        final Path schemaPath;
+        final Logger log;
+        String[] pk;
+        Integer salt;
+        Integer capacity;
+        String[] cfFamilies;
+
+        SchemaDebugInfo(TableName table,
+                        Schema schema,
+                        Path schemaPath,
+                        Logger log) {
+            this.table = table;
+            this.schema = schema;
+            this.schemaPath = schemaPath;
+            this.pk = SchemaRegistry.EMPTY;
+            this.cfFamilies = SchemaRegistry.EMPTY;
+            this.log = log;
         }
-        return new TableMetadata(types, pk, salt, capacity, cfFamilies);
+
+        SchemaDebugInfo withPk(String[] pk) {
+            this.pk = pk == null ? SchemaRegistry.EMPTY : pk;
+            return this;
+        }
+
+        SchemaDebugInfo withSalt(Integer salt) {
+            this.salt = salt;
+            return this;
+        }
+
+        SchemaDebugInfo withCapacity(Integer capacity) {
+            this.capacity = capacity;
+            return this;
+        }
+
+        SchemaDebugInfo withCfFamilies(String[] cfFamilies) {
+            this.cfFamilies = (cfFamilies == null) ? SchemaRegistry.EMPTY : cfFamilies;
+            return this;
+        }
+    }
+
+    private void logSchemaDetails(SchemaDebugInfo info) {
+        if (!info.log.isDebugEnabled()) {
+            return;
+        }
+        String pkText = info.pk.length == 0 ? "-" : String.join(",", info.pk);
+        String saltText = info.salt == null ? "-" : info.salt.toString();
+        String capacityText = info.capacity == null ? "-" : info.capacity.toString();
+        String cfText = info.cfFamilies.length == 0 ? "-" : String.join(",", info.cfFamilies);
+        info.log.debug("Avro-схема {} загружена: файл={}, полей={}, pk={}, соль={}, capacity={}, cf={}, cacheSize={}",
+                info.table.getNameAsString(),
+                info.schemaPath.toAbsolutePath(),
+                info.schema.getFields().size(),
+                pkText,
+                saltText,
+                capacityText,
+                cfText,
+                avroRegistry.cacheSize());
     }
 
     /** Считывает CF из Avro-свойства: поддерживается только CSV-строка, остальные типы отключают фильтр. */
@@ -244,30 +301,42 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
 
     private static String[] readPk(Schema schema) {
         Object raw = schema.getObjectProp(PROP_PK);
+        if (raw != null) {
+            String[] fromObject = readPkFromObjectProp(schema, raw);
+            if (fromObject.length > 0 || schema.getProp(PROP_PK) == null) {
+                return fromObject;
+            }
+        }
+        return readPkFromSchemaProperty(schema.getProp(PROP_PK));
+    }
+
+    private static String[] readPkFromObjectProp(Schema schema, Object raw) {
         if (raw instanceof JsonNode) {
             return readPkFromJsonNode((JsonNode) raw);
         }
         if (raw instanceof java.util.List<?>) {
-            java.util.List<?> list = (java.util.List<?>) raw;
-            return copyPkFromList(list);
-        }
-        if (raw != null && !(raw instanceof CharSequence)) {
-            Logger log = logger();
-            log.warn("Avro-схема {}: h2k.pk имеет неподдерживаемый тип — значение будет проигнорировано", schema.getFullName());
-            log.debug("h2k.pk: неподдерживаемый тип: {}", raw.getClass().getName());
-            return SchemaRegistry.EMPTY;
+            return copyPkFromList((java.util.List<?>) raw);
         }
         if (raw instanceof CharSequence) {
             String text = raw.toString().trim();
-            if (!text.isEmpty()) {
-                return readPkFromString(text);
-            }
+            return text.isEmpty() ? SchemaRegistry.EMPTY : readPkFromString(text);
         }
-        String json = schema.getProp(PROP_PK);
-        if (json != null && !json.trim().isEmpty()) {
-            return readPkFromString(json.trim());
+        Logger log = logger();
+        log.warn("Avro-схема {}: h2k.pk имеет неподдерживаемый тип — значение будет проигнорировано", schema.getFullName());
+        if (raw != null) {
+            log.debug("h2k.pk: неподдерживаемый тип: {}", raw.getClass().getName());
+        } else if (log.isDebugEnabled()) {
+            log.debug("h2k.pk: неподдерживаемый тип: null");
         }
         return SchemaRegistry.EMPTY;
+    }
+
+    private static String[] readPkFromSchemaProperty(String property) {
+        if (property == null) {
+            return SchemaRegistry.EMPTY;
+        }
+        String text = property.trim();
+        return text.isEmpty() ? SchemaRegistry.EMPTY : readPkFromString(text);
     }
 
     private static String normalizePkEntry(String raw) {
@@ -403,26 +472,32 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
             if (pk == null || pk.length == 0) {
                 return SchemaRegistry.EMPTY;
             }
-            String[] res = new String[pk.length];
-            int idx = 0;
-            for (String val : pk) {
-                if (val == null) {
-                    continue;
-                }
-                String trimmed = val.trim();
-                if (!trimmed.isEmpty()) {
-                    res[idx++] = trimmed;
+            String[] normalized = new String[pk.length];
+            int size = 0;
+            for (String entry : pk) {
+                String trimmed = trimEntry(entry);
+                if (trimmed != null) {
+                    normalized[size++] = trimmed;
                 }
             }
-            if (idx == 0) {
-                return SchemaRegistry.EMPTY;
+            return size == 0 ? SchemaRegistry.EMPTY : shrink(normalized, size);
+        }
+
+        private static String trimEntry(String value) {
+            if (value == null) {
+                return null;
             }
-            if (idx != res.length) {
-                String[] trimmed = new String[idx];
-                System.arraycopy(res, 0, trimmed, 0, idx);
-                return trimmed;
+            String trimmed = value.trim();
+            return trimmed.isEmpty() ? null : trimmed;
+        }
+
+        private static String[] shrink(String[] source, int size) {
+            if (size == source.length) {
+                return source;
             }
-            return res;
+            String[] result = new String[size];
+            System.arraycopy(source, 0, result, 0, size);
+            return result;
         }
 
         Integer saltBytes() {

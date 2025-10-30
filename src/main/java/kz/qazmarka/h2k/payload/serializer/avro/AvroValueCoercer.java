@@ -164,15 +164,9 @@ public final class AvroValueCoercer {
     }
 
     private static Object coerceUnion(Schema fieldSchema, Object v, String path) {
-        Schema nullable = null;
-        for (Schema option : fieldSchema.getTypes()) {
-            if (option.getType() == Schema.Type.NULL) {
-                nullable = option;
-                break;
-            }
-        }
+        boolean nullableAllowed = hasNullableBranch(fieldSchema);
         if (v == null) {
-            if (nullable != null) {
+            if (nullableAllowed) {
                 return null;
             }
             throw new IllegalStateException("Avro: поле обязательно: " + path);
@@ -189,22 +183,31 @@ public final class AvroValueCoercer {
                 lastError = ex;
             }
         }
-        if (lastError != null) {
-            throw new IllegalStateException("Avro: значение поля '" + path + "' не подходит ни к одной ветке union", lastError);
+        throw unionMismatch(path, lastError);
+    }
+
+    private static boolean hasNullableBranch(Schema unionSchema) {
+        for (Schema option : unionSchema.getTypes()) {
+            if (option.getType() == Schema.Type.NULL) {
+                return true;
+            }
         }
-        throw new IllegalStateException("Avro: значение поля '" + path + "' не подходит ни к одной ветке union");
+        return false;
+    }
+
+    private static IllegalStateException unionMismatch(String path, IllegalStateException lastError) {
+        String message = "Avro: значение поля '" + path + "' не подходит ни к одной ветке union";
+        return lastError == null ? new IllegalStateException(message) : new IllegalStateException(message, lastError);
     }
 
     private static Map<String, Object> toStringObjectMap(Object v, String path) {
-        if (v instanceof Map<?, ?>) {
-            Map<?, ?> in = (Map<?, ?>) v;
-            Map<String, Object> out = new HashMap<>(in.size());
-            for (Map.Entry<?, ?> e : in.entrySet()) {
-                out.put(String.valueOf(e.getKey()), e.getValue());
-            }
-            return out;
+        if (!(v instanceof Map<?, ?>)) {
+            throw typeError(path, "MAP", v);
         }
-        throw typeError(path, "MAP", v);
+        Map<?, ?> input = (Map<?, ?>) v;
+        Map<String, Object> normalized = new HashMap<>(input.size());
+        input.forEach((key, value) -> normalized.put(String.valueOf(key), value));
+        return normalized;
     }
 
     private static Object coerceBytes(Object datum, String path) {

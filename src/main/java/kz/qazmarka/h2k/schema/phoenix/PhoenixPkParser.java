@@ -51,27 +51,41 @@ public final class PhoenixPkParser {
                              RowKeySlice rk,
                              int saltBytes,
                              Map<String, Object> out) {
-        if (table == null) return;
-        if (rk == null) return;
-        if (out == null) return;
+        if (!isDecodable(table, rk, out)) {
+            return;
+        }
 
         final String[] pk = registry.primaryKeyColumns(table);
-        if (pk == null || pk.length == 0) {
+        if (!hasPrimaryKey(pk)) {
             return;
         }
 
-        final int offset = rk.getOffset();
-        final int end = offset + rk.getLength();
-        int pos = offset + Math.max(0, saltBytes);
-        if (pos > end) {
+        int start = computeRowKeyStart(rk, saltBytes);
+        if (start == Integer.MIN_VALUE) {
             return;
         }
 
+        final int end = rk.getOffset() + rk.getLength();
         final PkCtx ctx = new PkCtx(table, rk.getArray(), end);
-        int added = decodePkColumns(pk, ctx, pos, out);
+        int added = decodePkColumns(pk, ctx, start, out);
         if (added == 0) {
             warnPkNotDecodedOnce(table, pk);
         }
+    }
+
+    private boolean isDecodable(TableName table, RowKeySlice rk, Map<String, Object> out) {
+        return table != null && rk != null && out != null;
+    }
+
+    private boolean hasPrimaryKey(String[] pk) {
+        return pk != null && pk.length > 0;
+    }
+
+    private int computeRowKeyStart(RowKeySlice rk, int saltBytes) {
+        int offset = rk.getOffset();
+        int end = offset + rk.getLength();
+        int start = offset + Math.max(0, saltBytes);
+        return start > end ? Integer.MIN_VALUE : start;
     }
 
     private int decodePkColumns(String[] pk,
@@ -206,37 +220,47 @@ public final class PhoenixPkParser {
 
     private static byte[] unescapePhoenix(byte[] a, int off, int len) {
         if (len <= 0) return new byte[0];
-        byte[] r = new byte[len];
-        int w = 0;
-        int i = off;
+        byte[] buffer = new byte[len];
+        int readIndex = off;
+        int writeIndex = 0;
         int end = off + len;
-        while (i < end) {
-            int b = a[i] & 0xFF;
-            if (b == 0xFF && i + 1 < end) {
-                int n = a[i + 1] & 0xFF;
-                switch (n) {
-                    case 0x00:
-                        r[w++] = 0x00;
-                        i += 2;
-                        break;
-                    case 0xFF:
-                        r[w++] = (byte) 0xFF;
-                        i += 2;
-                        break;
-                    default:
-                        r[w++] = a[i];
-                        i += 1;
-                        break;
-                }
+        while (readIndex < end) {
+            int current = a[readIndex] & 0xFF;
+            if (isEscapeSequence(current, readIndex, end)) {
+                writeIndex = appendEscapedByte(a, buffer, writeIndex, readIndex + 1);
+                readIndex += 2;
             } else {
-                r[w++] = a[i];
-                i += 1;
+                buffer[writeIndex++] = a[readIndex++];
             }
         }
-        if (w == r.length) return r;
-        byte[] shrunk = new byte[w];
-        System.arraycopy(r, 0, shrunk, 0, w);
-        return shrunk;
+        return writeIndex == buffer.length ? buffer : trim(buffer, writeIndex);
+    }
+
+    private static boolean isEscapeSequence(int currentByte, int index, int end) {
+        return currentByte == 0xFF && index + 1 < end;
+    }
+
+    private static int appendEscapedByte(byte[] source, byte[] target, int writeIndex, int escapeIndex) {
+        int escapeValue = source[escapeIndex] & 0xFF;
+        switch (escapeValue) {
+            case 0x00:
+                target[writeIndex++] = 0x00;
+                break;
+            case 0xFF:
+                target[writeIndex++] = (byte) 0xFF;
+                break;
+            default:
+                target[writeIndex++] = source[escapeIndex - 1];
+                target[writeIndex++] = source[escapeIndex];
+                break;
+        }
+        return writeIndex;
+    }
+
+    private static byte[] trim(byte[] buffer, int size) {
+        byte[] trimmed = new byte[size];
+        System.arraycopy(buffer, 0, trimmed, 0, size);
+        return trimmed;
     }
 
     private static void warnPkNotDecodedOnce(TableName table, String[] pk) {

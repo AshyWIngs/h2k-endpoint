@@ -98,13 +98,29 @@ public final class Parsers {
      * @return boolean значение, либо {@code defVal}, если распознать не удалось
      */
     public static boolean readBoolean(Configuration cfg, String key, boolean defVal) {
-        String v = cfg.getTrimmed(key);
-        if (v == null) return defVal;
-        String s = v.trim().toLowerCase(Locale.ROOT);
-        if ("true".equals(s) || "1".equals(s) || "yes".equals(s) || "on".equals(s)) return true;
-        if ("false".equals(s) || "0".equals(s) || "no".equals(s) || "off".equals(s)) return false;
+        String raw = cfg.getTrimmed(key);
+        if (raw == null) {
+            return defVal;
+        }
+        return parseBoolean(raw, defVal);
+    }
+
+    private static boolean parseBoolean(String value, boolean defVal) {
+        String normalized = value.trim().toLowerCase(Locale.ROOT);
+        if (TRUE_TOKENS.contains(normalized)) {
+            return true;
+        }
+        if (FALSE_TOKENS.contains(normalized)) {
+            return false;
+        }
         return defVal;
     }
+
+    private static final java.util.Set<String> TRUE_TOKENS = new java.util.HashSet<>(java.util.Arrays.asList(
+            "true", "1", "yes", "on"));
+
+    private static final java.util.Set<String> FALSE_TOKENS = new java.util.HashSet<>(java.util.Arrays.asList(
+            "false", "0", "no", "off"));
 
     /**
      * Читает и нормализует шаблон имени топика: применяет {@code getTrimmed} и подставляет дефолт.

@@ -1,6 +1,8 @@
 package kz.qazmarka.h2k.endpoint;
 
 import java.io.IOException;
+import java.net.InetAddress;
+import java.net.UnknownHostException;
 import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.HashSet;
@@ -287,15 +289,17 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
             return true;
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
-            return failReplicate("Репликация: поток прерван; запросим повтор партии", ie, true);
-        } catch (ExecutionException ee) {
-            return failReplicate("Репликация: ошибка при ожидании подтверждений Kafka", ee, false);
-        } catch (TimeoutException te) {
-            return failReplicate("Репликация: таймаут ожидания подтверждений Kafka", te, false);
-        } catch (org.apache.kafka.common.KafkaException ke) {
-            return failReplicate("Репликация: ошибка продьюсера Kafka", ke, false);
-        } catch (RuntimeException e) {
-            return failReplicate("Репликация: непредвиденная ошибка", e, false);
+            failReplicate("Репликация: поток прерван; запросим повтор партии", ie, true);
+            return false;
+        } catch (ExecutionException | TimeoutException ex) {
+            failReplicate("Репликация: ошибка при ожидании подтверждений Kafka", ex, false);
+            return false;
+        } catch (org.apache.kafka.common.KafkaException ex) {
+            failReplicate("Репликация: ошибка продьюсера Kafka", ex, false);
+            return false;
+        } catch (RuntimeException ex) {
+            failReplicate("Репликация: непредвиденная ошибка", ex, false);
+            return false;
         }
     }
 
@@ -306,7 +310,7 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
      * @param warn если true — писать WARN; иначе ERROR
      * @return всегда false, чтобы попросить HBase повторить партию
      */
-    private boolean failReplicate(String prefix, Throwable ex, boolean warn) {
+    private void failReplicate(String prefix, Throwable ex, boolean warn) {
         if (warn) {
             LOG.warn("{}: {}", prefix, ex.getMessage());
         } else {
@@ -316,7 +320,6 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
             LOG.debug("Трассировка ошибки в replicate()", ex);
         }
         onReplicateFailure();
-        return false;
     }
 
     /**
@@ -425,13 +428,33 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
          * @param bootstrap список брокеров Kafka (host:port[,host2:port2])
          * @return заполненный набор свойств для конструктора продьюсера
          */
+        private static final String BYTE_ARRAY_SERIALIZER = "org.apache.kafka.common.serialization.ByteArraySerializer";
+        private static final Set<String> H2K_INTERNAL_KEYS = new HashSet<>(
+                Arrays.asList(
+                        "await.every",
+                        "await.timeout.ms",
+                        "batch.counters.enabled",
+                        "batch.debug.on.failure"
+                )
+        );
+
         static Properties build(Configuration cfg, String bootstrap) {
+            Properties props = createBaseProperties(bootstrap);
+            applyDefaultProducerSettings(props, cfg);
+            props.put(ProducerConfig.CLIENT_ID_CONFIG, computeClientId(cfg));
+            applyPassThroughSettings(props, cfg);
+            return props;
+        }
+
+        private static Properties createBaseProperties(String bootstrap) {
             Properties props = new Properties();
             props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap);
-            props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.ByteArraySerializer");
-            props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, "org.apache.kafka.common.serialization.ByteArraySerializer");
+            props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, BYTE_ARRAY_SERIALIZER);
+            props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, BYTE_ARRAY_SERIALIZER);
+            return props;
+        }
 
-            // дефолты с возможностью переопределения через h2k.producer.*
+        private static void applyDefaultProducerSettings(Properties props, Configuration cfg) {
             props.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, cfg.get("h2k.producer.enable.idempotence", "true"));
             props.put(ProducerConfig.ACKS_CONFIG, cfg.get("h2k.producer.acks", "all"));
             props.put(ProducerConfig.RETRIES_CONFIG, cfg.get("h2k.producer.retries", String.valueOf(Integer.MAX_VALUE)));
@@ -439,58 +462,45 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
             props.put(ProducerConfig.LINGER_MS_CONFIG, cfg.get("h2k.producer.linger.ms", "50"));
             props.put(ProducerConfig.BATCH_SIZE_CONFIG, cfg.get("h2k.producer.batch.size", "65536"));
             props.put(ProducerConfig.COMPRESSION_TYPE_CONFIG, cfg.get("h2k.producer.compression.type", "lz4"));
-            props.put(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION, cfg.get("h2k.producer.max.in.flight", "1"));
+            props.put(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION,
+                    cfg.get("h2k.producer.max.in.flight", "1"));
+        }
 
-            // Набор валидных ключей Kafka‑продьюсера (используем для фильтрации pass‑through)
-            final Set<String> kafkaValidKeys = org.apache.kafka.clients.producer.ProducerConfig.configNames();
-            // Наши «служебные» ключи, которые не должны попадать в конфиг Kafka‑продьюсера
-            final Set<String> h2kInternalKeys = new HashSet<>(
-                    Arrays.asList(
-                            "await.every",
-                            "await.timeout.ms",
-                            "batch.counters.enabled",
-                            "batch.debug.on.failure"
-                    )
-            );
+        private static String computeClientId(Configuration cfg) {
+            String defaultClientId = buildDefaultClientId();
+            String configuredClientId = cfg.get("h2k.producer.client.id", defaultClientId);
+            if (!configuredClientId.equals(defaultClientId)) {
+                return configuredClientId;
+            }
+            String randomSuffix = UUID.randomUUID().toString().substring(0, 8);
+            return configuredClientId + '-' + randomSuffix;
+        }
 
-            // client.id: базово per‑host; для дефолтного значения добавляем короткий случайный суффикс,
-            // чтобы избежать коллизии MBean "kafka.producer:type=app-info,id=<client.id>" при нескольких пирах в одном JVM.
-            String computedDefaultClientId;
+        private static String buildDefaultClientId() {
             try {
-                String host = java.net.InetAddress.getLocalHost().getHostName();
-                computedDefaultClientId = (host == null || host.isEmpty())
-                        ? (H2kConfig.DEFAULT_ADMIN_CLIENT_ID + '-' + UUID.randomUUID())
-                        : (H2kConfig.DEFAULT_ADMIN_CLIENT_ID + '-' + host);
-            } catch (java.net.UnknownHostException ignore) {
-                computedDefaultClientId = H2kConfig.DEFAULT_ADMIN_CLIENT_ID + '-' + UUID.randomUUID();
+                String host = InetAddress.getLocalHost().getHostName();
+                if (host == null || host.isEmpty()) {
+                    return H2kConfig.DEFAULT_ADMIN_CLIENT_ID + '-' + UUID.randomUUID();
+                }
+                return H2kConfig.DEFAULT_ADMIN_CLIENT_ID + '-' + host;
+            } catch (UnknownHostException ignore) {
+                return H2kConfig.DEFAULT_ADMIN_CLIENT_ID + '-' + UUID.randomUUID();
             }
-            // Пользователь может явно задать h2k.producer.client.id — тогда уважаем его как есть.
-            String requestedClientId = cfg.get("h2k.producer.client.id", computedDefaultClientId);
-            String clientIdToUse = requestedClientId;
-            if (requestedClientId.equals(computedDefaultClientId)) {
-                // Добавляем короткий суффикс только для дефолтного значения
-                String rnd8 = UUID.randomUUID().toString().substring(0, 8);
-                clientIdToUse = requestedClientId + '-' + rnd8;
-            }
-            props.put(org.apache.kafka.clients.producer.ProducerConfig.CLIENT_ID_CONFIG, clientIdToUse);
+        }
 
-            // pass‑through: только «родные» ключи Kafka‑продьюсера; все прочие игнорируем
-            final String prefix = Keys.PRODUCER_PREFIX;
-            final int prefixLen = prefix.length();
-            for (Map.Entry<String, String> e : cfg) {
-                final String k = e.getKey();
-                final boolean hasPrefix = k.startsWith(prefix);
-                final boolean isAlias   = "h2k.producer.max.in.flight".equals(k);
-                if (hasPrefix && !isAlias) {
-                    final String real = k.substring(prefixLen);
-                    final boolean isInternal = h2kInternalKeys.contains(real);
-                    final boolean isKafkaKey = kafkaValidKeys.contains(real);
-                    if (!isInternal && isKafkaKey) {
-                        props.putIfAbsent(real, e.getValue());
+        private static void applyPassThroughSettings(Properties props, Configuration cfg) {
+            Set<String> kafkaKeys = ProducerConfig.configNames();
+            String prefix = Keys.PRODUCER_PREFIX;
+            int prefixLen = prefix.length();
+            for (Map.Entry<String, String> entry : cfg) {
+                String key = entry.getKey();
+                if (key.startsWith(prefix) && !"h2k.producer.max.in.flight".equals(key)) {
+                    String realKey = key.substring(prefixLen);
+                    if (!H2K_INTERNAL_KEYS.contains(realKey) && kafkaKeys.contains(realKey)) {
+                        props.putIfAbsent(realKey, entry.getValue());
                     }
                 }
             }
-            return props;
         }
     }
 }

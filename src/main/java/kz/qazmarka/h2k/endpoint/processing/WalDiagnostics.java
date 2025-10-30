@@ -184,60 +184,63 @@ final class WalDiagnostics {
             maybeWarnCf(table, filterActive, cfSnapshot);
         }
 
+        /**
+         * Отслеживает превышение подсказки capacityHint: при первом срабатывании фиксирует предупреждение.
+         * Контекст7 рекомендуется логгировать «что делать дальше», поэтому сообщение содержит совет обновить Avro-схему.
+         */
         private void maybeWarnCapacity(TableName table,
                                        TableOptionsSnapshot tableOptions,
                                        TableMetadataView metadata) {
             if (capacityWarned) {
                 return;
             }
-            int configuredHint = 0;
-            if (metadata != null) {
-                configuredHint = metadata.getCapacityHintFor(table);
+            int configuredHint = configuredCapacityHint(table, metadata);
+            int effectiveHint = effectiveCapacityHint(tableOptions, configuredHint);
+            if (effectiveHint > 0 && maxRowCellsSent <= effectiveHint) {
+                return;
             }
-            int actualHint = tableOptions == null ? configuredHint : tableOptions.capacityHint();
-            if (actualHint <= 0 || maxRowCellsSent > actualHint) {
-                capacityWarned = true;
-                TableValueSource source = tableOptions == null ? TableValueSource.DEFAULT : tableOptions.capacitySource();
-                if (LOG.isWarnEnabled()) {
-                    LOG.warn("Таблица {}: замечено {} полей в строке, подсказка capacityHint={} (источник: {}). Рекомендуется обновить Avro-схему.",
-                            table,
-                            maxRowCellsSent,
-                            actualHint,
-                            label(source));
-                }
-            }
+            capacityWarned = true;
+            logCapacityWarning(table, tableOptions, effectiveHint);
         }
 
+        private int configuredCapacityHint(TableName table, TableMetadataView metadata) {
+            return metadata == null ? 0 : metadata.getCapacityHintFor(table);
+        }
+
+        private int effectiveCapacityHint(TableOptionsSnapshot tableOptions, int configuredHint) {
+            return tableOptions == null ? configuredHint : tableOptions.capacityHint();
+        }
+
+        private void logCapacityWarning(TableName table,
+                                        TableOptionsSnapshot tableOptions,
+                                        int effectiveHint) {
+            if (!LOG.isWarnEnabled()) {
+                return;
+            }
+            TableValueSource source = tableOptions == null ? TableValueSource.DEFAULT : tableOptions.capacitySource();
+            LOG.warn("Таблица {}: замечено {} полей в строке, подсказка capacityHint={} (источник: {}). Рекомендуется обновить Avro-схему.",
+                    table,
+                    maxRowCellsSent,
+                    effectiveHint,
+                    label(source));
+        }
+
+        /**
+         * Анализирует долю отфильтрованных строк и при необходимости логирует предупреждение.
+         * Контекст7 рекомендует формулировать сообщения так, чтобы было понятно действие для оператора.
+         */
         private void maybeWarnCf(TableName table,
                                  boolean filterActive,
                                  CfFilterSnapshot cfSnapshot) {
-            if (!filterActive || rowsSeen < CF_SAMPLE_THRESHOLD || rowsSeen <= 0L) {
+            if (!shouldEvaluateCf(filterActive)) {
                 return;
             }
-            double ratio = rowsFiltered <= 0L ? 0.0d : (double) rowsFiltered / (double) rowsSeen;
-            if (ratio < CF_LOW_RATIO && !cfLowWarned) {
-                cfLowWarned = true;
-                if (LOG.isWarnEnabled()) {
-                    LOG.warn("CF-фильтр таблицы {} практически не работает: обработано {} строк, отфильтровано {} ({}%). Проверьте список CF '{}'.",
-                            table,
-                            rowsSeen,
-                            rowsFiltered,
-                            formatPercent(ratio),
-                            csv(cfSnapshot));
-                }
+            double ratio = filteredRatio();
+            String csv = csv(cfSnapshot);
+            if (warnCfLow(table, ratio, csv)) {
                 return;
             }
-            if (ratio >= CF_HIGH_RATIO && !cfHighWarned) {
-                cfHighWarned = true;
-                if (LOG.isWarnEnabled()) {
-                    LOG.warn("CF-фильтр таблицы {} отбрасывает почти всё: обработано {} строк, отфильтровано {} ({}%). Проверьте конфигурацию CF '{}'.",
-                            table,
-                            rowsSeen,
-                            rowsFiltered,
-                            formatPercent(ratio),
-                            csv(cfSnapshot));
-                }
-            }
+            warnCfHigh(table, ratio, csv);
         }
 
         synchronized TableStatsSnapshot snapshot() {
@@ -256,6 +259,52 @@ final class WalDiagnostics {
             }
             String csv = snapshot.csv();
             return csv == null ? "" : csv;
+        }
+
+        private boolean shouldEvaluateCf(boolean filterActive) {
+            return filterActive && rowsSeen >= CF_SAMPLE_THRESHOLD && rowsSeen > 0L;
+        }
+
+        private double filteredRatio() {
+            if (rowsFiltered <= 0L) {
+                return 0.0d;
+            }
+            return (double) rowsFiltered / (double) rowsSeen;
+        }
+
+        private boolean warnCfLow(TableName table, double ratio, String cfCsv) {
+            if (ratio >= CF_LOW_RATIO || cfLowWarned) {
+                return false;
+            }
+            cfLowWarned = true;
+            logCfWarning(table,
+                    "CF-фильтр таблицы {} практически не работает: обработано {} строк, отфильтровано {} ({}%). Проверьте список CF '{}'.",
+                    ratio,
+                    cfCsv);
+            return true;
+        }
+
+        private void warnCfHigh(TableName table, double ratio, String cfCsv) {
+            if (ratio < CF_HIGH_RATIO || cfHighWarned) {
+                return;
+            }
+            cfHighWarned = true;
+            logCfWarning(table,
+                    "CF-фильтр таблицы {} отбрасывает почти всё: обработано {} строк, отфильтровано {} ({}%). Проверьте конфигурацию CF '{}'.",
+                    ratio,
+                    cfCsv);
+        }
+
+        private void logCfWarning(TableName table, String messageTemplate, double ratio, String cfCsv) {
+            if (!LOG.isWarnEnabled()) {
+                return;
+            }
+            LOG.warn(messageTemplate,
+                    table,
+                    rowsSeen,
+                    rowsFiltered,
+                    formatPercent(ratio),
+                    cfCsv);
         }
 
         private static String formatPercent(double ratio) {

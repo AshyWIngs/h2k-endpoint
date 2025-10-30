@@ -80,34 +80,15 @@ public final class ConfluentAvroPayloadSerializer {
         this.localRegistry = Objects.requireNonNull(localRegistry, "localRegistry");
         Objects.requireNonNull(avroSettings, "avroSettings");
 
-        List<String> urls = avroSettings.getRegistryUrls();
-        if (urls == null || urls.isEmpty()) {
-            throw new IllegalStateException("Avro: не заданы адреса Schema Registry (h2k.avro.sr.urls)");
-        }
-        List<String> normalized = new ArrayList<>(urls.size());
-        for (String u : urls) {
-            if (u == null || u.trim().isEmpty()) {
-                continue;
-            }
-            String trimmed = u.trim();
-            if (trimmed.endsWith("/")) {
-                trimmed = trimmed.substring(0, trimmed.length() - 1);
-            }
-            normalized.add(trimmed);
-        }
-        if (normalized.isEmpty()) {
-            throw new IllegalStateException("Avro: список Schema Registry пуст после нормализации");
-        }
-        this.registryUrls = Collections.unmodifiableList(normalized);
-
+        this.registryUrls = normalizeRegistryUrls(avroSettings.getRegistryUrls());
         Map<String, String> auth = avroSettings.getRegistryAuth();
         Map<String, String> avroProps = avroSettings.getProperties();
-        this.subjectStrategy = prop(avroProps, "subject.strategy", STRATEGY_TABLE);
-        this.subjectPrefix = prop(avroProps, "subject.prefix", "");
-        this.subjectSuffix = prop(avroProps, "subject.suffix", "");
-        this.identityMapCapacity = parsePositiveInt(
-                prop(avroProps, "client.cache.capacity", null),
-                AbstractKafkaAvroSerDeConfig.MAX_SCHEMAS_PER_SUBJECT_DEFAULT);
+
+        SubjectSettings subjectSettings = resolveSubjectSettings(avroProps);
+        this.subjectStrategy = subjectSettings.strategy;
+        this.subjectPrefix = subjectSettings.prefix;
+        this.subjectSuffix = subjectSettings.suffix;
+        this.identityMapCapacity = resolveIdentityMapCapacity(avroProps);
         this.schemaRegistryClientConfig = buildClientConfig(auth);
         this.schemaRegistryClient = clientOverride != null
                 ? clientOverride
@@ -191,36 +172,65 @@ public final class ConfluentAvroPayloadSerializer {
 
     private void maybeLogSchemaComparison(String subject, long localFingerprint) {
         try {
-            SchemaMetadata metadata = schemaRegistryClient.getLatestSchemaMetadata(subject);
+            SchemaMetadata metadata = fetchLatestSchemaMetadata(subject);
             if (metadata == null) {
                 schemaRegisterSuccess.increment();
                 return;
             }
-            long remoteFingerprint = SchemaNormalization.parsingFingerprint64(new Schema.Parser().parse(metadata.getSchema()));
-            RemoteSchemaFingerprint prev = remoteFingerprints.put(subject,
+            long remoteFingerprint = computeRemoteFingerprint(metadata);
+            RemoteSchemaFingerprint previous = remoteFingerprints.put(subject,
                     new RemoteSchemaFingerprint(metadata.getId(), metadata.getVersion(), remoteFingerprint));
             schemaRegisterSuccess.increment();
-            if (remoteFingerprint != localFingerprint) {
-                LOG.warn("Avro Confluent: локальная схема subject={} имеет fingerprint {}, тогда как удалённая {} (version={})",
-                        subject, localFingerprint, remoteFingerprint, metadata.getVersion());
-            }
-            if (prev != null && prev.fingerprint != remoteFingerprint) {
-                LOG.warn("Avro Confluent: fingerprint схемы subject={} изменился: remote={} → {} (id {} → {}, version {} → {})",
-                        subject,
-                        prev.fingerprint,
-                        remoteFingerprint,
-                        prev.schemaId,
-                        metadata.getId(),
-                        prev.version,
-                        metadata.getVersion());
-            }
+            logFingerprintMismatch(subject, localFingerprint, remoteFingerprint, metadata.getVersion());
+            logRemoteFingerprintChange(subject, previous, remoteFingerprint, metadata);
         } catch (RestClientException | IOException | RuntimeException ex) {
-            if (LOG.isWarnEnabled()) {
-                LOG.warn("Avro Confluent: не удалось сравнить fingerprint subject={}: {}", subject, ex.getMessage());
-            }
-            if (LOG.isDebugEnabled()) {
-                LOG.debug("Трассировка ошибки сравнения fingerprint для subject={}", subject, ex);
-            }
+            logComparisonFailure(subject, ex);
+        }
+    }
+
+    private SchemaMetadata fetchLatestSchemaMetadata(String subject) throws RestClientException, IOException {
+        return schemaRegistryClient.getLatestSchemaMetadata(subject);
+    }
+
+    private long computeRemoteFingerprint(SchemaMetadata metadata) {
+        Schema parsed = new Schema.Parser().parse(metadata.getSchema());
+        return SchemaNormalization.parsingFingerprint64(parsed);
+    }
+
+    private void logFingerprintMismatch(String subject,
+                                        long localFingerprint,
+                                        long remoteFingerprint,
+                                        int remoteVersion) {
+        if (remoteFingerprint == localFingerprint) {
+            return;
+        }
+        LOG.warn("Avro Confluent: локальная схема subject={} имеет fingerprint {}, тогда как удалённая {} (version={})",
+                subject, localFingerprint, remoteFingerprint, remoteVersion);
+    }
+
+    private void logRemoteFingerprintChange(String subject,
+                                            RemoteSchemaFingerprint previous,
+                                            long remoteFingerprint,
+                                            SchemaMetadata metadata) {
+        if (previous == null || previous.fingerprint == remoteFingerprint) {
+            return;
+        }
+        LOG.warn("Avro Confluent: fingerprint схемы subject={} изменился: remote={} → {} (id {} → {}, version {} → {})",
+                subject,
+                previous.fingerprint,
+                remoteFingerprint,
+                previous.schemaId,
+                metadata.getId(),
+                previous.version,
+                metadata.getVersion());
+    }
+
+    private void logComparisonFailure(String subject, Exception ex) {
+        if (LOG.isWarnEnabled()) {
+            LOG.warn("Avro Confluent: не удалось сравнить fingerprint subject={}: {}", subject, ex.getMessage());
+        }
+        if (LOG.isDebugEnabled()) {
+            LOG.debug("Трассировка ошибки сравнения fingerprint для subject={}", subject, ex);
         }
     }
 
@@ -266,6 +276,54 @@ public final class ConfluentAvroPayloadSerializer {
         return Collections.unmodifiableMap(config);
     }
 
+    /**
+     * Нормализует список адресов Schema Registry: удаляет пустые значения, обрезает пробелы и завершающий слэш.
+     * Контракт: хотя бы один валидный URL обязателен; при нарушении выбрасывается {@link IllegalStateException}.
+     */
+    private static List<String> normalizeRegistryUrls(List<String> urls) {
+        if (urls == null || urls.isEmpty()) {
+            throw new IllegalStateException("Avro: не заданы адреса Schema Registry (h2k.avro.sr.urls)");
+        }
+        List<String> normalized = new ArrayList<>(urls.size());
+        for (String url : urls) {
+            String candidate = normalizeUrlEntry(url);
+            if (candidate != null) {
+                normalized.add(candidate);
+            }
+        }
+        if (normalized.isEmpty()) {
+            throw new IllegalStateException("Avro: список Schema Registry пуст после нормализации");
+        }
+        return Collections.unmodifiableList(normalized);
+    }
+
+    private static String normalizeUrlEntry(String url) {
+        if (url == null) {
+            return null;
+        }
+        String trimmed = url.trim();
+        if (trimmed.isEmpty()) {
+            return null;
+        }
+        if (trimmed.endsWith("/")) {
+            return trimmed.substring(0, trimmed.length() - 1);
+        }
+        return trimmed;
+    }
+
+    private static SubjectSettings resolveSubjectSettings(Map<String, String> props) {
+        String strategy = prop(props, "subject.strategy", STRATEGY_TABLE);
+        String prefix = prop(props, "subject.prefix", "");
+        String suffix = prop(props, "subject.suffix", "");
+        return new SubjectSettings(strategy, prefix, suffix);
+    }
+
+    private static int resolveIdentityMapCapacity(Map<String, String> props) {
+        return parsePositiveInt(
+                prop(props, "client.cache.capacity", null),
+                AbstractKafkaAvroSerDeConfig.MAX_SCHEMAS_PER_SUBJECT_DEFAULT);
+    }
+
     private static String prop(Map<String, String> props, String key, String def) {
         if (props == null) return def;
         String exact = props.get(key);
@@ -304,6 +362,18 @@ public final class ConfluentAvroPayloadSerializer {
     }
 
     private enum CaseMode { ORIGINAL, UPPER, LOWER }
+
+    private static final class SubjectSettings {
+        final String strategy;
+        final String prefix;
+        final String suffix;
+
+        SubjectSettings(String strategy, String prefix, String suffix) {
+            this.strategy = strategy;
+            this.prefix = prefix;
+            this.suffix = suffix;
+        }
+    }
 
     private static final class SchemaInfo {
         final int schemaId;

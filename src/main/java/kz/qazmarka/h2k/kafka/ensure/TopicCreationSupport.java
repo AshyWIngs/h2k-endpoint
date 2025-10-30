@@ -237,32 +237,51 @@ final class TopicCreationSupport {
         }
         try {
             int current = currentPartitionCount(topic);
-            if (current < config.topicPartitions()) {
-                ctx.log().info("Увеличиваю партиции Kafka-топика '{}' {}→{}", topic, current, config.topicPartitions());
-                admin.increasePartitions(topic, config.topicPartitions(), ctx.adminTimeoutMs());
-            } else if (current > config.topicPartitions()) {
-                ctx.log().warn("Текущее число партиций Kafka-топика '{}' ({}) больше заданного ({}); уменьшение не поддерживается — оставляю как есть",
-                        topic, current, config.topicPartitions());
-            }
+            handlePartitionDifference(topic, current);
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
-            if (ctx.log().isDebugEnabled()) {
-                ctx.log().debug("Проверка/увеличение партиций прерваны для '{}'", topic, ie);
-            } else {
-                ctx.log().warn("Проверка/увеличение партиций прерваны для '{}'", topic);
-            }
+            logPartitionInterrupted(topic, ie);
         } catch (TimeoutException | ExecutionException e) {
-            if (ctx.log().isDebugEnabled()) {
-                ctx.log().debug("Не удалось проверить/увеличить партиции Kafka-топика '{}'", topic, e);
-            } else {
-                ctx.log().warn("Не удалось проверить/увеличить партиции Kafka-топика '{}': {}", topic, e.getMessage());
-            }
+            logPartitionFailure(topic, e);
         } catch (RuntimeException e) {
-            if (ctx.log().isDebugEnabled()) {
-                ctx.log().debug("Не удалось проверить/увеличить партиции Kafka-топика '{}' (runtime)", topic, e);
-            } else {
-                ctx.log().warn("Не удалось проверить/увеличить партиции Kafka-топика '{}' (runtime): {}", topic, e.getMessage());
-            }
+            logPartitionRuntime(topic, e);
+        }
+    }
+
+    private void handlePartitionDifference(String topic, int currentPartitions) throws InterruptedException, ExecutionException, TimeoutException {
+        int desired = config.topicPartitions();
+        if (currentPartitions < desired) {
+            ctx.log().info("Увеличиваю партиции Kafka-топика '{}' {}→{}", topic, currentPartitions, desired);
+            admin.increasePartitions(topic, desired, ctx.adminTimeoutMs());
+            return;
+        }
+        if (currentPartitions > desired) {
+            ctx.log().warn("Текущее число партиций Kafka-топика '{}' ({}) больше заданного ({}); уменьшение не поддерживается — оставляю как есть",
+                    topic, currentPartitions, desired);
+        }
+    }
+
+    private void logPartitionInterrupted(String topic, InterruptedException ie) {
+        if (ctx.log().isDebugEnabled()) {
+            ctx.log().debug("Проверка/увеличение партиций прерваны для '{}'", topic, ie);
+        } else {
+            ctx.log().warn("Проверка/увеличение партиций прерваны для '{}'", topic);
+        }
+    }
+
+    private void logPartitionFailure(String topic, Exception e) {
+        if (ctx.log().isDebugEnabled()) {
+            ctx.log().debug("Не удалось проверить/увеличить партиции Kafka-топика '{}'", topic, e);
+        } else {
+            ctx.log().warn("Не удалось проверить/увеличить партиции Kafka-топика '{}': {}", topic, e.getMessage());
+        }
+    }
+
+    private void logPartitionRuntime(String topic, RuntimeException e) {
+        if (ctx.log().isDebugEnabled()) {
+            ctx.log().debug("Не удалось проверить/увеличить партиции Kafka-топика '{}' (runtime)", topic, e);
+        } else {
+            ctx.log().warn("Не удалось проверить/увеличить партиции Kafka-топика '{}' (runtime): {}", topic, e.getMessage());
         }
     }
 

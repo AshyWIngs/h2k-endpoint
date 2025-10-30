@@ -52,34 +52,48 @@ final class WalCfFilterCache {
     }
 
     static WalCfFilterCache build(byte[][] source) {
+        if (source == null || source.length == 0) {
+            return EMPTY;
+        }
+        byte[][] unique = sanitizeFamilies(source);
+        if (unique.length == 0) {
+            return EMPTY;
+        }
+        int[] hashes = computeHashes(unique);
+        return new WalCfFilterCache(source, unique, hashes);
+    }
+
+    private static byte[][] sanitizeFamilies(byte[][] source) {
         ArrayList<byte[]> sanitized = new ArrayList<>(source.length);
         for (byte[] cf : source) {
-            if (cf == null || cf.length == 0) {
-                continue;
+            if (cf != null && cf.length > 0) {
+                sanitized.add(cf);
             }
-            sanitized.add(cf);
         }
         if (sanitized.isEmpty()) {
-            return EMPTY;
+            return new byte[0][];
         }
         byte[][] copy = sanitized.toArray(new byte[0][]);
         java.util.Arrays.sort(copy, Bytes.BYTES_COMPARATOR);
+        return deduplicate(copy);
+    }
+
+    private static byte[][] deduplicate(byte[][] sorted) {
         int uniqueCount = 1;
-        for (int i = 1; i < copy.length; i++) {
-            if (!Bytes.equals(copy[i], copy[i - 1])) {
+        for (int i = 1; i < sorted.length; i++) {
+            if (!Bytes.equals(sorted[i], sorted[i - 1])) {
                 uniqueCount++;
             }
         }
         byte[][] unique = new byte[uniqueCount][];
         int idx = 0;
-        unique[idx++] = copy[0];
-        for (int i = 1; i < copy.length; i++) {
-            if (!Bytes.equals(copy[i], copy[i - 1])) {
-                unique[idx++] = copy[i];
+        unique[idx++] = sorted[0];
+        for (int i = 1; i < sorted.length; i++) {
+            if (!Bytes.equals(sorted[i], sorted[i - 1])) {
+                unique[idx++] = sorted[i];
             }
         }
-        int[] hashes = computeHashes(unique);
-        return new WalCfFilterCache(source, unique, hashes);
+        return unique;
     }
 
     static boolean containsFamily(List<Cell> cells, byte[] family) {
