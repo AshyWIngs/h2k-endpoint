@@ -21,6 +21,7 @@ public final class BatchSender implements AutoCloseable {
     private final int batchSize;
     private final int timeoutMs;
     private final ArrayList<Future<RecordMetadata>> pending;
+    private int peakSize = 0;
 
     public BatchSender(int batchSize, int timeoutMs) {
         if (batchSize <= 0) {
@@ -44,6 +45,9 @@ public final class BatchSender implements AutoCloseable {
             return;
         }
         pending.add(future);
+        if (pending.size() > peakSize) {
+            peakSize = pending.size();
+        }
         if (pending.size() >= batchSize) {
             flush();
         }
@@ -64,6 +68,8 @@ public final class BatchSender implements AutoCloseable {
 
     /**
      * Блокирующе дожидается подтверждений всех накопленных отправок.
+     * Если внутренний буфер вырос более чем вдвое от batchSize, выполняет trimToSize()
+     * для освобождения неиспользуемой памяти, затем восстанавливает оптимальную ёмкость.
      */
     public void flush() throws InterruptedException, ExecutionException, TimeoutException {
         if (pending.isEmpty()) {
@@ -71,6 +77,12 @@ public final class BatchSender implements AutoCloseable {
         }
         waitAll(pending, timeoutMs);
         pending.clear();
+        // Если пиковый размер превысил удвоенный batchSize — освобождаем память
+        if (peakSize > batchSize * 2) {
+            pending.trimToSize(); // Уменьшает capacity до size (0 после clear)
+            pending.ensureCapacity(batchSize); // Восстанавливает оптимальную ёмкость
+            peakSize = 0; // Сбрасываем счётчик для следующего цикла
+        }
     }
 
     public boolean hasPending() {
