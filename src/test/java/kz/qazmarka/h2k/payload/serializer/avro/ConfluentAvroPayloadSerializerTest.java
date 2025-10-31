@@ -1,17 +1,11 @@
 package kz.qazmarka.h2k.payload.serializer.avro;
 
-import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.locks.LockSupport;
 
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericData;
@@ -21,19 +15,16 @@ import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.util.Bytes;
-import org.junit.jupiter.api.DisplayName;
-import org.junit.jupiter.api.Test;
-
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assertions.fail;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
 
 import io.confluent.kafka.schemaregistry.client.MockSchemaRegistryClient;
-import io.confluent.kafka.schemaregistry.client.SchemaMetadata;
 import io.confluent.kafka.schemaregistry.client.rest.exceptions.RestClientException;
 import io.confluent.kafka.serializers.AbstractKafkaAvroSerDeConfig;
 import kz.qazmarka.h2k.config.H2kConfig;
@@ -48,24 +39,19 @@ import kz.qazmarka.h2k.util.RowKeySlice;
  * Тесты для {@link ConfluentAvroPayloadSerializer}: регистрация схем, кеширование,
  * обработка сбоев Schema Registry и поддержка BinarySlice.
  */
-class ConfluentAvroPayloadSerializerTest {
-
-    private static final Path SCHEMA_DIR = Paths.get("src", "test", "resources", "avro").toAbsolutePath();
+class ConfluentAvroPayloadSerializerTest extends BaseSerializerTest {
 
     @Test
     @DisplayName("serialize(): регистрирует схему один раз и возвращает байты Confluent формата")
     void serializeRegistersSchemaAndCachesWriter() {
         MockSchemaRegistryClient mockClient = new MockSchemaRegistryClient();
 
-        H2kConfig cfg = new H2kConfigBuilder("mock:9092")
-                .avro()
-                .schemaDir(SCHEMA_DIR.toString())
-                .schemaRegistryUrls(Collections.singletonList("http://mock-sr"))
-                .properties(Collections.singletonMap("client.cache.capacity", "1000"))
-                .done()
-                .build();
+        H2kConfig cfg = builder()
+                .withRegistryUrls(Collections.singletonList("http://mock-sr"))
+                .withClientProperties(Collections.singletonMap("client.cache.capacity", "1000"))
+                .buildConfig();
 
-        AvroSchemaRegistry localRegistry = new AvroSchemaRegistry(SCHEMA_DIR);
+        AvroSchemaRegistry localRegistry = builder().buildLocalRegistry();
         try (ConfluentAvroPayloadSerializer serializer = new ConfluentAvroPayloadSerializer(
                 cfg.getAvroSettings(),
                 localRegistry,
@@ -81,13 +67,9 @@ class ConfluentAvroPayloadSerializerTest {
             assertTrue(serializer.clientConfigForTest().isEmpty(),
                     "для сценария без аутентификации конфигурация клиента должна быть пустой");
 
-            Schema tableSchema = localRegistry.getByTable("INT_TEST_TABLE");
-            GenericData.Record avroRecord = new GenericData.Record(tableSchema);
-            avroRecord.put("id", "rk-1");
-            avroRecord.put("value_long", 42L);
-            avroRecord.put("_event_ts", 123L);
-
-            TableName table = TableName.valueOf("INT_TEST_TABLE");
+            TableName table = builder().buildTableName();
+            Schema tableSchema = localRegistry.getByTable(table.getQualifierAsString());
+            GenericData.Record avroRecord = builder().buildAvroRecord(tableSchema);
 
             byte[] payload1 = serializer.serialize(table, avroRecord);
             byte[] payload2 = serializer.serialize(table, avroRecord);
@@ -125,23 +107,13 @@ class ConfluentAvroPayloadSerializerTest {
     @Test
     @DisplayName("Конструктор формирует basic-auth конфигурацию клиента Schema Registry")
     void constructorBuildsBasicAuthConfiguration() {
-        Map<String, String> auth = new HashMap<>();
-        auth.put("basic.username", "user");
-        auth.put("basic.password", "pass");
+        H2kConfig cfg = builder()
+                .withRegistryUrls(Collections.singletonList("http://mock-sr"))
+                .withAuth("user", "pass")
+                .withClientProperties(Collections.singletonMap("client.cache.capacity", "16"))
+                .buildConfig();
 
-        Map<String, String> props = new HashMap<>();
-        props.put("client.cache.capacity", "16");
-
-        H2kConfig cfg = new H2kConfigBuilder("mock:9092")
-                .avro()
-                .schemaDir(SCHEMA_DIR.toString())
-                .schemaRegistryUrls(Collections.singletonList("http://mock-sr"))
-                .schemaRegistryAuth(auth)
-                .properties(props)
-                .done()
-                .build();
-
-        AvroSchemaRegistry localRegistry = new AvroSchemaRegistry(SCHEMA_DIR);
+        AvroSchemaRegistry localRegistry = builder().buildLocalRegistry();
         try (ConfluentAvroPayloadSerializer serializer = new ConfluentAvroPayloadSerializer(
                 cfg.getAvroSettings(),
                 localRegistry,
@@ -159,25 +131,24 @@ class ConfluentAvroPayloadSerializerTest {
     @Test
     @DisplayName("serialize(): повторный вызов использует кеш и учитывает метрики при успешном сравнении fingerprint")
     void serializeReusesCacheAndReportsMetrics() {
-        RecordingSchemaRegistryClient client = new RecordingSchemaRegistryClient();
-        AvroSchemaRegistry localRegistry = new AvroSchemaRegistry(SCHEMA_DIR);
-        H2kConfig cfg = configWithCacheCapacity(32);
-        TableName table = TableName.valueOf("INT_TEST_TABLE");
+        AvroSchemaRegistry localRegistry = builder().buildLocalRegistry();
+        TableName table = builder().buildTableName();
         Schema tableSchema = localRegistry.getByTable(table.getQualifierAsString());
 
-        client.setLatestMetadata(table.getNameWithNamespaceInclAsString(),
-                new SchemaMetadata(42, 3, tableSchema.toString(false)));
+        RecordingSchemaRegistryClient client = builder()
+                .withCacheCapacity(32)
+                .withPredefinedMetadata(42, 3, tableSchema)
+                .buildMockClient();
 
-        try (ConfluentAvroPayloadSerializer serializer =
-                     new ConfluentAvroPayloadSerializer(cfg.getAvroSettings(), localRegistry, client)) {
+        try (ConfluentAvroPayloadSerializer serializer = builder()
+                .withCacheCapacity(32)
+                .withLocalRegistry(localRegistry)
+                .buildSerializer(client)) {
 
             long successBefore = metricsRegistered(serializer);
             long failureBefore = metricsFailures(serializer);
 
-            GenericData.Record avroRecord = new GenericData.Record(tableSchema);
-            avroRecord.put("id", "rk-1");
-            avroRecord.put("value_long", 42L);
-            avroRecord.put("_event_ts", 123L);
+            GenericData.Record avroRecord = builder().buildAvroRecord(tableSchema);
 
             byte[] payload1 = serializer.serialize(table, avroRecord);
             byte[] payload2 = serializer.serialize(table, avroRecord);
@@ -199,21 +170,22 @@ class ConfluentAvroPayloadSerializerTest {
         RecordingSchemaRegistryClient client = new RecordingSchemaRegistryClient();
         client.failRegisterWith(new RestClientException("SR down", 503, 50301));
 
-        AvroSchemaRegistry localRegistry = new AvroSchemaRegistry(SCHEMA_DIR);
-        H2kConfig cfg = configWithCacheCapacity(8);
-        TableName table = TableName.valueOf("INT_TEST_TABLE");
+        AvroSchemaRegistry localRegistry = builder().buildLocalRegistry();
+        TableName table = builder().buildTableName();
         Schema tableSchema = localRegistry.getByTable(table.getQualifierAsString());
 
-        try (ConfluentAvroPayloadSerializer serializer =
-                     new ConfluentAvroPayloadSerializer(cfg.getAvroSettings(), localRegistry, client)) {
+        try (ConfluentAvroPayloadSerializer serializer = builder()
+                .withCacheCapacity(8)
+                .buildSerializer(client)) {
 
             long successBefore = metricsRegistered(serializer);
             long failureBefore = metricsFailures(serializer);
 
-            GenericData.Record avroRecord = new GenericData.Record(tableSchema);
-            avroRecord.put("id", "rk-err");
-            avroRecord.put("value_long", 7L);
-            avroRecord.put("_event_ts", 77L);
+            GenericData.Record avroRecord = builder()
+                    .withRecordField("id", "rk-err")
+                    .withRecordField("value_long", 7L)
+                    .withRecordField("_event_ts", 77L)
+                    .buildAvroRecord(tableSchema);
 
             IllegalStateException ex = assertThrows(IllegalStateException.class,
                     () -> serializer.serialize(table, avroRecord),
@@ -236,21 +208,19 @@ class ConfluentAvroPayloadSerializerTest {
     @Test
     @DisplayName("serialize(): запись с неожиданной схемой отклоняется до сериализации")
     void serializeRejectsUnexpectedSchemaInstance() {
-        RecordingSchemaRegistryClient client = new RecordingSchemaRegistryClient();
-        AvroSchemaRegistry localRegistry = new AvroSchemaRegistry(SCHEMA_DIR);
-        H2kConfig cfg = configWithCacheCapacity(16);
-        TableName table = TableName.valueOf("INT_TEST_TABLE");
+        AvroSchemaRegistry localRegistry = builder().buildLocalRegistry();
+        TableName table = builder().buildTableName();
         Schema schema = localRegistry.getByTable(table.getQualifierAsString());
-        client.setLatestMetadata(table.getNameWithNamespaceInclAsString(),
-                new SchemaMetadata(10, 1, schema.toString(false)));
 
-        try (ConfluentAvroPayloadSerializer serializer =
-                     new ConfluentAvroPayloadSerializer(cfg.getAvroSettings(), localRegistry, client)) {
+        RecordingSchemaRegistryClient client = builder()
+                .withPredefinedMetadata(10, 1, schema)
+                .buildMockClient();
 
-            GenericData.Record original = new GenericData.Record(schema);
-            original.put("id", "rk-ok");
-            original.put("value_long", 1L);
-            original.put("_event_ts", 2L);
+        try (ConfluentAvroPayloadSerializer serializer = builder()
+                .withLocalRegistry(localRegistry)
+                .buildSerializer(client)) {
+
+            GenericData.Record original = builder().buildAvroRecord(schema);
             serializer.serialize(table, original);
 
             Schema clonedSchema = new Schema.Parser().parse(schema.toString());
@@ -271,16 +241,19 @@ class ConfluentAvroPayloadSerializerTest {
     @Test
     @DisplayName("serialize(): ошибки writer'а Avro заворачиваются в IllegalStateException")
     void serializeWrapsDatumWriterFailures() {
-        RecordingSchemaRegistryClient client = new RecordingSchemaRegistryClient();
-        AvroSchemaRegistry localRegistry = new AvroSchemaRegistry(SCHEMA_DIR);
-        H2kConfig cfg = configWithCacheCapacity(12);
-        TableName table = TableName.valueOf("INT_TEST_TABLE");
+        AvroSchemaRegistry localRegistry = builder().buildLocalRegistry();
+        TableName table = builder().buildTableName();
         Schema schema = localRegistry.getByTable(table.getQualifierAsString());
-        client.setLatestMetadata(table.getNameWithNamespaceInclAsString(),
-                new SchemaMetadata(11, 4, schema.toString(false)));
 
-        try (ConfluentAvroPayloadSerializer serializer =
-                     new ConfluentAvroPayloadSerializer(cfg.getAvroSettings(), localRegistry, client)) {
+        RecordingSchemaRegistryClient client = builder()
+                .withCacheCapacity(12)
+                .withPredefinedMetadata(11, 4, schema)
+                .buildMockClient();
+
+        try (ConfluentAvroPayloadSerializer serializer = builder()
+                .withCacheCapacity(12)
+                .withLocalRegistry(localRegistry)
+                .buildSerializer(client)) {
 
             long successBefore = metricsRegistered(serializer);
             long failureBefore = metricsFailures(serializer);
@@ -307,26 +280,27 @@ class ConfluentAvroPayloadSerializerTest {
     @Test
     @DisplayName("serialize(): при кратковременном сбое Schema Registry используется кеш и планируется повторная регистрация")
     void serializeFallsBackToCachedSchemaDuringSrOutage() {
-        RecordingSchemaRegistryClient client = new RecordingSchemaRegistryClient();
-        AvroSchemaRegistry localRegistry = new AvroSchemaRegistry(SCHEMA_DIR);
-        H2kConfig cfg = configWithCacheCapacity(16);
-        TableName table = TableName.valueOf("INT_TEST_TABLE");
+        AvroSchemaRegistry localRegistry = builder().buildLocalRegistry();
+        TableName table = builder().buildTableName();
         Schema schema = localRegistry.getByTable(table.getQualifierAsString());
 
-        String subject = table.getNameWithNamespaceInclAsString();
-        client.setLatestMetadata(subject, new SchemaMetadata(91, 5, schema.toString(false)));
+        RecordingSchemaRegistryClient client = builder()
+                .withPredefinedMetadata(91, 5, schema)
+                .buildMockClient();
         client.failRegisterWith(new RestClientException("temporary SR issue", 503, 50301), 1);
 
-        GenericData.Record avroRecord = new GenericData.Record(schema);
-        avroRecord.put("id", "rk-cache");
-        avroRecord.put("value_long", 9L);
-        avroRecord.put("_event_ts", 99L);
+        GenericData.Record avroRecord = builder()
+                .withRecordField("id", "rk-cache")
+                .withRecordField("value_long", 9L)
+                .withRecordField("_event_ts", 99L)
+                .buildAvroRecord(schema);
 
         ConfluentAvroPayloadSerializer.RetrySettings retrySettings =
                 ConfluentAvroPayloadSerializer.RetrySettings.forTests(5, 10, 3);
 
-        try (ConfluentAvroPayloadSerializer serializer =
-                     new ConfluentAvroPayloadSerializer(cfg.getAvroSettings(), localRegistry, client, retrySettings)) {
+        try (ConfluentAvroPayloadSerializer serializer = builder()
+                .withLocalRegistry(localRegistry)
+                .buildSerializer(client, retrySettings)) {
 
             long successBefore = metricsRegistered(serializer);
             long failureBefore = metricsFailures(serializer);
@@ -352,26 +326,27 @@ class ConfluentAvroPayloadSerializerTest {
     @Test
     @DisplayName("serialize(): планировщик останавливается после достижения максимального числа повторных попыток")
     void serializeStopsRetryingAfterMaxAttempts() {
-        RecordingSchemaRegistryClient client = new RecordingSchemaRegistryClient();
-        AvroSchemaRegistry localRegistry = new AvroSchemaRegistry(SCHEMA_DIR);
-        H2kConfig cfg = configWithCacheCapacity(16);
-        TableName table = TableName.valueOf("INT_TEST_TABLE");
+        AvroSchemaRegistry localRegistry = builder().buildLocalRegistry();
+        TableName table = builder().buildTableName();
         Schema schema = localRegistry.getByTable(table.getQualifierAsString());
 
-        String subject = table.getNameWithNamespaceInclAsString();
-        client.setLatestMetadata(subject, new SchemaMetadata(77, 2, schema.toString(false)));
+        RecordingSchemaRegistryClient client = builder()
+                .withPredefinedMetadata(77, 2, schema)
+                .buildMockClient();
         client.failRegisterWith(new RestClientException("SR offline", 503, 50302));
 
-        GenericData.Record avroRecord = new GenericData.Record(schema);
-        avroRecord.put("id", "rk-retry");
-        avroRecord.put("value_long", 11L);
-        avroRecord.put("_event_ts", 111L);
+        GenericData.Record avroRecord = builder()
+                .withRecordField("id", "rk-retry")
+                .withRecordField("value_long", 11L)
+                .withRecordField("_event_ts", 111L)
+                .buildAvroRecord(schema);
 
         ConfluentAvroPayloadSerializer.RetrySettings retrySettings =
                 ConfluentAvroPayloadSerializer.RetrySettings.forTests(5, 10, 3);
 
-        try (ConfluentAvroPayloadSerializer serializer =
-                     new ConfluentAvroPayloadSerializer(cfg.getAvroSettings(), localRegistry, client, retrySettings)) {
+        try (ConfluentAvroPayloadSerializer serializer = builder()
+                .withLocalRegistry(localRegistry)
+                .buildSerializer(client, retrySettings)) {
 
             long successBefore = metricsRegistered(serializer);
             long failureBefore = metricsFailures(serializer);
@@ -456,151 +431,5 @@ class ConfluentAvroPayloadSerializerTest {
             payloadBuffer.duplicate().get(restored);
             assertEquals("binary-data", new String(restored, StandardCharsets.UTF_8));
         }
-    }
-
-    private static H2kConfig configWithCacheCapacity(int capacity) {
-        Map<String, String> props = new HashMap<>();
-        props.put("client.cache.capacity", Integer.toString(capacity));
-        return new H2kConfigBuilder("mock:9092")
-                .avro()
-                .schemaDir(SCHEMA_DIR.toString())
-                .schemaRegistryUrls(Collections.singletonList("http://mock-sr"))
-                .properties(props)
-                .done()
-                .build();
-    }
-
-    private static long metricsRegistered(ConfluentAvroPayloadSerializer serializer) {
-        return serializer.metrics().registeredSchemas();
-    }
-
-    private static long metricsFailures(ConfluentAvroPayloadSerializer serializer) {
-        return serializer.metrics().registrationFailures();
-    }
-
-    private static long awaitRegisteredDelta(ConfluentAvroPayloadSerializer serializer,
-                                             long baseline,
-                                             long expectedDelta,
-                                             long timeoutMs) {
-        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs);
-        while (System.nanoTime() < deadline) {
-            long delta = metricsRegistered(serializer) - baseline;
-            if (delta >= expectedDelta) {
-                return delta;
-            }
-            sleepMs(5);
-        }
-        long delta = metricsRegistered(serializer) - baseline;
-        fail("Не дождались registeredSchemas delta >= " + expectedDelta + ", текущее значение: " + delta);
-        return delta;
-    }
-
-    private static void awaitRegisterCalls(RecordingSchemaRegistryClient client,
-                                           int expected,
-                                           long timeoutMs) {
-        long deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs);
-        while (System.nanoTime() < deadline) {
-            if (client.registerCalls() >= expected) {
-                return;
-            }
-            sleepMs(5);
-        }
-        fail("Не дождались register() == " + expected + " за " + timeoutMs + " мс");
-    }
-
-    private static void sleepMs(long millis) {
-        LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(millis));
-        if (Thread.interrupted()) {
-            fail("Ожидание было прервано");
-        }
-    }
-
-    private static final class RecordingSchemaRegistryClient extends MockSchemaRegistryClient {
-        private final Map<String, SchemaMetadata> predefinedMetadata = new HashMap<>();
-        private int registerCalls;
-        private int latestCalls;
-        private RestClientException registerRestException;
-        private boolean alwaysFailRegister;
-        private int remainingRegisterFailures;
-
-        void setLatestMetadata(String subject, SchemaMetadata metadata) {
-            predefinedMetadata.put(subject, metadata);
-        }
-
-        void failRegisterWith(RestClientException ex) {
-            this.registerRestException = ex;
-            this.alwaysFailRegister = true;
-            this.remainingRegisterFailures = Integer.MAX_VALUE;
-        }
-
-        void failRegisterWith(RestClientException ex, int attempts) {
-            this.registerRestException = ex;
-            this.alwaysFailRegister = false;
-            this.remainingRegisterFailures = attempts;
-        }
-
-        void clearRegisterFailure() {
-            this.registerRestException = null;
-            this.alwaysFailRegister = false;
-            this.remainingRegisterFailures = 0;
-        }
-
-        int registerCalls() {
-            return registerCalls;
-        }
-
-        int latestCalls() {
-            return latestCalls;
-        }
-
-        @Override
-        public synchronized SchemaMetadata getLatestSchemaMetadata(String subject)
-                throws IOException, RestClientException {
-            latestCalls++;
-            SchemaMetadata metadata = predefinedMetadata.get(subject);
-            if (metadata != null) {
-                return metadata;
-            }
-            return super.getLatestSchemaMetadata(subject);
-        }
-
-        @Override
-        public synchronized int register(String subject, Schema schema)
-                throws IOException, RestClientException {
-            registerCalls++;
-            if (registerRestException != null) {
-                if (alwaysFailRegister) {
-                    throw registerRestException;
-                }
-                if (remainingRegisterFailures > 0) {
-                    remainingRegisterFailures--;
-                    RestClientException ex = registerRestException;
-                    if (remainingRegisterFailures == 0) {
-                        registerRestException = null;
-                    }
-                    throw ex;
-                }
-            }
-            int id = super.register(subject, schema);
-            predefinedMetadata.put(subject, new SchemaMetadata(id, 1, schema.toString(false)));
-            clearRegisterFailure();
-            return id;
-        }
-    }
-
-    private static ByteBuffer deserializePayload(byte[] confluentPayload,
-                                                 RecordingSchemaRegistryClient client,
-                                                 String field) {
-        return assertDoesNotThrow(() -> {
-            ByteBuffer buffer = ByteBuffer.wrap(confluentPayload);
-            assertEquals(0, buffer.get(), "ожидается magic byte Confluent");
-            int schemaId = buffer.getInt();
-            Schema schema = client.getById(schemaId);
-            byte[] avroBytes = new byte[buffer.remaining()];
-            buffer.get(avroBytes);
-            GenericDatumReader<GenericData.Record> reader = new GenericDatumReader<>(schema);
-            GenericData.Record restored = reader.read(null, DecoderFactory.get().binaryDecoder(avroBytes, null));
-            return (ByteBuffer) restored.get(field);
-        });
     }
 }

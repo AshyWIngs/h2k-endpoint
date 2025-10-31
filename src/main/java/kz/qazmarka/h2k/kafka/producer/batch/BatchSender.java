@@ -69,19 +69,22 @@ public final class BatchSender implements AutoCloseable {
     /**
      * Блокирующе дожидается подтверждений всех накопленных отправок.
      * Если внутренний буфер вырос более чем вдвое от batchSize, выполняет trimToSize()
-     * для освобождения неиспользуемой памяти, затем восстанавливает оптимальную ёмкость.
+     * для освобождения неиспользуемой памяти перед clear(), затем восстанавливает оптимальную ёмкость.
      */
     public void flush() throws InterruptedException, ExecutionException, TimeoutException {
         if (pending.isEmpty()) {
             return;
         }
         waitAll(pending, timeoutMs);
-        pending.clear();
-        // Если пиковый размер превысил удвоенный batchSize — освобождаем память
+        // Если пиковый размер превысил удвоенный batchSize — освобождаем память перед clear()
         if (peakSize > batchSize * 2) {
-            pending.trimToSize(); // Уменьшает capacity до size (0 после clear)
-            pending.ensureCapacity(batchSize); // Восстанавливает оптимальную ёмкость
+            pending.trimToSize(); // Уменьшает capacity до текущего size
             peakSize = 0; // Сбрасываем счётчик для следующего цикла
+        }
+        pending.clear();
+        // Убеждаемся, что capacity достаточна для следующего батча (после trimToSize)
+        if (peakSize == 0) {
+            pending.ensureCapacity(batchSize);
         }
     }
 

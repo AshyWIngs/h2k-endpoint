@@ -165,7 +165,8 @@ public class RowKeySlice implements Comparable<RowKeySlice> {
         if (!(o instanceof RowKeySlice)) return false;
         RowKeySlice other = (RowKeySlice) o;
         // Быстрый путь: если хэши различаются — объекты точно не равны
-        if (this.hash != other.hash) return false;
+        // ВАЖНО: используем hashCode() для корректной работы с Mutable (lazy hash)
+        if (this.hashCode() != other.hashCode()) return false;
         // Затем проверяем длину и, только если она совпадает, сравниваем байтовые массивы
         return this.length == other.length
                 && Bytes.equals(this.array, this.offset, this.length, other.array, other.offset, other.length);
