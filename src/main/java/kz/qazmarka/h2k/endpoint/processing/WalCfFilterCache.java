@@ -5,6 +5,7 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellUtil;
@@ -13,9 +14,18 @@ import org.apache.hadoop.hbase.util.Bytes;
 /**
  * Кэш разрешённых CF для фильтрации строк WAL на горячем пути.
  * Содержит предвычисленные хеши семейств и позволяет быстро проверять, разрешена ли строка.
+ * 
+ * Использует интернирование byte[] массивов для часто используемых CF имён,
+ * что сокращает allocations при повторных вызовах build() с одинаковыми CF.
  */
 final class WalCfFilterCache {
     static final WalCfFilterCache EMPTY = new WalCfFilterCache(null, true, new int[0], new byte[0][][]);
+    
+    /**
+     * Интернированные CF byte[] массивы для переиспользования.
+     * Ключ - обёртка с hashCode и equals, значение - канонический byte[].
+     */
+    private static final ConcurrentHashMap<ByteArrayWrapper, byte[]> INTERNED_CF = new ConcurrentHashMap<>(16);
 
     private final byte[][] sourceRef;
     private final boolean noFamilies;
@@ -73,9 +83,14 @@ final class WalCfFilterCache {
             byte[][] bucket = new byte[families.size()][];
             for (int j = 0; j < families.size(); j++) {
                 byte[] fam = families.get(j);
-                byte[] copy = new byte[fam.length];
-                System.arraycopy(fam, 0, copy, 0, fam.length);
-                bucket[j] = copy;
+                // Используем интернирование для переиспользования одинаковых CF
+                ByteArrayWrapper wrapper = new ByteArrayWrapper(fam);
+                byte[] interned = INTERNED_CF.computeIfAbsent(wrapper, k -> {
+                    byte[] copy = new byte[k.bytes.length];
+                    System.arraycopy(k.bytes, 0, copy, 0, k.bytes.length);
+                    return copy;
+                });
+                bucket[j] = interned;
             }
             familiesByHash[idx] = bucket;
             idx++;
@@ -167,6 +182,33 @@ final class WalCfFilterCache {
             }
             hashes[j + 1] = key;
             familiesByHash[j + 1] = bucket;
+        }
+    }
+
+    /**
+     * Обёртка для byte[] массива с предвычисленным hashCode для эффективного интернирования.
+     * Используется как ключ в INTERNED_CF для переиспользования одинаковых CF имён.
+     */
+    private static final class ByteArrayWrapper {
+        final byte[] bytes;
+        final int hash;
+
+        ByteArrayWrapper(byte[] bytes) {
+            this.bytes = bytes;
+            this.hash = Bytes.hashCode(bytes);
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (!(o instanceof ByteArrayWrapper)) return false;
+            ByteArrayWrapper that = (ByteArrayWrapper) o;
+            return hash == that.hash && Bytes.equals(bytes, that.bytes);
+        }
+
+        @Override
+        public int hashCode() {
+            return hash;
         }
     }
 }
