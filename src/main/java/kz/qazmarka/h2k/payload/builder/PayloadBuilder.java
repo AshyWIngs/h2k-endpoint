@@ -87,6 +87,15 @@ public final class PayloadBuilder implements AutoCloseable {
     }
 
     /**
+     * Предварительно загружает локальные Avro-схемы, чтобы избежать I/O при первой репликации.
+     *
+     * @return число новых схем, прочитанных с диска и добавленных в кэш
+     */
+    public int preloadLocalSchemas() {
+        return serializer.preloadLocalSchemas();
+    }
+
+    /**
      * Человекочитаемое описание активного сериализатора и ключевых параметров Avro.
      */
     public String describeSerializer() {

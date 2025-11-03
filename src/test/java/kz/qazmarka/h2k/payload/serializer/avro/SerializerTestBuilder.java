@@ -17,7 +17,7 @@ import kz.qazmarka.h2k.config.H2kConfigBuilder;
 import kz.qazmarka.h2k.schema.registry.avro.local.AvroSchemaRegistry;
 
 /**
- * Test Data Builder для упрощения создания тестовых данных
+ * Билдер тестовых данных для упрощения создания тестовых данных
  * в {@link ConfluentAvroPayloadSerializerTest}.
  * Устраняет дублирование кода setup-логики.
  */

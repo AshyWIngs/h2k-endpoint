@@ -13,12 +13,15 @@ import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericData;
 import org.apache.avro.generic.GenericDatumReader;
 import org.apache.avro.io.DecoderFactory;
+import org.apache.hadoop.hbase.TableName;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 import kz.qazmarka.h2k.config.H2kConfig;
 import kz.qazmarka.h2k.config.H2kConfigBuilder;
+import kz.qazmarka.h2k.schema.registry.avro.local.AvroSchemaRegistry;
 
 /**
  * Базовый класс для тестов {@link ConfluentAvroPayloadSerializer}.
@@ -100,6 +103,17 @@ abstract class BaseSerializerTest {
     protected void sleepMs(long ms) {
         LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(ms));
     }
+    
+    /**
+     * Проверяет что payload соответствует Confluent формату и возвращает schemaId.
+     */
+    protected int assertConfluentFormat(byte[] payload) {
+        ByteBuffer buffer = ByteBuffer.wrap(payload);
+        assertEquals(0, buffer.get(), "первый байт — magic byte");
+        int schemaId = buffer.getInt();
+        assertTrue(schemaId > 0, "schemaId должен быть > 0");
+        return schemaId;
+    }
 
     /**
      * Десериализует Confluent Avro payload и возвращает значение указанного поля.
@@ -125,5 +139,35 @@ abstract class BaseSerializerTest {
      */
     protected SerializerTestBuilder builder() {
         return new SerializerTestBuilder();
+    }
+    
+    /**
+     * Создаёт TableName с записью и схемой для типичного теста.
+     */
+    protected TestContext buildTestContext() {
+        AvroSchemaRegistry localRegistry = builder().buildLocalRegistry();
+        TableName table = builder().buildTableName();
+        Schema schema = localRegistry.getByTable(table.getQualifierAsString());
+        GenericData.Record avroRecord = builder().buildAvroRecord(schema);
+        
+        return new TestContext(localRegistry, table, schema, avroRecord);
+    }
+    
+    /**
+     * Вспомогательный класс для хранения компонентов теста.
+     */
+    protected static class TestContext {
+        public final AvroSchemaRegistry localRegistry;
+        public final TableName table;
+        public final Schema schema;
+        public final GenericData.Record avroRecord;
+        
+        TestContext(AvroSchemaRegistry localRegistry, TableName table, 
+                   Schema schema, GenericData.Record avroRecord) {
+            this.localRegistry = localRegistry;
+            this.table = table;
+            this.schema = schema;
+            this.avroRecord = avroRecord;
+        }
     }
 }

@@ -121,7 +121,8 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
         this.topicSettings = runtimeConfig.getTopicSettings();
         this.ensureSettings = runtimeConfig.getEnsureSettings();
         this.producerSettings = runtimeConfig.getProducerSettings();
-        final PayloadBuilder payload = new PayloadBuilder(decoder, runtimeConfig);
+    final PayloadBuilder payload = new PayloadBuilder(decoder, runtimeConfig);
+    warmupPayloadSchemas(payload, runtimeConfig);
         final TopicEnsurer topicEnsurer = TopicEnsurer.createIfEnabled(
                 ensureSettings,
                 topicSettings,
@@ -182,6 +183,24 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
             LOG.warn("Не удалось определить активный сериализатор payload: {}", ex.getMessage());
             if (LOG.isDebugEnabled()) {
                 LOG.debug("Трассировка ошибки сериализатора", ex);
+            }
+        }
+    }
+
+    private void warmupPayloadSchemas(PayloadBuilder payload, H2kConfig config) {
+        try {
+            int loaded = payload.preloadLocalSchemas();
+            if (loaded > 0) {
+                if (LOG.isInfoEnabled()) {
+                    LOG.info("Предварительно загружено {} Avro-схем из каталога {}", loaded, config.getAvroSettings().getSchemaDir());
+                }
+            } else if (LOG.isDebugEnabled()) {
+                LOG.debug("Каталог Avro-схем уже прогрет или пуст: {}", config.getAvroSettings().getSchemaDir());
+            }
+        } catch (RuntimeException ex) {
+            LOG.warn("Не удалось предварительно загрузить Avro-схемы: {}", ex.getMessage());
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("Трассировка ошибки прогрева Avro-схем", ex);
             }
         }
     }

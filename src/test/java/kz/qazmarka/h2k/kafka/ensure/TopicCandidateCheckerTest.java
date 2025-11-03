@@ -26,7 +26,7 @@ class TopicCandidateCheckerTest {
     @Test
     @DisplayName("Пустое или пробельное имя отклоняется как SKIP")
     void blankTopicIsRejected() {
-        Fixture fx = fixture(trimSanitizer());
+           Fixture fx = fixture();
         Candidate candidate = fx.checker.evaluate("   ");
 
         assertEquals(CandidateStatus.SKIP, candidate.status);
@@ -39,7 +39,7 @@ class TopicCandidateCheckerTest {
     @Test
     @DisplayName("Некорректные символы приводят к SKIP")
     void invalidTopicRejected() {
-        Fixture fx = fixture(trimSanitizer());
+           Fixture fx = fixture();
 
         Candidate candidate = fx.checker.evaluate("bad*topic");
         assertEquals(CandidateStatus.SKIP, candidate.status);
@@ -50,7 +50,7 @@ class TopicCandidateCheckerTest {
     @Test
     @DisplayName("Уже подтверждённая тема возвращает ALREADY_ENSURED и увеличивает метрику кеша")
     void alreadyEnsuredHitsCache() {
-        Fixture fx = fixture(trimSanitizer());
+           Fixture fx = fixture();
         fx.state.markEnsured("orders");
 
         Candidate candidate = fx.checker.evaluate("  orders ");
@@ -64,7 +64,7 @@ class TopicCandidateCheckerTest {
     @Test
     @DisplayName("Активный backoff блокирует повторную проверку")
     void activeBackoffSkips() {
-        Fixture fx = fixture(trimSanitizer());
+            Fixture fx = fixture();
         fx.state.scheduleUnknown("delayed", System.nanoTime() + TimeUnit.MINUTES.toNanos(1));
 
         Candidate candidate = fx.checker.evaluate("delayed");
@@ -99,7 +99,7 @@ class TopicCandidateCheckerTest {
     @Test
     @DisplayName("select возвращает только валидные темы без дублей")
     void selectFiltersCollection() {
-        Fixture fx = fixture(trimSanitizer());
+            Fixture fx = fixture();
         fx.state.scheduleUnknown("bar", System.nanoTime() + TimeUnit.MINUTES.toNanos(1));
         Collection<String> source = Arrays.asList("foo", "bad!", "foo ", "   ", "bar");
 
@@ -110,6 +110,10 @@ class TopicCandidateCheckerTest {
         assertEquals(5L, fx.state.ensureEvaluations().longValue());
         assertEquals(3L, fx.state.ensureRejected().longValue());
     }
+
+        private static Fixture fixture() {
+            return fixture(trimSanitizer());
+        }
 
     private static Fixture fixture(UnaryOperator<String> sanitizer) {
         EnsureRuntimeState state = new EnsureRuntimeState();

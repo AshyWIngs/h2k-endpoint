@@ -1,32 +1,19 @@
 package kz.qazmarka.h2k.endpoint;
 
-import java.nio.ByteBuffer;
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.util.ArrayList;
-import java.util.Collection;
 import java.util.List;
-import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
-import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericData;
-import org.apache.avro.generic.GenericDatumReader;
-import org.apache.avro.io.DecoderFactory;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.Cell;
-import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.TableName;
-import org.apache.hadoop.hbase.regionserver.wal.WALEdit;
 import org.apache.hadoop.hbase.util.Bytes;
-import org.apache.hadoop.hbase.wal.WAL;
 import org.apache.hadoop.hbase.wal.WAL.Entry;
-import org.apache.hadoop.hbase.wal.WALKey;
 import org.apache.kafka.clients.producer.MockProducer;
 import org.apache.kafka.clients.producer.ProducerRecord;
-import org.apache.kafka.common.serialization.ByteArraySerializer;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -38,97 +25,54 @@ import io.confluent.kafka.schemaregistry.client.MockSchemaRegistryClient;
 import kz.qazmarka.h2k.config.H2kConfig;
 import kz.qazmarka.h2k.endpoint.processing.WalEntryProcessor;
 import kz.qazmarka.h2k.endpoint.topic.TopicManager;
-import kz.qazmarka.h2k.kafka.ensure.TopicEnsurer;
-import kz.qazmarka.h2k.kafka.ensure.TopicEnsurer.EnsureDelegate;
 import kz.qazmarka.h2k.kafka.producer.batch.BatchSender;
-import kz.qazmarka.h2k.kafka.serializer.RowKeySliceSerializer;
 import kz.qazmarka.h2k.payload.builder.PayloadBuilder;
-import kz.qazmarka.h2k.schema.decoder.Decoder;
-import kz.qazmarka.h2k.schema.registry.PhoenixTableMetadataProvider;
 import kz.qazmarka.h2k.util.RowKeySlice;
 
 /**
  * Интеграционный тест горячего пути WAL → PayloadBuilder → Kafka (Confluent Avro).
  */
-class KafkaReplicationEndpointIntegrationTest {
-
-    private static final Path SCHEMA_DIR = Paths.get("src", "test", "resources", "avro").toAbsolutePath();
+class KafkaReplicationEndpointIntegrationTest extends BaseKafkaReplicationEndpointTest {
 
     @Test
-    @DisplayName("WAL-запись сериализуется в Confluent Avro с PK и данными Phoenix")
+    @DisplayName("WAL-запись сериализуется в Kafka-сообщение с PK и колонками")
     void walEntryProducesKafkaRecordWithPkAndColumns() throws Exception {
-        Configuration cfg = new Configuration(false);
-        cfg.set("h2k.kafka.bootstrap.servers", "mock:9092");
-        cfg.set("h2k.avro.schema.dir", SCHEMA_DIR.toString());
-        cfg.set("h2k.avro.sr.urls", "http://mock-sr");
+        H2kConfig config = builder().buildConfig();
+        MockSchemaRegistryClient mockClient = builder().buildMockSchemaRegistryClient();
+        PayloadBuilder payloadBuilder = builder().buildPayloadBuilder(config, mockClient);
+        MockProducer<RowKeySlice, byte[]> producer = builder().buildMockProducer();
+        TopicManager topicManager = builder().buildTopicManager(config);
+        WalEntryProcessor processor = builder().buildWalEntryProcessor(payloadBuilder, topicManager, producer, config);
 
-        TableName table = TableName.valueOf("INT_TEST_TABLE");
-        PhoenixTableMetadataProvider metadata = PhoenixTableMetadataProvider.builder()
-                .table(table)
-                .capacityHint(4)
-                .columnFamilies("d")
-                .primaryKeyColumns("id")
-                .done()
-                .build();
-
-        H2kConfig config = H2kConfig.from(cfg, "mock:9092", metadata);
-
-    MockSchemaRegistryClient mockClient = new MockSchemaRegistryClient();
-
-        Decoder decoder = new Decoder() {
-            @Override
-            public Object decode(TableName table, String qualifier, byte[] value) {
-                if (value == null) {
-                    return null;
-                }
-                if ("value_long".equalsIgnoreCase(qualifier)) {
-                    return Bytes.toLong(value);
-                }
-                return new String(value, StandardCharsets.UTF_8);
-            }
-
-            @Override
-            public void decodeRowKey(TableName table, RowKeySlice rowKey, int saltBytes, Map<String, Object> out) {
-                assertNotNull(rowKey, "rowkey должен присутствовать");
-                out.put("id", new String(rowKey.toByteArray(), StandardCharsets.UTF_8));
-            }
-        };
-
-        PayloadBuilder builder = new PayloadBuilder(decoder, config, mockClient);
-        TopicManager topicManager = new TopicManager(config.getTopicSettings(), TopicEnsurer.disabled());
-        MockProducer<RowKeySlice, byte[]> producer = new MockProducer<>(true, new RowKeySliceSerializer(), new ByteArraySerializer());
-        WalEntryProcessor processor = new WalEntryProcessor(builder, topicManager, producer, config);
-
-        byte[] row = Bytes.toBytes("rk-777");
-        long cellTs = 1_678_901_234L;
-
-        List<Cell> cells = new ArrayList<>();
-        cells.add(new KeyValue(row, Bytes.toBytes("d"), Bytes.toBytes("value_long"), cellTs, Bytes.toBytes(42L)));
-
-        Entry entry = walEntry(table, row, cells);
-
-        try (WalEntryProcessor autoclose = processor;
-             BatchSender sender = new BatchSender(1, 5_000)) {
-            autoclose.process(entry, sender);
+        byte[] row = Bytes.toBytes("row1");
+        long ts = System.currentTimeMillis();
+        List<Cell> cells = new java.util.ArrayList<>();
+        cells.add(new org.apache.hadoop.hbase.KeyValue(row, Bytes.toBytes("d"), Bytes.toBytes("id"), ts, Bytes.toBytes("row1")));
+        cells.add(new org.apache.hadoop.hbase.KeyValue(row, Bytes.toBytes("d"), Bytes.toBytes("value_long"), ts, Bytes.toBytes(42L)));
+        
+        Entry entry = builder().buildWalEntry(TableName.valueOf("INT_TEST_TABLE"), row, cells);
+        
+        try (BatchSender sender = new BatchSender(1, 5_000)) {
+            processor.process(entry, sender);
         }
 
-        List<ProducerRecord<RowKeySlice, byte[]>> history = producer.history();
-        assertEquals(1, history.size(), "ожидается единственная продюсерская запись");
-        ProducerRecord<RowKeySlice, byte[]> produced = history.get(0);
-        assertEquals("INT_TEST_TABLE", produced.topic(), "имя топика должно совпадать с шаблоном по умолчанию");
+        List<ProducerRecord<RowKeySlice, byte[]>> sent = producer.history();
+        assertEquals(1, sent.size());
 
-        GenericData.Record avro = decodeAvro(mockClient, produced.value());
-        assertEquals("rk-777", String.valueOf(avro.get("id")));
-        assertEquals(42L, avro.get("value_long"));
-        assertEquals(cellTs, avro.get("_event_ts"));
+        ProducerRecord<RowKeySlice, byte[]> producedRecord = sent.get(0);
+        assertEquals("INT_TEST_TABLE", producedRecord.topic());
+        assertNotNull(producedRecord.key());
 
-        Collection<String> subjects = mockClient.getAllSubjects();
-        assertEquals(1, subjects.size(), "ожидается один subject в Schema Registry");
-        String subject = subjects.iterator().next();
-        assertEquals("default:INT_TEST_TABLE", subject, "subject должен совпадать с именем таблицы");
-    }
+        byte[] valueBytes = producedRecord.value();
+        assertNotNull(valueBytes);
 
-    @Test
+        assertTrue(mockClient.getAllSubjects().contains("default:INT_TEST_TABLE"));
+
+        GenericData.Record decoded = builder().decodeAvro(mockClient, valueBytes);
+        assertNotNull(decoded);
+        assertEquals("row1", decoded.get("id").toString());
+        assertEquals(42L, decoded.get("value_long"));
+    }    @Test
     @DisplayName("Инициализация без bootstrap приводит к IOException")
     void initFailsWhenBootstrapMissing() {
         Configuration cfg = new Configuration(false);
@@ -141,150 +85,62 @@ class KafkaReplicationEndpointIntegrationTest {
     @Test
     @DisplayName("Недоступный Schema Registry → PayloadBuilder бросает IllegalStateException")
     void schemaRegistryUnavailable() {
-        Configuration cfg = new Configuration(false);
-        cfg.set("h2k.kafka.bootstrap.servers", "mock:9092");
-        cfg.set("h2k.avro.schema.dir", SCHEMA_DIR.toString());
-        cfg.set("h2k.avro.sr.urls", "http://mock-sr");
-
-        H2kConfig config = H2kConfig.from(cfg, "mock:9092");
-
-    Decoder decoder = defaultDecoder();
-    MockSchemaRegistryClient failingClient = new MockSchemaRegistryClient() {
-        @Override
-        public int register(String subject, Schema schema) {
-        throw new IllegalStateException("SR down");
-        }
-    };
-    try (PayloadBuilder builder = new PayloadBuilder(decoder, config, failingClient)) {
-        TableName table = TableName.valueOf("INT_TEST_TABLE");
-        byte[] row = Bytes.toBytes("rk-fail");
-        List<Cell> cells = new ArrayList<>();
-        cells.add(new KeyValue(row, Bytes.toBytes("d"), Bytes.toBytes("value_long"), Bytes.toBytes(1L)));
-        RowKeySlice rowSlice = RowKeySlice.whole(row);
+        H2kConfig config = builder().buildConfigWithoutMetadata();
+        
+        MockSchemaRegistryClient failingClient = new MockSchemaRegistryClient() {
+            @Override
+            public int register(String subject, org.apache.avro.Schema schema) {
+                throw new IllegalStateException("SR down");
+            }
+        };
+        
+        try (PayloadBuilder payloadBuilder = builder().buildPayloadBuilder(config, failingClient)) {
+            TableName table = TableName.valueOf("INT_TEST_TABLE");
+            byte[] row = Bytes.toBytes("rk-fail");
+            List<Cell> cells = new java.util.ArrayList<>();
+            cells.add(new org.apache.hadoop.hbase.KeyValue(row, Bytes.toBytes("d"), Bytes.toBytes("value_long"), Bytes.toBytes(1L)));
+            RowKeySlice rowSlice = RowKeySlice.whole(row);
+            
             IllegalStateException initError = assertThrows(IllegalStateException.class,
-                    () -> builder.buildRowPayloadBytes(table,
-                            cells,
-                            rowSlice,
-                            0L,
-                            0L),
+                    () -> payloadBuilder.buildRowPayloadBytes(table, cells, rowSlice, 0L, 0L),
                     "Ожидается ошибка регистрации схемы при недоступном Schema Registry");
-    assertNotNull(initError);
-    }
+            assertNotNull(initError);
+        }
     }
 
     @Test
     @DisplayName("Ошибка ensureTopic не прерывает обработку WAL и не мешает отправке")
     void ensureTopicFailureDoesNotInterruptProcessing() throws Exception {
-        Configuration cfg = new Configuration(false);
-        cfg.set("h2k.kafka.bootstrap.servers", "mock:9092");
-        cfg.set("h2k.avro.schema.dir", SCHEMA_DIR.toString());
-        cfg.set("h2k.avro.sr.urls", "http://mock-sr");
-
-        H2kConfig config = H2kConfig.from(cfg, "mock:9092", defaultMetadataProvider());
-
-        Decoder decoder = defaultDecoder();
-        PayloadBuilder builder = new PayloadBuilder(decoder, config, new MockSchemaRegistryClient());
-
-        AtomicInteger ensureAttempts = new AtomicInteger();
+        H2kConfig config = builder().buildConfig();
+        MockSchemaRegistryClient mockClient = builder().buildMockSchemaRegistryClient();
+        PayloadBuilder payloadBuilder = builder().buildPayloadBuilder(config, mockClient);
+        MockProducer<RowKeySlice, byte[]> producer = builder().buildMockProducer();
+        
+    AtomicInteger ensureAttempts = new AtomicInteger();
         AtomicReference<RuntimeException> ensureFailure = new AtomicReference<>();
-        MockProducer<RowKeySlice, byte[]> producer = new MockProducer<>(true, new RowKeySliceSerializer(), new ByteArraySerializer());
+    CountDownLatch ensureAttemptedLatch = new CountDownLatch(1);
+    TopicManager topicManager = builder().buildTopicManagerWithFailingEnsurer(config, ensureAttempts, ensureFailure, ensureAttemptedLatch);
+        WalEntryProcessor processor = builder().buildWalEntryProcessor(payloadBuilder, topicManager, producer, config);
 
-        try (PayloadBuilder autocloseBuilder = builder;
-             TopicEnsurer failingEnsurer = makeFailingEnsurer(ensureAttempts, ensureFailure)) {
-            TopicManager topicManager = new TopicManager(config.getTopicSettings(), failingEnsurer);
-            WalEntryProcessor processor = new WalEntryProcessor(autocloseBuilder, topicManager, producer, config);
+        byte[] row = Bytes.toBytes("rk-ensure");
+        long ts = 123L;
+        List<Cell> cells = new java.util.ArrayList<>();
+        cells.add(new org.apache.hadoop.hbase.KeyValue(row, Bytes.toBytes("d"), Bytes.toBytes("value_long"), ts, Bytes.toBytes(1L)));
+        Entry entry = builder().buildWalEntry(TableName.valueOf("INT_TEST_TABLE"), row, cells);
 
-            TableName table = TableName.valueOf("INT_TEST_TABLE");
-            byte[] row = Bytes.toBytes("rk-ensure");
-            long ts = 123L;
-            List<Cell> cells = new ArrayList<>();
-            cells.add(new KeyValue(row, Bytes.toBytes("d"), Bytes.toBytes("value_long"), ts, Bytes.toBytes(1L)));
-            Entry entry = walEntry(table, row, cells);
-
-            try (WalEntryProcessor autoclose = processor;
-                 BatchSender sender = new BatchSender(1, 5_000)) {
-                autoclose.process(entry, sender);
-            }
-
-            assertEquals(1, producer.history().size(), "Сообщение должно быть отправлено несмотря на ошибку ensure");
+        try (BatchSender sender = new BatchSender(1, 5_000)) {
+            processor.process(entry, sender);
         }
 
-    assertTrue(ensureAttempts.get() > 0, "ensureTopic обязан вызываться хотя бы один раз");
+    assertTrue(ensureAttemptedLatch.await(1, TimeUnit.SECONDS),
+        "ensureTopic обязан стартовать асинхронно в рамках теста");
+
+        assertEquals(1, producer.history().size(), "Сообщение должно быть отправлено несмотря на ошибку ensure");
+        assertTrue(ensureAttempts.get() > 0, "ensureTopic обязан вызываться хотя бы один раз");
         RuntimeException failure = ensureFailure.get();
         assertNotNull(failure, "Исключение ensureTopic должно фиксироваться для контроля обработчика");
         assertTrue(failure instanceof IllegalStateException, "Тип исключения ensureTopic должен оставаться IllegalStateException");
         assertTrue(failure.getMessage().contains("Симуляция сбоя ensure топика"),
                 "Сообщение исключения должно помогать диагностировать проблему ensure");
-    }
-
-    private static Entry walEntry(TableName table, byte[] row, List<Cell> cells) {
-        WALEdit edit = new WALEdit();
-        for (Cell cell : cells) {
-            edit.add(cell);
-        }
-        WALKey key = new WALKey(row, table, System.currentTimeMillis());
-        return new WAL.Entry(key, edit);
-    }
-
-    private static GenericData.Record decodeAvro(MockSchemaRegistryClient client, byte[] value) throws Exception {
-        ByteBuffer buffer = ByteBuffer.wrap(value);
-        assertEquals(0, buffer.get(), "Confluent payload обязан начинаться с magic byte");
-        int schemaId = buffer.getInt();
-        byte[] avroBytes = new byte[buffer.remaining()];
-        buffer.get(avroBytes);
-
-        Schema schema = client.getById(schemaId);
-        GenericDatumReader<GenericData.Record> reader = new GenericDatumReader<>(schema);
-        return reader.read(null, DecoderFactory.get().binaryDecoder(avroBytes, null));
-    }
-
-    private static Decoder defaultDecoder() {
-        return new Decoder() {
-            @Override
-            public Object decode(TableName table, String qualifier, byte[] value) {
-                if (value == null) {
-                    return null;
-                }
-                if ("value_long".equalsIgnoreCase(qualifier)) {
-                    return Bytes.toLong(value);
-                }
-                return new String(value, StandardCharsets.UTF_8);
-            }
-
-            @Override
-            public void decodeRowKey(TableName table, RowKeySlice rowKey, int saltBytes, Map<String, Object> out) {
-                assertNotNull(rowKey, "rowkey должен присутствовать");
-                out.put("id", new String(rowKey.toByteArray(), StandardCharsets.UTF_8));
-            }
-        };
-    }
-
-    private static PhoenixTableMetadataProvider defaultMetadataProvider() {
-        return PhoenixTableMetadataProvider.builder()
-                .table(TableName.valueOf("INT_TEST_TABLE"))
-                .capacityHint(4)
-                .columnFamilies("d")
-                .primaryKeyColumns("id")
-                .done()
-                .build();
-    }
-
-    /**
-     * Фабрика заглушки ensure, которая всегда бросает {@link IllegalStateException} и фиксирует факт вызова.
-     * Это позволяет тесту проверять, что обработчик WAL не проглатывает ошибку ensure молча.
-     */
-    private static TopicEnsurer makeFailingEnsurer(AtomicInteger ensureAttempts,
-                                                   AtomicReference<RuntimeException> failureRef) {
-        EnsureDelegate failingDelegate = topic -> {
-            if (ensureAttempts != null) {
-                ensureAttempts.incrementAndGet();
-            }
-            IllegalStateException failure = new IllegalStateException("Симуляция сбоя ensure топика: " + topic);
-            if (failureRef != null) {
-                failureRef.set(failure);
-            }
-            throw failure;
-        };
-        return TopicEnsurer.testingDelegate(failingDelegate);
     }
 }

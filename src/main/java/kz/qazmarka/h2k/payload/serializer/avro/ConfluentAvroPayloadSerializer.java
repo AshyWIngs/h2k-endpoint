@@ -177,6 +177,15 @@ public final class ConfluentAvroPayloadSerializer implements AutoCloseable {
         return new SchemaRegistryMetrics(schemaRegisterSuccess.sum(), schemaRegisterFailure.sum());
     }
 
+    /**
+     * Принудительно загружает локальные Avro-схемы в кэш {@link AvroSchemaRegistry}.
+     *
+     * @return число новых схем, добавленных в кэш локального реестра
+     */
+    public int preloadLocalSchemas() {
+        return localRegistry.preloadAll();
+    }
+
     private SchemaInfo register(TableName table, String subject) {
         String tableKey = table.getNameAsString();
         Schema schema = loadSchema(tableKey);

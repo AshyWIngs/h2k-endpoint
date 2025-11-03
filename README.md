@@ -241,6 +241,13 @@ Endpoint публикует события в формате Avro (Confluent Sch
 
 - В workspace присутствует `.vscode/settings.json`, исключающий `target/**` из дерева файлов/индексации и указывающий точные пути исходников проекта. Если настройки не применились (VS Code кеширует LSP), выполните «Java: Clean Java Language Server Workspace» или перезапустите IDE.
 - Для Visual Studio Code/IntelliJ IDEA дополнительной настройки Maven не требуется: структура каталогов уже соответствует стандарту (`src/main/java`).
+- После любых правок запускайте полную тестовую сборку в Java 8 окружении:
+  ```bash
+  export JAVA_HOME=/usr/lib/jvm/java-8-openjdk-amd64
+  export PATH="$JAVA_HOME/bin:$PATH"
+  mvn -q -DskipTests=false test
+  ```
+  Команда гарантирует, что проект собирается и что весь набор модульных и интеграционных тестов проходит на целевой версии JDK.
 
 ## FAQ
 

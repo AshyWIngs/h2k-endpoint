@@ -1,63 +1,38 @@
 package kz.qazmarka.h2k.endpoint.processing;
 
-import java.nio.charset.StandardCharsets;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.KeyValue;
-import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.kafka.clients.producer.MockProducer;
-import org.apache.kafka.common.serialization.ByteArraySerializer;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-import io.confluent.kafka.schemaregistry.client.MockSchemaRegistryClient;
 import kz.qazmarka.h2k.config.H2kConfig;
 import kz.qazmarka.h2k.kafka.producer.batch.BatchSender;
-import kz.qazmarka.h2k.kafka.serializer.RowKeySliceSerializer;
-import kz.qazmarka.h2k.payload.builder.PayloadBuilder;
-import kz.qazmarka.h2k.schema.decoder.Decoder;
-import kz.qazmarka.h2k.schema.registry.PhoenixTableMetadataProvider;
 import kz.qazmarka.h2k.util.RowKeySlice;
 
 /**
  * Проверяет построчную обработку WAL и корректность работы фильтра CF.
  */
-class WalRowProcessorTest {
-
-    private static final Path SCHEMA_DIR = Paths.get("src", "test", "resources", "avro").toAbsolutePath();
-    private static final TableName TABLE = TableName.valueOf("INT_TEST_TABLE");
-    private static final String TEST_TOPIC = "test-topic";
+class WalRowProcessorTest extends BaseWalProcessorTest {
 
     @Test
     @DisplayName("Пустой rowkey не приводит к отправке и метрики не изменяются")
     void skipsNullRowKey() throws Exception {
-        H2kConfig config = config();
-        MockProducer<RowKeySlice, byte[]> producer = new MockProducer<>(
-                true,
-                new RowKeySliceSerializer(),
-                new ByteArraySerializer());
-    WalRowProcessor processor = processor(config, producer);
-        WalCounterService counterService = new WalCounterService();
-        WalCounterService.EntryCounters counters = counterService.newEntryCounters();
-        WalRowProcessor.RowContext context = new WalRowProcessor.RowContext(
-                TEST_TOPIC,
-                TABLE,
-                WalMeta.EMPTY,
-                new BatchSender(10, 5_000),
-                config.describeTableOptions(TABLE),
-                WalCfFilterCache.EMPTY,
-                counters);
+        H2kConfig config = builder().buildConfig();
+        MockProducer<RowKeySlice, byte[]> producer = builder().buildProducer();
+        WalRowProcessor processor = builder().buildProcessor(config, producer);
+        
+        WalCounterService.EntryCounters counters = builder().buildCounters();
+        BatchSender sender = builder().buildBatchSender();
+        WalRowProcessor.RowContext context = builder().buildContext(config, sender, counters);
 
-        List<Cell> cells = singleCell(Bytes.toBytes("rk-null"), Bytes.toBytes("d"));
+        List<Cell> cells = builder().buildSingleCell(Bytes.toBytes("rk-null"), Bytes.toBytes("d"));
         processor.processRow(null, cells, context);
 
         assertEquals(0, counters.rowsSent);
@@ -67,62 +42,41 @@ class WalRowProcessorTest {
     }
 
     @Test
-    @DisplayName("CF-фильтр блокирует строку и увеличивает счётчик filtered")
+    @DisplayName("Фильтр по колоночным семействам блокирует строки")
     void cfFilterBlocksRow() throws Exception {
-        H2kConfig config = config();
-        MockProducer<RowKeySlice, byte[]> producer = new MockProducer<>(
-                true,
-                new RowKeySliceSerializer(),
-                new ByteArraySerializer());
-    WalRowProcessor processor = processor(config, producer);
-        WalCounterService counterService = new WalCounterService();
-        WalCounterService.EntryCounters counters = counterService.newEntryCounters();
-        WalCfFilterCache cfCache = WalCfFilterCache.build(new byte[][] { Bytes.toBytes("allowed") });
-        WalRowProcessor.RowContext context = new WalRowProcessor.RowContext(
-                TEST_TOPIC,
-                TABLE,
-                WalMeta.EMPTY,
-                new BatchSender(10, 5_000),
-                config.describeTableOptions(TABLE),
-                cfCache,
-                counters);
+        H2kConfig config = builder().withAllowedCfs("allowed").buildConfig();
+        MockProducer<RowKeySlice, byte[]> producer = builder().buildProducer();
+        WalRowProcessor processor = builder().buildProcessor(config, producer);
 
-        byte[] row = Bytes.toBytes("rk-filtered");
+        WalCounterService.EntryCounters counters = builder().buildCounters();
+        BatchSender sender = builder().buildBatchSender();
+        WalRowProcessor.RowContext context = builder().withAllowedCfs("allowed").buildContext(config, sender, counters);
+
+        byte[] row = Bytes.toBytes("block-row-id");
         List<Cell> cells = Collections.singletonList(new KeyValue(row, Bytes.toBytes("blocked"), Bytes.toBytes("q"), 1L, Bytes.toBytes(1L)));
-        RowKeySlice.Mutable rowKey = new RowKeySlice.Mutable(row, 0, row.length);
-
+        RowKeySlice.Mutable rowKey = builder().buildRowKey(row);
         processor.processRow(rowKey, cells, context);
 
-        assertEquals(0, counters.rowsSent);
-        assertEquals(1, counters.rowsFiltered);
-        assertEquals(1, counters.cellsSeen);
-        assertTrue(producer.history().isEmpty(), "Kafka не должен получать данные, отфильтрованные по CF");
-    }
-
-    @Test
+        assertTrue(producer.history().isEmpty(), "Kafka не должен получать данных с заблокированным CF");
+        assertEquals(1, counters.rowsFiltered, "Должна быть зафиксирована одна отфильтрованная строка");
+        assertEquals(0, counters.rowsSent, "Не должно быть отправленных строк");
+        assertEquals(1, counters.cellsSeen, "Одна ячейка должна быть подсчитана");
+    }    @Test
     @DisplayName("Разрешённая строка отправляется и метрики обновляются")
     void sendsRowWhenFilterAllows() throws Exception {
-        H2kConfig config = config();
-        MockProducer<RowKeySlice, byte[]> producer = new MockProducer<>(
-                true,
-                new RowKeySliceSerializer(),
-                new ByteArraySerializer());
-    WalRowProcessor processor = processor(config, producer);
-        WalCounterService counterService = new WalCounterService();
-        WalCounterService.EntryCounters counters = counterService.newEntryCounters();
-        BatchSender sender = new BatchSender(10, 5_000);
-        WalRowProcessor.RowContext context = new WalRowProcessor.RowContext(
-                TEST_TOPIC,
-                TABLE,
-                new WalMeta(100L, 200L),
-                sender,
-                config.describeTableOptions(TABLE),
-                WalCfFilterCache.EMPTY,
-                counters);
+        H2kConfig config = builder().buildConfig();
+        MockProducer<RowKeySlice, byte[]> producer = builder().buildProducer();
+        WalRowProcessor processor = builder().buildProcessor(config, producer);
+
+        WalCounterService.EntryCounters counters = builder().buildCounters();
+        BatchSender sender = builder().buildBatchSender();
+        WalRowProcessor.RowContext context = builder()
+                .withWalMeta(100L, 200L)
+                .buildContext(config, sender, counters);
 
         byte[] row = Bytes.toBytes("rk-allowed");
-        List<Cell> cells = singleCell(row, Bytes.toBytes("d"));
-        RowKeySlice.Mutable rowKey = new RowKeySlice.Mutable(row, 0, row.length);
+        List<Cell> cells = builder().buildSingleCell(row, Bytes.toBytes("d"));
+        RowKeySlice.Mutable rowKey = builder().buildRowKey(row);
 
         processor.processRow(rowKey, cells, context);
         sender.flush();
@@ -131,57 +85,6 @@ class WalRowProcessorTest {
         assertEquals(0, counters.rowsFiltered);
         assertEquals(cells.size(), counters.cellsSent);
         assertEquals(1, producer.history().size(), "Kafka должен получить единственную строку");
-        assertEquals(TEST_TOPIC, producer.history().get(0).topic());
-    }
-
-    private static WalRowProcessor processor(H2kConfig config, MockProducer<RowKeySlice, byte[]> producer) {
-        PayloadBuilder builder = new PayloadBuilder(decoder(), config, new MockSchemaRegistryClient());
-        WalRowDispatcher dispatcher = new WalRowDispatcher(builder, producer);
-        WalObserverHub observers = WalObserverHub.create(config);
-        return new WalRowProcessor(dispatcher, observers);
-    }
-
-    private static List<Cell> singleCell(byte[] row, byte[] family) {
-        ArrayList<Cell> cells = new ArrayList<>(1);
-        cells.add(new KeyValue(row, family, Bytes.toBytes("value_long"), 1L, Bytes.toBytes(1L)));
-        return cells;
-    }
-
-    private static H2kConfig config() {
-        Configuration cfg = new Configuration(false);
-        cfg.set("h2k.kafka.bootstrap.servers", "mock:9092");
-        cfg.set("h2k.avro.schema.dir", SCHEMA_DIR.toString());
-        cfg.set("h2k.avro.sr.urls", "http://mock-sr");
-        return H2kConfig.from(cfg, "mock:9092", metadata());
-    }
-
-    private static PhoenixTableMetadataProvider metadata() {
-        return PhoenixTableMetadataProvider.builder()
-                .table(TABLE)
-                .capacityHint(4)
-                .columnFamilies("d")
-                .primaryKeyColumns("id")
-                .done()
-                .build();
-    }
-
-    private static Decoder decoder() {
-        return new Decoder() {
-            @Override
-            public Object decode(TableName table, String qualifier, byte[] value) {
-                if (value == null) {
-                    return null;
-                }
-                if ("value_long".equalsIgnoreCase(qualifier)) {
-                    return Bytes.toLong(value);
-                }
-                return new String(value, StandardCharsets.UTF_8);
-            }
-
-            @Override
-            public void decodeRowKey(TableName table, RowKeySlice rowKey, int saltBytes, java.util.Map<String, Object> out) {
-                out.put("id", new String(rowKey.toByteArray(), StandardCharsets.UTF_8));
-            }
-        };
+        assertEquals("test-topic", producer.history().get(0).topic());
     }
 }

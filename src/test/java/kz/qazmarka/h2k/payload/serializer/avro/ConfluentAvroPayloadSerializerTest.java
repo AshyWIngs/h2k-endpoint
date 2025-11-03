@@ -32,7 +32,6 @@ import kz.qazmarka.h2k.config.H2kConfigBuilder;
 import kz.qazmarka.h2k.payload.builder.PayloadBuilder;
 import kz.qazmarka.h2k.schema.decoder.Decoder;
 import kz.qazmarka.h2k.schema.decoder.TestRawDecoder;
-import kz.qazmarka.h2k.schema.registry.avro.local.AvroSchemaRegistry;
 import kz.qazmarka.h2k.util.RowKeySlice;
 
 /**
@@ -41,38 +40,43 @@ import kz.qazmarka.h2k.util.RowKeySlice;
  */
 class ConfluentAvroPayloadSerializerTest extends BaseSerializerTest {
 
+        /** Тестовый URL Schema Registry, используемый в сценариях без аутентификации. */
+        private static final String DEFAULT_SR_URL = "http://mock-sr";
+        /** Имя поля с числовым значением, присутствующим в тестовых записях. */
+        private static final String FIELD_VALUE_LONG = "value_long";
+        /** Имя временного поля события, ожидаемого в Avro-записях. */
+        private static final String FIELD_EVENT_TS = "_event_ts";
+        /** Имя бинарного поля, задействованного в проверке BinarySlice. */
+        private static final String FIELD_PAYLOAD = "payload";
+
     @Test
     @DisplayName("serialize(): регистрирует схему один раз и возвращает байты Confluent формата")
     void serializeRegistersSchemaAndCachesWriter() {
         MockSchemaRegistryClient mockClient = new MockSchemaRegistryClient();
 
         H2kConfig cfg = builder()
-                .withRegistryUrls(Collections.singletonList("http://mock-sr"))
+                .withRegistryUrls(Collections.singletonList(DEFAULT_SR_URL))
                 .withClientProperties(Collections.singletonMap("client.cache.capacity", "1000"))
                 .buildConfig();
 
-        AvroSchemaRegistry localRegistry = builder().buildLocalRegistry();
+        TestContext ctx = buildTestContext();
         try (ConfluentAvroPayloadSerializer serializer = new ConfluentAvroPayloadSerializer(
                 cfg.getAvroSettings(),
-                localRegistry,
+                ctx.localRegistry,
                 mockClient)) {
 
             long successBefore = metricsRegistered(serializer);
             long failureBefore = metricsFailures(serializer);
 
-            assertEquals(Collections.singletonList("http://mock-sr"), serializer.registryUrlsForTest(),
+            assertEquals(Collections.singletonList(DEFAULT_SR_URL), serializer.registryUrlsForTest(),
                     "список URL должен совпадать с настройками");
             assertEquals(1000, serializer.identityMapCapacityForTest(),
                     "ёмкость кеша клиента Schema Registry должна совпадать");
             assertTrue(serializer.clientConfigForTest().isEmpty(),
                     "для сценария без аутентификации конфигурация клиента должна быть пустой");
 
-            TableName table = builder().buildTableName();
-            Schema tableSchema = localRegistry.getByTable(table.getQualifierAsString());
-            GenericData.Record avroRecord = builder().buildAvroRecord(tableSchema);
-
-            byte[] payload1 = serializer.serialize(table, avroRecord);
-            byte[] payload2 = serializer.serialize(table, avroRecord);
+            byte[] payload1 = serializer.serialize(ctx.table, ctx.avroRecord);
+            byte[] payload2 = serializer.serialize(ctx.table, ctx.avroRecord);
 
             assertNotNull(payload1);
             assertArrayEquals(payload1, payload2, "одинаковые записи должны сериализоваться детерминированно");
@@ -81,11 +85,10 @@ class ConfluentAvroPayloadSerializerTest extends BaseSerializerTest {
             assertEquals(1, subjects.size(), "ожидается ровно один subject");
             assertEquals("default:INT_TEST_TABLE", subjects.get(0), "subject должен совпадать с именем таблицы");
 
-            ByteBuffer buffer = ByteBuffer.wrap(payload1);
-            assertEquals(0, buffer.get(), "первый байт — magic byte");
-            int schemaId = buffer.getInt();
-            assertTrue(schemaId > 0, "schemaId должен быть > 0");
+            int schemaId = assertConfluentFormat(payload1);
 
+            ByteBuffer buffer = ByteBuffer.wrap(payload1);
+            buffer.position(5); // skip magic byte (1) + schemaId (4)
             byte[] avroBytes = new byte[buffer.remaining()];
             buffer.get(avroBytes);
 
@@ -94,8 +97,8 @@ class ConfluentAvroPayloadSerializerTest extends BaseSerializerTest {
             GenericData.Record restored = assertDoesNotThrow(
                     () -> reader.read(null, DecoderFactory.get().binaryDecoder(avroBytes, null)));
             assertEquals("rk-1", restored.get("id").toString());
-            assertEquals(42L, restored.get("value_long"));
-            assertEquals(123L, restored.get("_event_ts"));
+            assertEquals(42L, restored.get(FIELD_VALUE_LONG));
+            assertEquals(123L, restored.get(FIELD_EVENT_TS));
 
             long successDelta = metricsRegistered(serializer) - successBefore;
             long failureDelta = metricsFailures(serializer) - failureBefore;
@@ -108,15 +111,15 @@ class ConfluentAvroPayloadSerializerTest extends BaseSerializerTest {
     @DisplayName("Конструктор формирует basic-auth конфигурацию клиента Schema Registry")
     void constructorBuildsBasicAuthConfiguration() {
         H2kConfig cfg = builder()
-                .withRegistryUrls(Collections.singletonList("http://mock-sr"))
+                .withRegistryUrls(Collections.singletonList(DEFAULT_SR_URL))
                 .withAuth("user", "pass")
                 .withClientProperties(Collections.singletonMap("client.cache.capacity", "16"))
                 .buildConfig();
 
-        AvroSchemaRegistry localRegistry = builder().buildLocalRegistry();
+        TestContext ctx = buildTestContext();
         try (ConfluentAvroPayloadSerializer serializer = new ConfluentAvroPayloadSerializer(
                 cfg.getAvroSettings(),
-                localRegistry,
+                ctx.localRegistry,
                 new MockSchemaRegistryClient())) {
 
             Map<String, Object> config = serializer.clientConfigForTest();
@@ -131,27 +134,23 @@ class ConfluentAvroPayloadSerializerTest extends BaseSerializerTest {
     @Test
     @DisplayName("serialize(): повторный вызов использует кеш и учитывает метрики при успешном сравнении fingerprint")
     void serializeReusesCacheAndReportsMetrics() {
-        AvroSchemaRegistry localRegistry = builder().buildLocalRegistry();
-        TableName table = builder().buildTableName();
-        Schema tableSchema = localRegistry.getByTable(table.getQualifierAsString());
+        TestContext ctx = buildTestContext();
 
         RecordingSchemaRegistryClient client = builder()
                 .withCacheCapacity(32)
-                .withPredefinedMetadata(42, 3, tableSchema)
+                .withPredefinedMetadata(42, 3, ctx.schema)
                 .buildMockClient();
 
         try (ConfluentAvroPayloadSerializer serializer = builder()
                 .withCacheCapacity(32)
-                .withLocalRegistry(localRegistry)
+                .withLocalRegistry(ctx.localRegistry)
                 .buildSerializer(client)) {
 
             long successBefore = metricsRegistered(serializer);
             long failureBefore = metricsFailures(serializer);
 
-            GenericData.Record avroRecord = builder().buildAvroRecord(tableSchema);
-
-            byte[] payload1 = serializer.serialize(table, avroRecord);
-            byte[] payload2 = serializer.serialize(table, avroRecord);
+            byte[] payload1 = serializer.serialize(ctx.table, ctx.avroRecord);
+            byte[] payload2 = serializer.serialize(ctx.table, ctx.avroRecord);
 
             assertArrayEquals(payload1, payload2, "кешированный writer должен выдавать идентичные байты");
             assertEquals(1, client.registerCalls(), "register() должен сработать один раз");
@@ -170,12 +169,11 @@ class ConfluentAvroPayloadSerializerTest extends BaseSerializerTest {
         RecordingSchemaRegistryClient client = new RecordingSchemaRegistryClient();
         client.failRegisterWith(new RestClientException("SR down", 503, 50301));
 
-        AvroSchemaRegistry localRegistry = builder().buildLocalRegistry();
-        TableName table = builder().buildTableName();
-        Schema tableSchema = localRegistry.getByTable(table.getQualifierAsString());
+        TestContext ctx = buildTestContext();
 
         try (ConfluentAvroPayloadSerializer serializer = builder()
                 .withCacheCapacity(8)
+                .withLocalRegistry(ctx.localRegistry)
                 .buildSerializer(client)) {
 
             long successBefore = metricsRegistered(serializer);
@@ -183,12 +181,12 @@ class ConfluentAvroPayloadSerializerTest extends BaseSerializerTest {
 
             GenericData.Record avroRecord = builder()
                     .withRecordField("id", "rk-err")
-                    .withRecordField("value_long", 7L)
-                    .withRecordField("_event_ts", 77L)
-                    .buildAvroRecord(tableSchema);
+                    .withRecordField(FIELD_VALUE_LONG, 7L)
+                    .withRecordField(FIELD_EVENT_TS, 77L)
+                    .buildAvroRecord(ctx.schema);
 
             IllegalStateException ex = assertThrows(IllegalStateException.class,
-                    () -> serializer.serialize(table, avroRecord),
+                    () -> serializer.serialize(ctx.table, avroRecord),
                     "Ожидается исключение при ошибке регистрации схемы");
             assertTrue(ex.getMessage().contains("не удалось зарегистрировать схему"),
                     "сообщение должно описывать невозможность регистрации схемы");
@@ -208,29 +206,27 @@ class ConfluentAvroPayloadSerializerTest extends BaseSerializerTest {
     @Test
     @DisplayName("serialize(): запись с неожиданной схемой отклоняется до сериализации")
     void serializeRejectsUnexpectedSchemaInstance() {
-        AvroSchemaRegistry localRegistry = builder().buildLocalRegistry();
-        TableName table = builder().buildTableName();
-        Schema schema = localRegistry.getByTable(table.getQualifierAsString());
+        TestContext ctx = buildTestContext();
 
         RecordingSchemaRegistryClient client = builder()
-                .withPredefinedMetadata(10, 1, schema)
+                .withPredefinedMetadata(10, 1, ctx.schema)
                 .buildMockClient();
 
         try (ConfluentAvroPayloadSerializer serializer = builder()
-                .withLocalRegistry(localRegistry)
+                .withLocalRegistry(ctx.localRegistry)
                 .buildSerializer(client)) {
 
-            GenericData.Record original = builder().buildAvroRecord(schema);
-            serializer.serialize(table, original);
+            GenericData.Record original = builder().buildAvroRecord(ctx.schema);
+            serializer.serialize(ctx.table, original);
 
-            Schema clonedSchema = new Schema.Parser().parse(schema.toString());
+            Schema clonedSchema = new Schema.Parser().parse(ctx.schema.toString());
             GenericData.Record mismatched = new GenericData.Record(clonedSchema);
             mismatched.put("id", "rk-ok");
-            mismatched.put("value_long", 1L);
-            mismatched.put("_event_ts", 2L);
+            mismatched.put(FIELD_VALUE_LONG, 1L);
+            mismatched.put(FIELD_EVENT_TS, 2L);
 
             IllegalStateException ex = assertThrows(IllegalStateException.class,
-                    () -> serializer.serialize(table, mismatched));
+                    () -> serializer.serialize(ctx.table, mismatched));
             assertTrue(ex.getMessage().contains("неожиданную схему"),
                     "ожидался текст про неожиданную схему");
             assertEquals(1, client.registerCalls(),
@@ -241,30 +237,28 @@ class ConfluentAvroPayloadSerializerTest extends BaseSerializerTest {
     @Test
     @DisplayName("serialize(): ошибки writer'а Avro заворачиваются в IllegalStateException")
     void serializeWrapsDatumWriterFailures() {
-        AvroSchemaRegistry localRegistry = builder().buildLocalRegistry();
-        TableName table = builder().buildTableName();
-        Schema schema = localRegistry.getByTable(table.getQualifierAsString());
+        TestContext ctx = buildTestContext();
 
         RecordingSchemaRegistryClient client = builder()
                 .withCacheCapacity(12)
-                .withPredefinedMetadata(11, 4, schema)
+                .withPredefinedMetadata(11, 4, ctx.schema)
                 .buildMockClient();
 
         try (ConfluentAvroPayloadSerializer serializer = builder()
                 .withCacheCapacity(12)
-                .withLocalRegistry(localRegistry)
+                .withLocalRegistry(ctx.localRegistry)
                 .buildSerializer(client)) {
 
             long successBefore = metricsRegistered(serializer);
             long failureBefore = metricsFailures(serializer);
 
-            GenericData.Record broken = new GenericData.Record(schema);
+            GenericData.Record broken = new GenericData.Record(ctx.schema);
             broken.put("id", 123); // ожидалась строка
-            broken.put("value_long", 1L);
-            broken.put("_event_ts", 2L);
+            broken.put(FIELD_VALUE_LONG, 1L);
+            broken.put(FIELD_EVENT_TS, 2L);
 
             IllegalStateException ex = assertThrows(IllegalStateException.class,
-                    () -> serializer.serialize(table, broken));
+                    () -> serializer.serialize(ctx.table, broken));
             assertTrue(ex.getMessage().contains("Avro: ошибка сериализации записи"),
                     "ошибка должна быть обёрнута в IllegalStateException с диагностикой");
             assertEquals(1, client.registerCalls(),
@@ -280,32 +274,30 @@ class ConfluentAvroPayloadSerializerTest extends BaseSerializerTest {
     @Test
     @DisplayName("serialize(): при кратковременном сбое Schema Registry используется кеш и планируется повторная регистрация")
     void serializeFallsBackToCachedSchemaDuringSrOutage() {
-        AvroSchemaRegistry localRegistry = builder().buildLocalRegistry();
-        TableName table = builder().buildTableName();
-        Schema schema = localRegistry.getByTable(table.getQualifierAsString());
+        TestContext ctx = buildTestContext();
 
         RecordingSchemaRegistryClient client = builder()
-                .withPredefinedMetadata(91, 5, schema)
+                .withPredefinedMetadata(91, 5, ctx.schema)
                 .buildMockClient();
         client.failRegisterWith(new RestClientException("temporary SR issue", 503, 50301), 1);
 
         GenericData.Record avroRecord = builder()
                 .withRecordField("id", "rk-cache")
-                .withRecordField("value_long", 9L)
-                .withRecordField("_event_ts", 99L)
-                .buildAvroRecord(schema);
+                .withRecordField(FIELD_VALUE_LONG, 9L)
+                .withRecordField(FIELD_EVENT_TS, 99L)
+                .buildAvroRecord(ctx.schema);
 
         ConfluentAvroPayloadSerializer.RetrySettings retrySettings =
                 ConfluentAvroPayloadSerializer.RetrySettings.forTests(5, 10, 3);
 
         try (ConfluentAvroPayloadSerializer serializer = builder()
-                .withLocalRegistry(localRegistry)
+                .withLocalRegistry(ctx.localRegistry)
                 .buildSerializer(client, retrySettings)) {
 
             long successBefore = metricsRegistered(serializer);
             long failureBefore = metricsFailures(serializer);
 
-            byte[] payload = assertDoesNotThrow(() -> serializer.serialize(table, avroRecord));
+            byte[] payload = assertDoesNotThrow(() -> serializer.serialize(ctx.table, avroRecord));
             assertNotNull(payload, "fallback должен возвращать полезную нагрузку");
             assertEquals(1, client.registerCalls(), "первая попытка регистрации должна завершиться ошибкой");
 
@@ -326,32 +318,30 @@ class ConfluentAvroPayloadSerializerTest extends BaseSerializerTest {
     @Test
     @DisplayName("serialize(): планировщик останавливается после достижения максимального числа повторных попыток")
     void serializeStopsRetryingAfterMaxAttempts() {
-        AvroSchemaRegistry localRegistry = builder().buildLocalRegistry();
-        TableName table = builder().buildTableName();
-        Schema schema = localRegistry.getByTable(table.getQualifierAsString());
+        TestContext ctx = buildTestContext();
 
         RecordingSchemaRegistryClient client = builder()
-                .withPredefinedMetadata(77, 2, schema)
+                .withPredefinedMetadata(77, 2, ctx.schema)
                 .buildMockClient();
         client.failRegisterWith(new RestClientException("SR offline", 503, 50302));
 
         GenericData.Record avroRecord = builder()
                 .withRecordField("id", "rk-retry")
-                .withRecordField("value_long", 11L)
-                .withRecordField("_event_ts", 111L)
-                .buildAvroRecord(schema);
+                .withRecordField(FIELD_VALUE_LONG, 11L)
+                .withRecordField(FIELD_EVENT_TS, 111L)
+                .buildAvroRecord(ctx.schema);
 
         ConfluentAvroPayloadSerializer.RetrySettings retrySettings =
                 ConfluentAvroPayloadSerializer.RetrySettings.forTests(5, 10, 3);
 
         try (ConfluentAvroPayloadSerializer serializer = builder()
-                .withLocalRegistry(localRegistry)
+                .withLocalRegistry(ctx.localRegistry)
                 .buildSerializer(client, retrySettings)) {
 
             long successBefore = metricsRegistered(serializer);
             long failureBefore = metricsFailures(serializer);
 
-            byte[] payload = assertDoesNotThrow(() -> serializer.serialize(table, avroRecord));
+            byte[] payload = assertDoesNotThrow(() -> serializer.serialize(ctx.table, avroRecord));
             assertNotNull(payload, "fallback обязан сериализовать запись из кэша");
 
             awaitRegisterCalls(client, 1 + retrySettings.maxAttempts(), 500);
@@ -375,14 +365,14 @@ class ConfluentAvroPayloadSerializerTest extends BaseSerializerTest {
         H2kConfig cfg = new H2kConfigBuilder("mock:9092")
                 .avro()
                 .schemaDir(SCHEMA_DIR.toString())
-                .schemaRegistryUrls(Collections.singletonList("http://mock-sr"))
+                .schemaRegistryUrls(Collections.singletonList(DEFAULT_SR_URL))
                 .done()
                 .build();
 
         Decoder decoder = new Decoder() {
             @Override
             public Object decode(TableName table, String qualifier, byte[] value) {
-                if ("payload".equalsIgnoreCase(qualifier)) {
+                if (FIELD_PAYLOAD.equalsIgnoreCase(qualifier)) {
                     return null; // заставить RowPayloadAssembler использовать BinarySlice
                 }
                 return TestRawDecoder.INSTANCE.decode(table, qualifier, value);
@@ -397,7 +387,7 @@ class ConfluentAvroPayloadSerializerTest extends BaseSerializerTest {
                                  int vOff,
                                  int vLen) {
                 String name = Bytes.toString(qual, qOff, qLen);
-                if ("payload".equalsIgnoreCase(name)) {
+                if (FIELD_PAYLOAD.equalsIgnoreCase(name)) {
                     return null;
                 }
                 return TestRawDecoder.INSTANCE.decode(table, qual, qOff, qLen, value, vOff, vLen);
@@ -414,7 +404,7 @@ class ConfluentAvroPayloadSerializerTest extends BaseSerializerTest {
             byte[] row = Bytes.toBytes("rk-1");
             byte[] family = Bytes.toBytes("data");
             byte[] payload = "binary-data".getBytes(StandardCharsets.UTF_8);
-            Cell payloadCell = new KeyValue(row, family, Bytes.toBytes("payload"), 123L, payload);
+            Cell payloadCell = new KeyValue(row, family, Bytes.toBytes(FIELD_PAYLOAD), 123L, payload);
 
             byte[] serialized = builder.buildRowPayloadBytes(
                     table,
@@ -425,7 +415,7 @@ class ConfluentAvroPayloadSerializerTest extends BaseSerializerTest {
 
             assertNotNull(serialized, "Сериализация BinarySlice не должна возвращать null");
 
-            ByteBuffer payloadBuffer = deserializePayload(serialized, client, "payload");
+            ByteBuffer payloadBuffer = deserializePayload(serialized, client, FIELD_PAYLOAD);
             assertEquals(payload.length, payloadBuffer.remaining(), "Размер payload должен совпадать");
             byte[] restored = new byte[payloadBuffer.remaining()];
             payloadBuffer.duplicate().get(restored);

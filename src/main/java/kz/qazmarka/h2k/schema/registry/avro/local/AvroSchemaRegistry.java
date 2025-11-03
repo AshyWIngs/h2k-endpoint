@@ -4,6 +4,7 @@ import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.Reader;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
@@ -81,6 +82,39 @@ public final class AvroSchemaRegistry {
      */
     public int cacheSize() {
         return cache.size();
+    }
+
+    /**
+     * Предварительно загружает все Avro-схемы из базового каталога.
+     * Idempotent: повторные вызовы не перечитывают ранее закешированные схемы.
+     *
+     * @return число новых схем, добавленных в кэш
+     */
+    public int preloadAll() {
+        if (!Files.isDirectory(baseDir)) {
+            return 0;
+        }
+        int added = 0;
+        try (DirectoryStream<Path> stream = Files.newDirectoryStream(baseDir, "*.avsc")) {
+            for (Path path : stream) {
+                if (Files.isRegularFile(path)) {
+                    String fileName = path.getFileName().toString();
+                    if (fileName.endsWith(".avsc")) {
+                        String tableKey = fileName.substring(0, fileName.length() - 5)
+                                .toUpperCase(Locale.ROOT);
+                        if (!cache.containsKey(tableKey)) {
+                            cache.put(tableKey, load(path));
+                            added++;
+                        }
+                    }
+                }
+            }
+        } catch (NoSuchFileException e) {
+            return 0;
+        } catch (IOException e) {
+            throw new IllegalStateException("Ошибка чтения каталога Avro-схем: " + baseDir + " — " + e.getMessage(), e);
+        }
+        return added;
     }
 
     /**
