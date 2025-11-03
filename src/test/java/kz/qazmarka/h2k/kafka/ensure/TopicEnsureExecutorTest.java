@@ -22,7 +22,6 @@ import org.apache.kafka.clients.admin.TopicDescription;
 import org.apache.kafka.common.KafkaFuture;
 import org.apache.kafka.common.config.ConfigResource;
 import org.apache.kafka.common.errors.UnknownTopicOrPartitionException;
-import org.apache.kafka.common.internals.KafkaFutureImpl;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.DisplayName;
@@ -117,9 +116,7 @@ class TopicEnsureExecutorTest {
         public Map<String, KafkaFuture<TopicDescription>> describeTopics(Set<String> names) {
             Map<String, KafkaFuture<TopicDescription>> out = new HashMap<>();
             for (String t : names) {
-                KafkaFutureImpl<TopicDescription> f = new KafkaFutureImpl<>();
-                f.completeExceptionally(new UnknownTopicOrPartitionException("missing"));
-                out.put(t, f);
+                out.put(t, failedFuture(new UnknownTopicOrPartitionException("missing")));
             }
             return out;
         }
@@ -163,5 +160,11 @@ class TopicEnsureExecutorTest {
         public void incrementalAlterConfigs(Map<ConfigResource, Collection<AlterConfigOp>> ops, long timeoutMs) {
             // не используется
         }
+    }
+
+    private static <T> KafkaFuture<T> failedFuture(RuntimeException ex) {
+        return KafkaFuture.<T>completedFuture(null).thenApply(value -> {
+            throw ex;
+        });
     }
 }

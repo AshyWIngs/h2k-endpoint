@@ -252,7 +252,7 @@ Endpoint публикует события в формате Avro (Confluent Sch
 ## FAQ
 
 **Нужно ли класть Confluent JAR на RegionServer?**  
-Нет. Версия 0.0.12 шейдит внутрь `io.confluent:kafka-avro-serializer` и `kafka-schema-registry-client` 5.3.8 вместе с зависимостями. Достаточно базовых библиотек кластера (`kafka-clients`, `lz4`, `snappy`).
+Нет. Текущая версия шейдит внутрь `io.confluent:kafka-avro-serializer` и `kafka-schema-registry-client` 5.3.8 вместе с зависимостями. Достаточно базовых библиотек кластера (`kafka-clients`, `lz4`, `snappy`).
 
 **Что делать при ошибке 409 от Schema Registry?**  
 По умолчанию мы используем `subject.strategy=table`, т.е. `namespace:table` (для `default` остаётся просто имя таблицы). Если ранее использовались сабджекты вида `qualifier`, проверьте `h2k.avro.subject.*`: можно вернуть старую стратегию, либо добавить префикс/суффикс. При конфликте удалите неверную версию в SR и перезапустите peer.

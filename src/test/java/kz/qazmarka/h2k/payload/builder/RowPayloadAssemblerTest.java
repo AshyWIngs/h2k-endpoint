@@ -9,6 +9,11 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.apache.avro.generic.GenericData;
 import org.apache.hadoop.hbase.Cell;
@@ -103,6 +108,41 @@ class RowPayloadAssemblerTest {
         assertEquals(2L, actual.get("version"));
         assertNull(actual.get("skip_me"), "Поле с h2k.payload.skip должно оставаться по умолчанию");
         assertEquals(0, ctx.decoder.decodeCalls("skip_me"), "Декодер не должен вызываться для пропускаемых колонок");
+    }
+
+    @Test
+    void qualifierCacheSupportsParallelAssembly() throws Exception {
+        RowPayloadAssembler.QualifierCacheProbe cache = RowPayloadAssembler.qualifierCacheProbeForTest();
+        int workers = 4;
+        int iterations = 128;
+        ExecutorService executor = Executors.newFixedThreadPool(workers);
+        AtomicReference<String> shared = new AtomicReference<>();
+        try {
+            List<Future<Void>> futures = new java.util.ArrayList<>(workers);
+            for (int t = 0; t < workers; t++) {
+                final int threadId = t;
+                futures.add(executor.submit(() -> {
+                    for (int i = 0; i < iterations; i++) {
+                        byte[] qualifier = ("version-" + threadId + "-" + i).getBytes(UTF_8);
+                        String first = cache.intern(qualifier, 0, qualifier.length);
+                        String second = cache.intern(qualifier, 0, qualifier.length);
+                        assertSame(first, second, "Повторный вызов должен вернуть тот же экземпляр строки");
+                    }
+                    byte[] sharedBytes = "shared-field".getBytes(UTF_8);
+                    String sharedValue = cache.intern(sharedBytes, 0, sharedBytes.length);
+                    String previous = shared.getAndSet(sharedValue);
+                    if (previous != null) {
+                        assertSame(previous, sharedValue, "Все потоки должны получить единый экземпляр shared qualifier");
+                    }
+                    return null;
+                }));
+            }
+            for (Future<Void> future : futures) {
+                future.get(5, TimeUnit.SECONDS);
+            }
+        } finally {
+            executor.shutdownNow();
+        }
     }
 
     @Test
@@ -253,7 +293,7 @@ class RowPayloadAssemblerTest {
         @Override
         public Object decode(TableName table, String qualifier, byte[] value) {
             String key = qualifier.toLowerCase(Locale.ROOT);
-            calls.merge(key, 1, Integer::sum);
+            calls.merge(key, 1, (current, add) -> current + add);
             if ("version".equals(key)) {
                 if (value == null || value.length == 0) {
                     return null;

@@ -57,6 +57,7 @@ public final class WalEntryProcessor implements AutoCloseable {
     private final WalCounterService counterService = new WalCounterService();
     private final WalRowDispatcher rowDispatcher;
     private final WalRowProcessor rowProcessor;
+    private final RowAggregator rowAggregator = new RowAggregator();
     private final java.util.concurrent.atomic.AtomicReference<WalCfFilterCache> cfFilterCache =
             new java.util.concurrent.atomic.AtomicReference<>(WalCfFilterCache.EMPTY);
     private int rowBufferCapacity = ROW_BUFFER_BASE_CAPACITY;
@@ -175,7 +176,7 @@ public final class WalEntryProcessor implements AutoCloseable {
 
     private void processEntryCells(List<Cell> cells, EntryContext context, ArrayList<Cell> rowBuffer)
             throws InterruptedException, ExecutionException, TimeoutException {
-        new RowAggregator(context, rowBuffer).aggregate(cells);
+        rowAggregator.aggregate(cells, context, rowBuffer);
     }
 
     private void logEntrySummary(EntryContext context) {
@@ -258,32 +259,39 @@ public final class WalEntryProcessor implements AutoCloseable {
             currentOffset = rowOffset;
             currentLength = rowLength;
         }
+
+        void clear() {
+            currentArray = null;
+            currentOffset = -1;
+            currentLength = -1;
+        }
     }
 
     private final class RowAggregator {
-        private final EntryContext context;
-        private final ArrayList<Cell> rowBuffer;
         private final RowKeyState keyState = new RowKeyState();
 
-        RowAggregator(EntryContext context, ArrayList<Cell> rowBuffer) {
-            this.context = context;
-            this.rowBuffer = rowBuffer;
-        }
-
-        void aggregate(List<Cell> cells)
+        void aggregate(List<Cell> cells,
+                       EntryContext context,
+                       ArrayList<Cell> rowBuffer)
                 throws InterruptedException, ExecutionException, TimeoutException {
+            if (cells == null || cells.isEmpty()) {
+                keyState.clear();
+                rowBuffer.clear();
+                return;
+            }
             for (Cell cell : cells) {
                 if (!keyState.sameRow(cell)) {
-                    flushCurrentRow();
+                    flushCurrentRow(context, rowBuffer);
                     keyState.startRow(cell, rowBuffer);
                 } else {
                     rowBuffer.add(cell);
                 }
             }
-            flushCurrentRow();
+            flushCurrentRow(context, rowBuffer);
         }
 
-        private void flushCurrentRow()
+        private void flushCurrentRow(EntryContext context,
+                                     ArrayList<Cell> rowBuffer)
                 throws InterruptedException, ExecutionException, TimeoutException {
             RowKeySlice.Mutable currentKey = keyState.rowKey();
             if (currentKey == null || rowBuffer.isEmpty()) {
@@ -291,14 +299,15 @@ public final class WalEntryProcessor implements AutoCloseable {
             }
             int processedCells = rowBuffer.size();
             rowProcessor.processRow(currentKey, rowBuffer, context.rowContext);
-            resetBuffer(processedCells);
+            resetBuffer(rowBuffer, processedCells);
+            keyState.clear();
         }
 
-        private void resetBuffer(int processedCells) {
-            rowBuffer.clear();
+        private void resetBuffer(ArrayList<Cell> buffer, int processedCells) {
+            buffer.clear();
             if (processedCells >= ROW_BUFFER_TRIM_THRESHOLD) {
-                rowBuffer.trimToSize();
-                rowBuffer.ensureCapacity(ROW_BUFFER_BASE_CAPACITY);
+                buffer.trimToSize();
+                buffer.ensureCapacity(ROW_BUFFER_BASE_CAPACITY);
                 WalEntryProcessor.this.rowBufferTrim.increment();
                 WalEntryProcessor.this.rowBufferCapacity = ROW_BUFFER_BASE_CAPACITY;
             }

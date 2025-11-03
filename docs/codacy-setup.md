@@ -32,6 +32,25 @@ codacy-cli init
   - `pylint.toml` - Pylint (Python linter)
   - `dartanalyzer.yaml` - Dart analyzer
 
+### Локальное исполнение в Linux (без Windows Subsystem for Linux)
+
+Автоматические вызовы Codacy MCP используют команду `wsl` для запуска скрипта `.codacy/cli.sh`. В чистых Linux-средах WSL отсутствует, поэтому необходимо подготовить лёгкий shim:
+
+```bash
+mkdir -p ~/.local/bin
+cat <<'EOF' > ~/.local/bin/wsl
+#!/usr/bin/env bash
+if [ "$#" -eq 0 ]; then
+  echo "WSL shim: команда не указана" >&2
+  exit 1
+fi
+exec "$@"
+EOF
+chmod +x ~/.local/bin/wsl
+```
+
+После добавления shim-а команда `codacy_cli_analyze` будет корректно выполняться как из MCP, так и вручную (`wsl .codacy/cli.sh analyze ...`). Если окружение не подхватывает `~/.local/bin`, добавьте `export PATH="$HOME/.local/bin:$PATH"` в ваш shell-профиль.
+
 ## Использование
 
 ### Запуск анализа
@@ -48,7 +67,7 @@ codacy-cli init
 codacy-cli analyze --format sarif --output codacy-results.sarif
 ```
 
-> Команда `codacy_cli_analyze` **удалена** и более не используется. Всегда запускайте анализ через `codacy-cli` или скрипт `./codacy-analyze.sh`.
+> Внутренние MCP-проверки вызывают `codacy_cli_analyze`, поэтому shim `wsl` из предыдущего раздела обязателен. Для ручного анализа по-прежнему используйте `codacy-cli` или скрипт `./codacy-analyze.sh`.
 
 Codacy CLI v2 выполняет анализ целиком — выбор отдельных файлов пока не поддерживается. Для сфокусированных проверок можно комбинировать инструменты (например, `--tool pmd`) или запускать Codacy из IDE.
 

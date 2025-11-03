@@ -497,20 +497,16 @@ final class RowPayloadAssembler {
         return name.trim().toUpperCase(Locale.ROOT);
     }
 
-    /**
-     * Минимальный потокобезопасный кэш qualifier → String.
-     * synchronized только на короткой операции lookup, чтобы переиспользовать объект LookupKey
-     * и не создавать мусор; вставки в карту выполняются без блокировки через ConcurrentHashMap.
-     */
+    /** Минимальный потокобезопасный кэш qualifier → String без глобальной синхронизации. */
     private static final class QualifierCache {
         private final ConcurrentHashMap<AbstractKey, String> cache = new ConcurrentHashMap<>(64);
-        private final LookupKey lookup = new LookupKey();
+        private final ThreadLocal<LookupKey> lookup = ThreadLocal.withInitial(LookupKey::new);
 
-        synchronized String intern(byte[] array, int offset, int length) {
+        String intern(byte[] array, int offset, int length) {
             if (length == 0) {
                 return "";
             }
-            LookupKey key = lookup;
+            LookupKey key = lookup.get();
             key.set(array, offset, length);
             try {
                 String cached = cache.get(key);
@@ -523,6 +519,7 @@ final class RowPayloadAssembler {
                 return race != null ? race : created;
             } finally {
                 key.clear();
+                lookup.remove();
             }
         }
 
@@ -584,5 +581,21 @@ final class RowPayloadAssembler {
                 reset(copy, 0, copy.length);
             }
         }
+    }
+
+    /**
+     * Тестовый адаптер для проверки потокобезопасности интернирования qualifier.
+     * Возвращается только из методов {@code *ForTest()} и не должен использоваться в продуктивном коде.
+     */
+    static final class QualifierCacheProbe {
+        private final QualifierCache delegate = new QualifierCache();
+
+        String intern(byte[] array, int offset, int length) {
+            return delegate.intern(array, offset, length);
+        }
+    }
+
+    static QualifierCacheProbe qualifierCacheProbeForTest() {
+        return new QualifierCacheProbe();
     }
 }

@@ -2,9 +2,11 @@ package kz.qazmarka.h2k.endpoint.processing;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Paths;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
 
@@ -18,7 +20,14 @@ import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.wal.WAL;
 import org.apache.hadoop.hbase.wal.WAL.Entry;
 import org.apache.hadoop.hbase.wal.WALKey;
+import org.apache.kafka.clients.producer.Callback;
 import org.apache.kafka.clients.producer.MockProducer;
+import org.apache.kafka.clients.producer.Producer;
+import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.clients.producer.RecordMetadata;
+import org.apache.kafka.common.Metric;
+import org.apache.kafka.common.MetricName;
+import org.apache.kafka.common.PartitionInfo;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -144,6 +153,36 @@ class WalEntryProcessorTest {
         assertEquals(1, scenario.producer.history().size(), "Kafka должен получить сообщение при отключённом фильтре");
     }
 
+    @Test
+    @DisplayName("Одно WAL-событие с несколькими rowkey отправляет отдельные сообщения")
+    void multiRowEntryProducesIndividualMessages() throws Exception {
+        PhoenixTableMetadataProvider provider = provider(new String[]{"d"});
+        Configuration cfg = new Configuration(false);
+        cfg.set("h2k.kafka.bootstrap.servers", "mock:9092");
+        cfg.set("h2k.avro.sr.urls", "http://mock");
+        cfg.set("h2k.avro.schema.dir", Paths.get("src", "test", "resources", "avro").toAbsolutePath().toString());
+        cfg.set("h2k.topic.pattern", "${namespace}.${qualifier}");
+
+        H2kConfig h2kConfig = H2kConfig.from(cfg, "mock:9092", provider);
+        PayloadBuilder payloadBuilder = new PayloadBuilder(decoder(), h2kConfig, new MockSchemaRegistryClient());
+        TopicManager topicManager = new TopicManager(h2kConfig.getTopicSettings(), TopicEnsurer.disabled());
+        CapturingProducer producer = new CapturingProducer();
+
+        try (WalEntryProcessor processor = new WalEntryProcessor(payloadBuilder, topicManager, producer, h2kConfig);
+             BatchSender sender = new BatchSender(2, 1_000)) {
+            WAL.Entry entry = walEntryWithMultipleRows("rk-a", "rk-b");
+            processor.process(entry, sender);
+
+            WalEntryProcessor.WalMetrics metrics = processor.metrics();
+            assertEquals(1, metrics.entries(), "Ожидается один обработанный WAL");
+            assertEquals(2, metrics.rows(), "Обе строки должны быть отправлены");
+            assertEquals(2, metrics.cells(), "Каждая строка содержит по одной ячейке");
+        }
+
+        assertEquals(Arrays.asList("rk-a", "rk-b"), producer.keys,
+                "Ожидаются ключи для каждой строки в порядке обработки");
+    }
+
     private static WAL.Entry walEntry(String row, String cf) {
         byte[] rowBytes = bytes(row);
         byte[] cfBytes = bytes(cf);
@@ -163,6 +202,16 @@ class WalEntryProcessorTest {
                 edit.add(new KeyValue(rowBytes, cfBytes, bytes("q"), 1L, bytes("v-" + family)));
             }
         }
+        return new Entry(key, edit);
+    }
+
+    private static WAL.Entry walEntryWithMultipleRows(String firstRow, String secondRow) {
+        byte[] first = bytes(firstRow);
+        WALKey key = new WALKey(first, TABLE, 1L);
+        WALEdit edit = new WALEdit();
+        edit.add(new KeyValue(first, Bytes.toBytes("d"), bytes("q"), 1L, bytes("v1")));
+        byte[] second = bytes(secondRow);
+        edit.add(new KeyValue(second, Bytes.toBytes("d"), bytes("q"), 2L, bytes("v2")));
         return new Entry(key, edit);
     }
 
@@ -300,6 +349,45 @@ class WalEntryProcessorTest {
         } catch (ExecutionException | TimeoutException e) {
             fail("Не удалось обработать WAL: " + e.getMessage(), e);
         }
+    }
+
+    private static final class CapturingProducer implements Producer<RowKeySlice, byte[]> {
+        final List<String> keys = new java.util.ArrayList<>();
+
+        @Override
+        public java.util.concurrent.Future<RecordMetadata> send(ProducerRecord<RowKeySlice, byte[]> producerRecord) {
+            capture(producerRecord);
+            return CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public java.util.concurrent.Future<RecordMetadata> send(ProducerRecord<RowKeySlice, byte[]> producerRecord,
+                                                                Callback completion) {
+            capture(producerRecord);
+            if (completion != null) {
+                completion.onCompletion(null, null);
+            }
+            return CompletableFuture.completedFuture(null);
+        }
+
+        private void capture(ProducerRecord<RowKeySlice, byte[]> producerRecord) {
+            if (producerRecord.key() == null) {
+                keys.add(null);
+            } else {
+                keys.add(new String(producerRecord.key().toByteArray(), StandardCharsets.UTF_8));
+            }
+        }
+
+        @Override public void flush() { /* no-op for test */ }
+        @Override public List<PartitionInfo> partitionsFor(String topic) { return Collections.emptyList(); }
+        @Override public Map<MetricName, ? extends Metric> metrics() { return Collections.emptyMap(); }
+        @Override public void close() { /* no-op for test */ }
+        @Override public void close(java.time.Duration timeout) { /* no-op for test */ }
+        @Override public void initTransactions() { throw new UnsupportedOperationException("not used in test"); }
+        @Override public void beginTransaction() { throw new UnsupportedOperationException("not used in test"); }
+        @Override public void commitTransaction() { throw new UnsupportedOperationException("not used in test"); }
+        @Override public void abortTransaction() { throw new UnsupportedOperationException("not used in test"); }
+        @Override public void sendOffsetsToTransaction(Map<org.apache.kafka.common.TopicPartition, org.apache.kafka.clients.consumer.OffsetAndMetadata> offsets, String consumerGroupId) { throw new UnsupportedOperationException("not used in test"); }
     }
 
     private static WalScenario createScenario(String[] cfFamilies) {
