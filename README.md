@@ -170,6 +170,9 @@ h2k.topic.pattern=${table}
 - [Avro (локальные/Confluent)](docs/avro.md)
 - [Подробная инструкция по Confluent Schema Registry](docs/schema-registry.md)
 - [Профили peer](docs/peer-profiles.md)
+- [Руководство по разработке: логирование и диагностика](docs/dev-guidelines.md)
+- [Настройка Java 8 для сборки проекта](docs/java-setup.md)
+- [Настройка Codacy CLI для WSL](docs/codacy-setup.md)
 
 ## Обновление версии проекта
 
@@ -208,7 +211,7 @@ Endpoint публикует события в формате Avro (Confluent Sch
 
 Метрики `schema.registry.register.success` и `schema.registry.register.failures`, публикуемые через `TopicManager.getMetrics()`, напрямую отражают работу сериализатора Avro Confluent: успехи и ошибки регистрации схем в Schema Registry заметны без дополнительных логов.
 
-Отдельная метрика `ensure.cooldown.skipped` показывает, сколько ensure-вызовов сработало в режиме «пропуск по cooldown». Если значение увеличивается, проверяйте состояние Kafka‑топиков и при необходимости вручную инициируйте ensure (или временно расширьте `ensure.cooldown.ms` в конфигурации).
+Отдельная метрика `ensure.cooldown.skipped` показывает, сколько ensure-вызовов сработало в режиме «пропуск по cooldown». Допуски жёстко заданы в коде (1 минута после успешной проверки, 5 секунд после ошибки); рост счётчика означает, что темы часто попадают в окно удержания. Проверьте доступность Kafka/AdminClient и при необходимости инициируйте ensure вручную (например, через `TopicEnsurer#ensureTopicOk` в тестовых утилитах).
 
 ## Безопасность и ограничения
 
@@ -223,7 +226,7 @@ Endpoint публикует события в формате Avro (Confluent Sch
 1. **Staged rollout.** Раскатайте JAR на один RegionServer, включите peer только для части таблиц и убедитесь, что Schema Registry зарегистрировал схемы без конфликтов.
 2. **Метрики GC/throughput.** Снимите `HRegionServer.GcTimeMillis`, `ReplicationSource.avgReplicationDelay`, а также нагрузку на Kafka продьюсер (`records-sec`, `request-latency`).
 3. **Наблюдаемость Kafka.** Проверяйте `UnderReplicatedPartitions`, `RecordErrorRate`, ошибки `org.apache.kafka.clients` в логах RS.
-4. **Метрики endpoint.** `TopicManager.getMetrics()` возвращает счётчики ensure и свежие показатели `wal.*`, `schema.registry.*`; `wal.rowbuffer.upsizes` и `wal.rowbuffer.trims` помогают заметить широкие строки (более 32 ячеек) и редкие «гигантские» записи (≥4096 ячеек), а INFO-лог `Скорость WAL: ...` появляется примерно каждые 5 секунд и показывает фактическую скорость строк/сек.
+4. **Метрики endpoint.** `TopicManager.getMetrics()` возвращает счётчики ensure и свежие показатели `wal.*`, `schema.registry.*`; `wal.rowbuffer.upsizes` и `wal.rowbuffer.trims` помогают заметить широкие строки (более 32 ячеек) и редкие «гигантские» записи (≥4096 ячеек), а INFO-лог `Скорость WAL: ...` появляется примерно каждые 5 секунд и показывает фактическую скорость строк/сек. Цепочка `TopicEnsurer` (AdminClient + executor) поднимается лениво при первом ensure-вызове, поэтому время старта Endpoint минимально; первый же ensure может занять немного дольше обычного.
 5. **Расширение.** После 1–2 часов без аномалий включайте остальные RS и таблицы; держите предыдущую версию JAR в каталоге `lib/backup` до полного завершения миграции.
 6. **Откат.** При необходимости отключите peer (`disable_peer`), удалите новый JAR, верните предыдущий и перезапустите RS.
 

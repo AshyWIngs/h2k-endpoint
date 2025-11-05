@@ -1,204 +1,97 @@
-# Codacy CLI v2 Setup Guide
+# Codacy CLI v2 в среде Windows Subsystem for Linux (WSL)
 
-## Установка
+> Инструкция переписана под повседневную разработку на Windows + WSL2 (Ubuntu/Debian). После выполнения шагов Codacy MCP сможет автоматически запускать анализ.
 
-Codacy CLI v2 установлен через Homebrew:
+## Что уже есть в репозитории
 
-```bash
-brew tap codacy/codacy-cli-v2
-brew install codacy/codacy-cli-v2/codacy-cli-v2
-```
+- `.codacy/cli.sh` — обёртка, скачивающая и запускающая свежую версию Codacy CLI v2.
+- `.codacy/codacy.yaml` и `.codacy/tools-configs/` — готовые настройки для PMD, Trivy, Semgrep и других инструментов.
+   (для WSL требуется лёгкий shim `wsl`, см. ниже «Установка shim wsl»)
 
-Версия: `1.0.0-main.358.sha.7cb05d0` (darwin/arm64)
+## Подготовка окружения WSL
 
-## Конфигурация
+1. **curl или wget.** На Ubuntu/Debian выполните `sudo apt update && sudo apt install curl`.
+2. **Каталог для пользовательских бинарей.** Используем `~/.local/bin`; при отсутствии директория будет создана автоматически.
+3. **PATH.** Убедитесь, что `~/.local/bin` присутствует в PATH. Добавьте в `~/.bashrc` (или `~/.zshrc`):
+   ```bash
+   export PATH="$HOME/.local/bin:$PATH"
+   ```
+   Затем выполните `source ~/.bashrc` или откройте новое окно терминала.
 
-Проект инициализирован с помощью:
+## Установка shim `wsl`
 
-```bash
-codacy-cli init
-```
-
-Конфигурационные файлы находятся в директории `.codacy/`:
-
-- `.codacy/codacy.yaml` - основная конфигурация
-- `.codacy/tools-configs/` - настройки отдельных инструментов:
-  - `semgrep.yaml` - Semgrep OSS (код-анализ)
-  - `revive.toml` - Revive (Go linter)
-  - `trivy.yaml` - Trivy (vulnerability scanner)
-  - `lizard.yaml` - Lizard (complexity analyzer)
-  - `eslint.config.js` - ESLint (JavaScript/TypeScript)
-  - `pmd.xml` - PMD7 (Java code analyzer)
-  - `pylint.toml` - Pylint (Python linter)
-  - `dartanalyzer.yaml` - Dart analyzer
-
-### Локальное исполнение в Linux (без Windows Subsystem for Linux)
-
-Автоматические вызовы Codacy MCP используют команду `wsl` для запуска скрипта `.codacy/cli.sh`. В чистых Linux-средах WSL отсутствует, поэтому необходимо подготовить лёгкий shim:
+AutoRemediation вызывает CLI командой `wsl .codacy/cli.sh …`. Внутри Linux-подсистемы утилиты `wsl` нет, поэтому создаём лёгкую прокладку вручную:
 
 ```bash
-mkdir -p ~/.local/bin
-cat <<'EOF' > ~/.local/bin/wsl
+mkdir -p "$HOME/.local/bin"
+cat >"$HOME/.local/bin/wsl" <<'EOF'
 #!/usr/bin/env bash
 if [ "$#" -eq 0 ]; then
-  echo "WSL shim: команда не указана" >&2
-  exit 1
+   echo "WSL shim: missing command" >&2
+   exit 1
 fi
 exec "$@"
 EOF
-chmod +x ~/.local/bin/wsl
+chmod +x "$HOME/.local/bin/wsl"
 ```
 
-После добавления shim-а команда `codacy_cli_analyze` будет корректно выполняться как из MCP, так и вручную (`wsl .codacy/cli.sh analyze ...`). Если окружение не подхватывает `~/.local/bin`, добавьте `export PATH="$HOME/.local/bin:$PATH"` в ваш shell-профиль.
+Проверьте, что shim в PATH:
+```bash
+wsl echo "WSL shim is ready"
+```
 
-## Использование
+## Первый запуск Codacy CLI
 
-### Запуск анализа
+Быстрая проверка (только PMD, чтобы убедиться, что связка работает):
+```bash
+wsl .codacy/cli.sh analyze --tool pmd --format text
+```
 
-Используйте обёртку-скрипт (аргументы прокидываются напрямую в `codacy-cli analyze`):
+Полный анализ всех инструментов:
+```bash
+wsl .codacy/cli.sh analyze --format sarif --output codacy-results.sarif
+```
+
+CLI принимает флаг `--tool` для выборочного запуска (pmd, trivy, semgrep, pylint, eslint, dartanalyzer и др.).
+
+## Связка с MCP
+
+После появления shim MCP автоматически вызывает `codacy_cli_analyze` для изменённых файлов. Если снова увидите `Command failed: wsl …`, проверьте:
+
+1. Существует ли `~/.local/bin/wsl` и имеет ли он права на исполнение (`chmod +x`).
+2. Возвращает ли `which wsl` путь к shim.
+3. Выполняется ли вручную `wsl .codacy/cli.sh analyze --tool pmd --format text`.
+
+## Полезные команды
 
 ```bash
-./codacy-analyze.sh
+# Обновление CLI до свежей версии
+wsl .codacy/cli.sh update
+
+# Проверка установленной версии
+wsl .codacy/cli.sh version
+
+# Установка дополнительных инструментов (обычно не требуется)
+
+
+# Анализ зависимостей только Trivy
+wsl .codacy/cli.sh analyze --tool trivy --format text
+
+# Полный анализ с выгрузкой SARIF
+wsl .codacy/cli.sh analyze --format sarif --output codacy-results.sarif
 ```
 
-Или напрямую:
+## Если вы не в WSL
 
-```bash
-codacy-cli analyze --format sarif --output codacy-results.sarif
-```
+- **Чистый Linux / macOS:** можно напрямую запускать `.codacy/cli.sh analyze …`, shim не нужен.
+- **Windows без WSL:** используйте официальный установщик Codacy CLI или задействуйте GitHub Actions.
 
-> Внутренние MCP-проверки вызывают `codacy_cli_analyze`, поэтому shim `wsl` из предыдущего раздела обязателен. Для ручного анализа по-прежнему используйте `codacy-cli` или скрипт `./codacy-analyze.sh`.
+## Последние результаты (октябрь 2025)
 
-Codacy CLI v2 выполняет анализ целиком — выбор отдельных файлов пока не поддерживается. Для сфокусированных проверок можно комбинировать инструменты (например, `--tool pmd`) или запускать Codacy из IDE.
+- Semgrep OSS — 0 findings (639 правил / 85 файлов)
+- Trivy — критических уязвимостей не найдено
+- PMD7, Revive, ESLint, Pylint, Dartanalyzer завершаются без ошибок
+- Обновления зависимостей: Guava 24.1.1-jre, Jackson 2.17.2, Avro 1.11.4, commons-compress 1.26.0
 
-### Запуск отдельного инструмента
-
-```bash
-./codacy-analyze.sh --tool pmd
-./codacy-analyze.sh --tool trivy
-./codacy-analyze.sh --tool semgrep
-```
-
-### Форматы вывода
-
-- **SARIF** (рекомендуется для GitHub Code Scanning):
-  ```bash
-  ./codacy-analyze.sh --format sarif --output results.sarif
-  ```
-
-- **JSON**:
-  ```bash
+После настройки запустите анализ, чтобы убедиться в отсутствии регрессий.
   ./codacy-analyze.sh --format json --output results.json
-  ```
-
-- **Text** (консольный вывод):
-  ```bash
-  ./codacy-analyze.sh --format text
-  ```
-
-## Результаты последнего анализа
-
-**Дата:** 17 октября 2025 (последний прогон 14:40 по ALMT)
-
-**Инструменты:**
-- ✅ Semgrep OSS — 0 findings (639 правил, 85 файлов)
-- ✅ Trivy — уязвимостей не найдено
-- ✅ PMD7 — 0 code quality issues
-- ✅ Revive — успешно завершается (заменён бинарь для darwin/arm64)
-- ✅ ESLint — completed
-- ✅ Pylint — completed
-- ✅ Dartanalyzer — completed
-
-**Всего найдено:** 0 проблем качества кода + 0 уязвимостей
-
-### Основные уязвимости в зависимостях
-
-- Guava обновлена до `24.1.1-jre`, CVE-2018-10237 закрыта.
-- Jackson — `2.17.2`, уязвимостей нет.
-- Avro — `1.11.4`, устранены CVE-2023-39410/2024-47561.
-- commons-compress — `1.26.0`, устранены CVE-2024-25710/26308.
-
-## Интеграция с CI/CD
-
-### GitHub Actions
-
-```yaml
-name: Code Quality
-
-on: [push, pull_request]
-
-jobs:
-  codacy:
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v3
-      
-      - name: Install Codacy CLI
-        run: |
-          brew tap codacy/codacy-cli-v2
-          brew install codacy/codacy-cli-v2/codacy-cli-v2
-      
-      - name: Run Analysis
-        run: codacy-cli analyze --format sarif --output codacy-results.sarif
-      
-      - name: Upload to GitHub Code Scanning
-        uses: github/codeql-action/upload-sarif@v2
-        with:
-          sarif_file: codacy-results.sarif
-```
-
-### Локальная pre-commit hook
-
-Создайте файл `.git/hooks/pre-commit`:
-
-```bash
-#!/bin/bash
-codacy-cli analyze --tool pmd --format text
-```
-
-## Игнорирование файлов
-
-Добавлено в `.gitignore`:
-
-```
-# === Codacy / Code Quality ===
-codacy-results.json
-codacy-results.sarif
-.codacy/
-```
-
-## Команды для работы
-
-```bash
-# Обновление Codacy CLI
-codacy-cli update
-
-# Установка инструментов
-codacy-cli install
-
-# Справка
-codacy-cli --help
-codacy-cli analyze --help
-
-# Версия
-codacy-cli version
-
-# Настройка конфигурации
-codacy-cli config --help
-```
-
-## Настройка конкретных правил
-
-Отредактируйте соответствующие файлы в `.codacy/tools-configs/`:
-
-- PMD правила: `.codacy/tools-configs/pmd.xml`
-- Trivy: `.codacy/tools-configs/trivy.yaml`
-- Semgrep: `.codacy/tools-configs/semgrep.yaml`
-
-Или отредактируйте главный файл: `.codacy/codacy.yaml`
-
-## Полезные ссылки
-
-- [Codacy CLI v2 GitHub](https://github.com/codacy/codacy-cli-v2)
-- [Документация](https://docs.codacy.com/getting-started/codacy-cli/)
-- [Supported Tools](https://docs.codacy.com/getting-started/supported-languages-and-tools/)

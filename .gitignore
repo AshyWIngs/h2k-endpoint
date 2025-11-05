@@ -4,16 +4,23 @@ logs/**
 *.log
 
 # --- IDE/редакторы ---
-.vscode/
-!.vscode/
+# VS Code: по умолчанию не коммитим локальные настройки,
+# при необходимости разрешаем отдельные файлы ниже
+.vscode/*
 !.vscode/settings.json
+!.vscode/extensions.json
+
+# IntelliJ IDEA
 .idea/
 *.iml
-*.code-workspace
+out/
+
+# Eclipse
 .classpath
 .project
 .settings/
-.codacy
+bin/
+tmp/
 
 # --- Мусор ОС ---
 .DS_Store
@@ -33,8 +40,6 @@ Thumbs.db
 
 # === Maven / сборка ===
 target/
-# В редких случаях META-INF лежит в корне — игнорируем.
-META-INF/
 pom.xml.versionsBackup
 dependency-reduced-pom.xml
 release.properties
@@ -46,6 +51,8 @@ surefire-reports/
 failsafe-reports/
 
 # === Codacy / Code Quality ===
+# Конфигурация Codacy хранится в репозитории (.codacy/),
+# игнорируем лишь артефакты запусков локального анализа
 .codacy.yml
 codacy-analyze.sh
 codacy-lizard.json
@@ -53,12 +60,31 @@ codacy-results.json
 codacy-results.sarif
 codacy-security.sarif
 *.sarif
-.codacy/
+.codacy/logs/
 
 # --- Автоматические инструкции и служебные каталоги ---
-.github/instructions/
-.github/appmod-java/
-.mvn/
+# Все файлы в .github/ и .mvn/ обычно должны быть под контролем версий,
+# поэтому не игнорируем их здесь.
 
-#Ignore vscode AI rules
-.github/instructions/codacy.instructions.md
+# --- Прочее ---
+# Краш-дампы JVM
+hs_err_pid*
+replay_pid*
+
+# Классы Java (если вдруг созданы не в target/)
+*.class
+
+# Патчи и резервные файлы
+*.orig
+*.rej
+
+# SonarQube локальные артефакты
+.scannerwork/
+
+# --- Личные инструменты и IDE-кэши ---
+.serena/
+.codex/
+.sonarcloud.properties
+
+# Локальные вспомогательные скрипты среды
+scripts/install-codacy-wsl-shim.sh

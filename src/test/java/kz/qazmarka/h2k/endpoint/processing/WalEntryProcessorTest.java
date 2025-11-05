@@ -38,7 +38,6 @@ import org.junit.jupiter.api.Test;
 
 import io.confluent.kafka.schemaregistry.client.MockSchemaRegistryClient;
 import kz.qazmarka.h2k.config.H2kConfig;
-import kz.qazmarka.h2k.endpoint.processing.WalEntryProcessor.WalMetrics;
 import kz.qazmarka.h2k.endpoint.topic.TopicManager;
 import kz.qazmarka.h2k.kafka.ensure.TopicEnsurer;
 import kz.qazmarka.h2k.kafka.producer.batch.BatchSender;
@@ -82,19 +81,11 @@ class WalEntryProcessorTest {
 
         processWalEntry(processor, walEntry("row1", "d"), 10);
 
-        WalMetrics metrics = processor.metrics();
-        assertEquals(1, metrics.entries());
-        assertEquals(1, metrics.rows());
-        assertEquals(1, metrics.cells());
-        assertEquals(0, metrics.filteredRows());
+        assertMetrics(processor, 1, 1, 1, 0, "после первой записи");
 
         processWalEntry(processor, walEntry("row2", "x"), 10);
 
-        WalMetrics after = processor.metrics();
-        assertEquals(2, after.entries());
-        assertEquals(2, after.rows());
-        assertEquals(2, after.cells());
-        assertEquals(1, after.filteredRows());
+        assertMetrics(processor, 2, 2, 2, 1, "после второй записи с фильтрацией");
     }
 
     /** Проверяет, что пустая запись WAL игнорируется и метрики не изменяются. */
@@ -108,9 +99,7 @@ class WalEntryProcessorTest {
 
         processWalEntry(scenario.processor, entry, 3);
 
-        WalEntryProcessor.WalMetrics metrics = scenario.processor.metrics();
-        assertEquals(0, metrics.entries(), "Пустая запись не должна увеличивать счётчик записей");
-        assertEquals(0, metrics.rows(), "Пустая запись не должна учитывать строки");
+        assertMetrics(scenario.processor, 0, 0, 0, 0, "после пустой записи");
         assertTrue(scenario.producer.history().isEmpty(), "Kafka не должен получать сообщений для пустого WAL");
     }
 
@@ -122,20 +111,18 @@ class WalEntryProcessorTest {
         WAL.Entry allowed = walEntryWithFamilies("row-allowed", "aux");
         processWalEntry(scenario.processor, allowed, 4);
 
-        WalEntryProcessor.WalMetrics afterAllowed = scenario.processor.metrics();
-        assertEquals(1, afterAllowed.entries(), "Ожидается обработка первой записи WAL");
-        assertEquals(1, afterAllowed.rows(), "Строка с допустимым CF должна учитываться");
-        assertEquals(0, afterAllowed.filteredRows(), "При разрешённом CF фильтр не должен срабатывать");
-        assertEquals(1, scenario.producer.history().size(), "Kafka должен получить сообщение с разрешённым CF");
+    assertMetrics(scenario.processor, 1, 1, 1, 0,
+        "после строки с разрешённым CF");
+    assertHistorySize(scenario.producer, 1,
+        "Kafka должен получить сообщение с разрешённым CF");
 
         WAL.Entry denied = walEntryWithFamilies("row-denied", "forbidden");
         processWalEntry(scenario.processor, denied, 4);
 
-        WalEntryProcessor.WalMetrics afterDenied = scenario.processor.metrics();
-        assertEquals(2, afterDenied.entries(), "Счётчик записей WAL должен увеличиться");
-        assertEquals(2, afterDenied.rows(), "Вторая строка засчитывается как просмотренная");
-        assertEquals(1, afterDenied.filteredRows(), "Строка с запрещённым CF должна отфильтроваться");
-        assertEquals(1, scenario.producer.history().size(), "Kafka не должен получать сообщения по запрещённому CF");
+    assertMetrics(scenario.processor, 2, 2, 2, 1,
+        "после строки с запрещённым CF");
+    assertHistorySize(scenario.producer, 1,
+        "Kafka не должен получать сообщения по запрещённому CF");
     }
 
     @Test
@@ -146,26 +133,19 @@ class WalEntryProcessorTest {
 
         processWalEntry(scenario.processor, entry, 2);
 
-        WalEntryProcessor.WalMetrics metrics = scenario.processor.metrics();
-        assertEquals(1, metrics.entries(), "Запись WAL должна быть обработана");
-        assertEquals(1, metrics.rows(), "Строка должна пройти без фильтрации");
-        assertEquals(0, metrics.filteredRows(), "Фильтр отключён и не должен считать строки");
-        assertEquals(1, scenario.producer.history().size(), "Kafka должен получить сообщение при отключённом фильтре");
+    assertMetrics(scenario.processor, 1, 1, 1, 0,
+        "после обработки записи при выключенном фильтре");
+    assertHistorySize(scenario.producer, 1,
+        "Kafka должен получить сообщение при отключённом фильтре");
     }
 
     @Test
     @DisplayName("Одно WAL-событие с несколькими rowkey отправляет отдельные сообщения")
     void multiRowEntryProducesIndividualMessages() throws Exception {
         PhoenixTableMetadataProvider provider = provider(new String[]{"d"});
-        Configuration cfg = new Configuration(false);
-        cfg.set("h2k.kafka.bootstrap.servers", "mock:9092");
-        cfg.set("h2k.avro.sr.urls", "http://mock");
-        cfg.set("h2k.avro.schema.dir", Paths.get("src", "test", "resources", "avro").toAbsolutePath().toString());
-        cfg.set("h2k.topic.pattern", "${namespace}.${qualifier}");
-
-        H2kConfig h2kConfig = H2kConfig.from(cfg, "mock:9092", provider);
-        PayloadBuilder payloadBuilder = new PayloadBuilder(decoder(), h2kConfig, new MockSchemaRegistryClient());
-        TopicManager topicManager = new TopicManager(h2kConfig.getTopicSettings(), TopicEnsurer.disabled());
+        H2kConfig h2kConfig = buildConfig(provider);
+        PayloadBuilder payloadBuilder = newPayloadBuilder(h2kConfig);
+        TopicManager topicManager = newTopicManager(h2kConfig);
         CapturingProducer producer = new CapturingProducer();
 
         try (WalEntryProcessor processor = new WalEntryProcessor(payloadBuilder, topicManager, producer, h2kConfig);
@@ -173,10 +153,8 @@ class WalEntryProcessorTest {
             WAL.Entry entry = walEntryWithMultipleRows("rk-a", "rk-b");
             processor.process(entry, sender);
 
-            WalEntryProcessor.WalMetrics metrics = processor.metrics();
-            assertEquals(1, metrics.entries(), "Ожидается один обработанный WAL");
-            assertEquals(2, metrics.rows(), "Обе строки должны быть отправлены");
-            assertEquals(2, metrics.cells(), "Каждая строка содержит по одной ячейке");
+            assertMetrics(processor, 1, 2, 2, 0,
+                    "для событий с несколькими rowkey");
         }
 
         assertEquals(Arrays.asList("rk-a", "rk-b"), producer.keys,
@@ -224,15 +202,14 @@ class WalEntryProcessorTest {
 
         processWalEntry(scenario.processor, entry, 3);
 
-        WalEntryProcessor.WalMetrics metrics = scenario.processor.metrics();
-        assertEquals(cellsCount, metrics.cells(), "Все ячейки должны быть обработаны");
-        assertEquals(1, metrics.rows(), "Ожидается одна строка для большого rowkey");
+    assertMetrics(scenario.processor, 1, 1, cellsCount, 0,
+        "для строки с большим количеством ячеек");
         assertTrue(scenario.processor.rowBufferUpsizeCount() > 0,
                 "Ожидается увеличение буфера");
         assertTrue(scenario.processor.rowBufferTrimCount() > 0,
                 "Усадка буфера должна сработать для длинной строки");
-        assertEquals(1, scenario.producer.history().size(),
-                "Kafka должна получить ровно одну запись для длинной строки");
+    assertHistorySize(scenario.producer, 1,
+        "Kafka должна получить ровно одну запись для длинной строки");
     }
 
     @Test
@@ -247,11 +224,10 @@ class WalEntryProcessorTest {
             }
         }
 
-        WalEntryProcessor.WalMetrics metrics = scenario.processor.metrics();
-        assertEquals(entryCount, metrics.rows(), "Каждая строка должна быть учтена");
-        assertEquals(entryCount, metrics.cells(), "Для тестового батча одна ячейка на строку");
-        assertEquals(entryCount, scenario.producer.history().size(),
-                "Kafka должна получить все записи батча");
+    assertMetrics(scenario.processor, entryCount, entryCount, entryCount, 0,
+        "при обработке большого батча");
+    assertHistorySize(scenario.producer, entryCount,
+        "Kafka должна получить все записи батча");
     }
 
     @Test
@@ -276,7 +252,7 @@ class WalEntryProcessorTest {
                 sender);
         sender.flush();
 
-        assertEquals(1, scenario.producer.history().size(), "Ожидается публикация строки");
+        assertHistorySize(scenario.producer, 1, "Ожидается публикация строки");
         org.apache.kafka.clients.producer.ProducerRecord<RowKeySlice, byte[]> produced = scenario.producer.history().get(0);
         assertEquals(scenario.topicManager.resolveTopic(TABLE), produced.topic());
         assertTrue(java.util.Arrays.equals(row, produced.key().toByteArray()), "Ключ должен совпасть с rowkey");
@@ -288,16 +264,10 @@ class WalEntryProcessorTest {
     void producerFailurePropagatesAsExecutionException() {
         // Конфигурация и метаданные как в обычном сценарии
         PhoenixTableMetadataProvider provider = provider(new String[]{"d"});
-        Configuration cfg = new Configuration(false);
-        cfg.set("h2k.kafka.bootstrap.servers", "mock:9092");
-        cfg.set("h2k.avro.sr.urls", "http://mock");
-        cfg.set("h2k.avro.schema.dir", Paths.get("src", "test", "resources", "avro").toAbsolutePath().toString());
-        cfg.set("h2k.topic.pattern", "${namespace}.${qualifier}");
+        H2kConfig h2kConfig = buildConfig(provider);
 
-        H2kConfig h2kConfig = H2kConfig.from(cfg, "mock:9092", provider);
-
-        PayloadBuilder payloadBuilder = new PayloadBuilder(decoder(), h2kConfig, new MockSchemaRegistryClient());
-        TopicManager topicManager = new TopicManager(h2kConfig.getTopicSettings(), TopicEnsurer.disabled());
+        PayloadBuilder payloadBuilder = newPayloadBuilder(h2kConfig);
+        TopicManager topicManager = newTopicManager(h2kConfig);
 
         // Продьюсер, у которого send() всегда возвращает exceptional future
         class FailingProducer implements org.apache.kafka.clients.producer.Producer<RowKeySlice, byte[]> {
@@ -351,6 +321,26 @@ class WalEntryProcessorTest {
         }
     }
 
+    private static void assertMetrics(WalEntryProcessor processor,
+                                      int expectedEntries,
+                                      int expectedRows,
+                                      int expectedCells,
+                                      int expectedFilteredRows,
+                                      String context) {
+        WalEntryProcessor.WalMetrics metrics = processor.metrics();
+        String suffix = context == null || context.isEmpty() ? "" : " (" + context + ")";
+        assertEquals(expectedEntries, metrics.entries(), "Некорректное число записей" + suffix);
+        assertEquals(expectedRows, metrics.rows(), "Некорректное число строк" + suffix);
+        assertEquals(expectedCells, metrics.cells(), "Некорректное число ячеек" + suffix);
+        assertEquals(expectedFilteredRows, metrics.filteredRows(), "Некорректное число отфильтрованных строк" + suffix);
+    }
+
+    private static void assertHistorySize(MockProducer<RowKeySlice, byte[]> producer,
+                                          int expected,
+                                          String message) {
+        assertEquals(expected, producer.history().size(), message);
+    }
+
     private static final class CapturingProducer implements Producer<RowKeySlice, byte[]> {
         final List<String> keys = new java.util.ArrayList<>();
 
@@ -392,19 +382,30 @@ class WalEntryProcessorTest {
 
     private static WalScenario createScenario(String[] cfFamilies) {
         PhoenixTableMetadataProvider provider = provider(cfFamilies);
+        H2kConfig h2kConfig = buildConfig(provider);
+
+        PayloadBuilder payloadBuilder = newPayloadBuilder(h2kConfig);
+        TopicManager topicManager = newTopicManager(h2kConfig);
+        MockProducer<RowKeySlice, byte[]> producer = new MockProducer<>(true, new RowKeySliceSerializer(), new ByteArraySerializer());
+        WalEntryProcessor processor = new WalEntryProcessor(payloadBuilder, topicManager, producer, h2kConfig);
+        return new WalScenario(processor, producer, payloadBuilder, topicManager);
+    }
+
+    private static H2kConfig buildConfig(PhoenixTableMetadataProvider provider) {
         Configuration cfg = new Configuration(false);
         cfg.set("h2k.kafka.bootstrap.servers", "mock:9092");
         cfg.set("h2k.avro.sr.urls", "http://mock");
         cfg.set("h2k.avro.schema.dir", Paths.get("src", "test", "resources", "avro").toAbsolutePath().toString());
         cfg.set("h2k.topic.pattern", "${namespace}.${qualifier}");
+        return H2kConfig.from(cfg, "mock:9092", provider);
+    }
 
-        H2kConfig h2kConfig = H2kConfig.from(cfg, "mock:9092", provider);
+    private static PayloadBuilder newPayloadBuilder(H2kConfig h2kConfig) {
+        return new PayloadBuilder(decoder(), h2kConfig, new MockSchemaRegistryClient());
+    }
 
-    PayloadBuilder payloadBuilder = new PayloadBuilder(decoder(), h2kConfig, new MockSchemaRegistryClient());
-        TopicManager topicManager = new TopicManager(h2kConfig.getTopicSettings(), TopicEnsurer.disabled());
-        MockProducer<RowKeySlice, byte[]> producer = new MockProducer<>(true, new RowKeySliceSerializer(), new ByteArraySerializer());
-        WalEntryProcessor processor = new WalEntryProcessor(payloadBuilder, topicManager, producer, h2kConfig);
-        return new WalScenario(processor, producer, payloadBuilder, topicManager);
+    private static TopicManager newTopicManager(H2kConfig h2kConfig) {
+        return new TopicManager(h2kConfig.getTopicSettings(), TopicEnsurer.disabled());
     }
 
     private static PhoenixTableMetadataProvider provider(String[] cfFamilies) {

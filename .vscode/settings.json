@@ -72,5 +72,7 @@
       "args": ["-y", "@upstash/context7-mcp", "--api-key", "${env:CONTEXT7_API_KEY}"],
       "cwd": "${workspaceFolder}"
     }
-  }
+  },
+  "chatgpt.runCodexInWindowsSubsystemForLinux": true,
+  "chatgpt.commentCodeLensEnabled": true
 }

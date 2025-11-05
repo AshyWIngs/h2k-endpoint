@@ -1,0 +1,284 @@
+# Руководство по разработке: логирование и диагностика
+
+## Общие принципы
+
+1. **Все сообщения на русском языке** — логи, исключения, диагностические выводы должны быть понятны эксплуатирующей команде без необходимости перевода.
+
+2. **Javadoc на русском** — документация классов, методов и полей должна быть подробной и написана на русском языке, чтобы помочь будущим разработчикам быстро понять назначение компонентов.
+
+3. **Инкапсуляция диагностических структур** — метрики, счётчики, диагностические классы должны быть изолированы и не влиять на горячий путь обработки данных.
+
+## Уровни логирования
+
+Используйте Log4j 1.x с корректными уровнями:
+
+### DEBUG
+Детальная информация для диагностики:
+```java
+/**
+ * Логирует детали обработки WAL-записи для отладки.
+ */
+if (LOG.isDebugEnabled()) {
+    LOG.debug("Обработка WAL-записи: таблица=" + table + ", строк=" + rowCount + ", ячеек=" + cellCount);
+}
+```
+
+**Когда использовать:**
+- Подробности внутренней работы алгоритмов
+- Промежуточные значения в вычислениях
+- Детали взаимодействия с внешними системами
+
+### INFO
+Важные события в штатном режиме:
+```java
+/**
+ * Информирует о запуске процесса репликации.
+ */
+LOG.info("Запущен KafkaReplicationEndpoint: bootstrap=" + bootstrapServers + ", топиков=" + topicCount);
+```
+
+**Когда использовать:**
+- Запуск/остановка компонентов
+- Успешное завершение важных операций
+- Статистика периодических задач
+
+### WARN
+Потенциальные проблемы, не останавливающие работу:
+```java
+/**
+ * Предупреждает о неэффективной конфигурации CF-фильтра.
+ */
+LOG.warn("CF-фильтр таблицы " + tableName + " практически не работает: " +
+         "обработано " + totalRows + " строк, отфильтровано " + filteredRows + 
+         " (" + String.format("%.2f", filterRatio * 100) + "%). " +
+         "Проверьте список CF '" + cfList + "'.");
+```
+
+**Когда использовать:**
+- Неоптимальная конфигурация
+- Рискованные ситуации (переполнение буферов, высокая нагрузка)
+- Устаревшие настройки или deprecated-функциональность
+- Временные сбои с автоматическим восстановлением
+
+### ERROR
+Критические ошибки, требующие вмешательства:
+```java
+/**
+ * Логирует критическую ошибку при регистрации Avro-схемы.
+ */
+LOG.error("Avro Confluent: регистрация схемы subject=" + subject + 
+          " окончательно провалилась после " + maxRetries + " попыток: " + 
+          cause.getMessage(), cause);
+```
+
+**Когда использовать:**
+- Невосстановимые ошибки
+- Сбои, приводящие к потере данных
+- Проблемы с критичными внешними системами
+
+## Форматирование сообщений
+
+### Ключевые параметры в начале
+```java
+// ✅ Хорошо
+LOG.warn("Топик 'orders': не удалось создать (таймаут " + timeoutMs + " мс)");
+
+// ❌ Плохо
+LOG.warn("Не удалось создать топик из-за таймаута " + timeoutMs + " мс для 'orders'");
+```
+
+### Контекст для диагностики
+Включайте достаточно информации для воспроизведения:
+```java
+// ✅ Хорошо
+LOG.error("Ошибка при отправке сообщения: топик='" + topic + 
+          "', partition=" + partition + ", offset=" + offset, exception);
+
+// ❌ Плохо
+LOG.error("Ошибка отправки", exception);
+```
+
+### Маскировка чувствительных данных
+```java
+/**
+ * Маскирует пароль Schema Registry для логирования.
+ */
+private String maskPassword(String password) {
+    if (password == null || password.isEmpty()) {
+        return "";
+    }
+    return password.substring(0, Math.min(2, password.length())) + "***";
+}
+
+LOG.info("Schema Registry: подключение к " + srUrl + 
+         ", пользователь=" + username + ", пароль=" + maskPassword(password));
+```
+
+## Диагностические классы
+
+### Принцип изоляции
+Диагностические компоненты (например, `WalDiagnostics`) должны:
+- Быть отключаемыми через конфигурацию (`h2k.observers.enabled=false`)
+- Не влиять на производительность горячего пути
+- Аккумулировать данные асинхронно
+- Выдавать рекомендации в WARN-логах
+
+Пример:
+```java
+/**
+ * Диагностический наблюдатель за обработкой WAL-записей.
+ * Отключён по умолчанию; включайте только для диагностики конфигурации.
+ * 
+ * @see kz.qazmarka.h2k.config.H2kConfig#isObserversEnabled()
+ */
+public class WalDiagnostics {
+    
+    /**
+     * Проверяет эффективность CF-фильтра и выдаёт рекомендации.
+     *
+     * @param tableName имя таблицы
+     * @param totalRows общее количество обработанных строк
+     * @param filteredRows количество отфильтрованных строк
+     * @param cfList список семейств колонок из конфигурации
+     */
+    public void checkCfFilterEfficiency(TableName tableName, 
+                                       long totalRows, 
+                                       long filteredRows, 
+                                       String cfList) {
+        if (totalRows < DIAGNOSTIC_THRESHOLD) {
+            return; // Недостаточно данных для анализа
+        }
+        
+        double filterRatio = (double) filteredRows / totalRows;
+        
+        if (filterRatio < 0.01) {
+            LOG.warn("CF-фильтр таблицы " + tableName + 
+                     " практически не работает: обработано " + totalRows + 
+                     " строк, отфильтровано " + filteredRows + 
+                     " (" + String.format("%.2f%%", filterRatio * 100) + "). " +
+                     "Проверьте список CF '" + cfList + "'.");
+        } else if (filterRatio > 0.95) {
+            LOG.warn("CF-фильтр таблицы " + tableName + 
+                     " отбрасывает почти всё: обработано " + totalRows + 
+                     " строк, отфильтровано " + filteredRows + 
+                     " (" + String.format("%.2f%%", filterRatio * 100) + "). " +
+                     "Проверьте конфигурацию CF '" + cfList + "'.");
+        }
+    }
+}
+```
+
+### Метрики и счётчики
+Используйте инкапсулированные структуры:
+```java
+/**
+ * Метрики обработки WAL-записей.
+ * Иммутабельная структура для потокобезопасного доступа.
+ */
+public static class WalMetrics {
+    private final long entries;    // Количество WAL-записей
+    private final long rows;       // Количество строк
+    private final long cells;      // Количество ячеек
+    private final long filteredRows; // Количество отфильтрованных строк
+    
+    /**
+     * Создаёт снимок метрик.
+     *
+     * @param entries количество обработанных WAL-записей
+     * @param rows количество обработанных строк
+     * @param cells количество обработанных ячеек
+     * @param filteredRows количество отфильтрованных строк
+     */
+    public WalMetrics(long entries, long rows, long cells, long filteredRows) {
+        this.entries = entries;
+        this.rows = rows;
+        this.cells = cells;
+        this.filteredRows = filteredRows;
+    }
+    
+    /** Возвращает количество обработанных WAL-записей. */
+    public long entries() { return entries; }
+    
+    /** Возвращает количество обработанных строк. */
+    public long rows() { return rows; }
+    
+    /** Возвращает количество обработанных ячеек. */
+    public long cells() { return cells; }
+    
+    /** Возвращает количество отфильтрованных строк. */
+    public long filteredRows() { return filteredRows; }
+}
+```
+
+## Исключения
+
+### Создание исключений
+```java
+/**
+ * Выбрасывается, когда не удаётся зарегистрировать Avro-схему в Schema Registry.
+ */
+public class SchemaRegistrationException extends IOException {
+    
+    /**
+     * Создаёт исключение с описанием ошибки.
+     *
+     * @param subject имя subject в Schema Registry
+     * @param cause исходная причина ошибки
+     */
+    public SchemaRegistrationException(String subject, Throwable cause) {
+        super("Не удалось зарегистрировать схему для subject '" + subject + "': " + 
+              cause.getMessage(), cause);
+    }
+}
+```
+
+### Обработка исключений
+```java
+try {
+    producer.send(record).get(timeoutMs, TimeUnit.MILLISECONDS);
+} catch (TimeoutException e) {
+    LOG.warn("Таймаут отправки сообщения в топик '" + topic + 
+             "' (превышен лимит " + timeoutMs + " мс). Повтор будет выполнен.");
+    // Логика повтора...
+} catch (ExecutionException e) {
+    LOG.error("Критическая ошибка отправки в Kafka: топик='" + topic + 
+              "', ключ=" + Arrays.toString(key), e.getCause());
+    throw new IOException("Не удалось отправить сообщение в Kafka", e.getCause());
+}
+```
+
+## Тестирование логирования
+
+### Проверка уровней
+```java
+@Test
+@DisplayName("WARN для неэффективного CF-фильтра")
+void warnOnInefficientCfFilter() {
+    // Настройка мок-логера для перехвата WARN
+    // ...
+    
+    diagnostics.checkCfFilterEfficiency(TABLE, 1000, 5, "d,aux");
+    
+    // Проверка, что WARN содержит ключевые слова
+    assertTrue(capturedWarnings.stream()
+        .anyMatch(msg -> msg.contains("CF-фильтр") && 
+                         msg.contains("практически не работает")),
+               "Ожидается предупреждение о неэффективном фильтре");
+}
+```
+
+## Контрольный список перед коммитом
+
+- [ ] Все новые логи на русском языке
+- [ ] Javadoc добавлен для public/protected методов и классов
+- [ ] Уровни логирования выбраны корректно (DEBUG/INFO/WARN/ERROR)
+- [ ] Чувствительные данные замаскированы (пароли, токены)
+- [ ] Диагностические классы изолированы и отключаемы
+- [ ] Исключения содержат контекст для диагностики
+- [ ] Добавлены unit-тесты для новой логики логирования
+
+## См. также
+
+- [Troubleshooting](runbook/troubleshooting.md) — включение DEBUG-режима и разбор типовых ошибок.
+- [Operations](runbook/operations.md) — сбор метрик и мониторинг в продакшене.
+- [Config](config.md) — параметры конфигурации, включая `h2k.observers.enabled`.

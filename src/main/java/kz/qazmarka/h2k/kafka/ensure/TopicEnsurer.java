@@ -9,6 +9,7 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Properties;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.apache.kafka.clients.admin.AdminClient;
 import org.apache.kafka.clients.admin.AdminClientConfig;
@@ -26,6 +27,10 @@ import kz.qazmarka.h2k.kafka.ensure.config.TopicEnsureConfig;
  * Инкапсулирует {@link EnsureCoordinator}, поставляя безопасный NOOP-экземпляр для сценариев,
  * когда ensure отключён конфигурацией или отсутствуют настройки bootstrap. Благодаря этому
  * вызывающий код не обязан проверять {@code null} и может работать с единым API.
+ * 
+ * Фабрика {@link #createIfEnabled(EnsureSettings, TopicNamingSettings, String, Properties)}
+ * использует ленивую инициализацию: фактический {@link AdminClient} и ensure-цепочка создаются по требованию.
+ * Это сокращает время загрузки и объём используемых ресурсов для кластеров, где ensure может не понадобиться.
  */
 public final class TopicEnsurer implements AutoCloseable {
     private static final Logger LOG = LoggerFactory.getLogger(TopicEnsurer.class);
@@ -107,25 +112,16 @@ public final class TopicEnsurer implements AutoCloseable {
             LOG.warn("TopicEnsurer: не задан bootstrap Kafka — ensureTopics будет отключён");
             return disabled();
         }
-        Properties props = new Properties();
+        Properties baseProps = new Properties();
         if (adminProps != null && !adminProps.isEmpty()) {
-            props.putAll(adminProps);
+            baseProps.putAll(adminProps);
         }
-        props.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, trimmedBootstrap);
-        props.put(AdminClientConfig.CLIENT_ID_CONFIG, ensureSettings.getAdminSpec().getClientId());
-        String clientId = prepareClientId(props);
+        baseProps.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, trimmedBootstrap);
+        baseProps.put(AdminClientConfig.CLIENT_ID_CONFIG, ensureSettings.getAdminSpec().getClientId());
         long timeoutMs = ensureSettings.getAdminSpec().getTimeoutMs();
         int timeout = timeoutMs > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) Math.max(timeoutMs, 1L);
-        props.put(AdminClientConfig.REQUEST_TIMEOUT_MS_CONFIG, timeout);
-        AdminClient adminClient = AdminClient.create(props);
-        KafkaTopicAdmin admin = new KafkaTopicAdminClient(adminClient);
-        TopicEnsureConfig config = TopicEnsureConfig.from(ensureSettings, topicSettings);
-
-        try (EnsureLifecycle lifecycle = EnsureLifecycle.create(admin, config, clientId)) {
-            TopicEnsurer ensurer = new TopicEnsurer(lifecycle);
-            lifecycle.transferOwnership();
-            return ensurer;
-        }
+        baseProps.put(AdminClientConfig.REQUEST_TIMEOUT_MS_CONFIG, timeout);
+        return new TopicEnsurer(new LazyEnsureDelegate(ensureSettings, topicSettings, baseProps));
     }
 
     /**
@@ -287,7 +283,7 @@ public final class TopicEnsurer implements AutoCloseable {
             return "TopicEnsurer[disabled]";
         }
         if (mode == Mode.DELEGATE) {
-            return "TopicEnsurer[test]";
+            return "TopicEnsurer[delegate=" + ensureDelegate + "]";
         }
         if (executor == null) {
             return coordinator.toString();
@@ -313,47 +309,167 @@ public final class TopicEnsurer implements AutoCloseable {
         }
     }
 
-    /**
-     * Вспомогательный метод генерации уникального client.id для AdminClient.
-     * Используется для избежания конфликтов MBean AppInfo.
-     */
-    private static String uniqueClientId(String base) {
-        String host = safeHostname();
-        String pid = runtimePid();
-        long ts = System.currentTimeMillis();
-        String prefix = (base == null || base.trim().isEmpty()) ? "h2k-admin" : base.trim();
-        return prefix + "-" + host + "-" + pid + "-" + ts;
-    }
-
-    private static String prepareClientId(Properties props) {
-        String baseId = props.getProperty(AdminClientConfig.CLIENT_ID_CONFIG, "h2k-admin");
-        String clientId = uniqueClientId(baseId);
-        props.put(AdminClientConfig.CLIENT_ID_CONFIG, clientId);
-        return clientId;
-    }
-
-    private static String safeHostname() {
-        try {
-            return InetAddress.getLocalHost().getHostName();
-        } catch (UnknownHostException ignore) {
-            return "host";
-        }
-    }
-
-    private static String runtimePid() {
-        String pid = ManagementFactory.getRuntimeMXBean().getName();
-        int at = pid.indexOf('@');
-        if (at > 0) {
-            return pid.substring(0, at);
-        }
-        return pid;
-    }
-
     private static EnsureRuntimeState resolveState(EnsureRuntimeState provided, EnsureCoordinator coordinator) {
         if (provided != null) {
             return provided;
         }
         return coordinator != null ? coordinator.state() : null;
+    }
+
+    /**
+     * Ленивый делегат ensure-логики: создаёт полноценный {@link TopicEnsurer} только при первом обращении.
+     * Это позволяет уменьшить время инициализации репликации, если ensure включён, но может и не понадобиться.
+     */
+    private static final class LazyEnsureDelegate implements EnsureDelegate {
+        private final EnsureSettings ensureSettings;
+        private final TopicNamingSettings topicSettings;
+        private final Properties baseAdminProps;
+        private final Object initLock = new Object();
+        private final AtomicReference<TopicEnsurer> delegateRef = new AtomicReference<>();
+
+        LazyEnsureDelegate(EnsureSettings ensureSettings,
+                           TopicNamingSettings topicSettings,
+                           Properties baseAdminProps) {
+            this.ensureSettings = ensureSettings;
+            this.topicSettings = topicSettings;
+            this.baseAdminProps = new Properties();
+            if (baseAdminProps != null && !baseAdminProps.isEmpty()) {
+                this.baseAdminProps.putAll(baseAdminProps);
+            }
+        }
+
+        @Override
+        public void ensureTopic(String topic) {
+            ensureActive().ensureTopic(topic);
+        }
+
+        @Override
+        public boolean ensureTopicOk(String topic) {
+            return ensureActive().ensureTopicOk(topic);
+        }
+
+        @Override
+        public void ensureTopics(Collection<String> topics) {
+            if (topics == null || topics.isEmpty()) {
+                return;
+            }
+            ensureActive().ensureTopics(topics);
+        }
+
+        @Override
+        public Map<String, Long> metrics() {
+            TopicEnsurer current = delegateRef.get();
+            if (current == null) {
+                return Collections.emptyMap();
+            }
+            return current.getMetrics();
+        }
+
+        @Override
+        public void close() {
+            TopicEnsurer current = delegateRef.getAndSet(null);
+            if (current != null) {
+                current.close();
+            }
+        }
+
+        private TopicEnsurer ensureActive() {
+            TopicEnsurer current = delegateRef.get();
+            if (current != null) {
+                return current;
+            }
+            synchronized (initLock) {
+                current = delegateRef.get();
+                if (current != null) {
+                    return current;
+                }
+                TopicEnsurer created = buildActiveEnsurer();
+                delegateRef.set(created);
+                if (LOG.isDebugEnabled()) {
+                    LOG.debug("TopicEnsurer: AdminClient и ensure-цепочка созданы лениво");
+                }
+                return created;
+            }
+        }
+
+        @Override
+        public String toString() {
+            return "LazyEnsureDelegate{инициализирован=" + (delegateRef.get() != null) + '}';
+        }
+
+        /**
+         * Создаёт рабочий {@link TopicEnsurer}, копируя базовые настройки {@link AdminClient}
+         * и разворачивая ensure-цепочку. Метод вызывается только один раз внутри синхронизированного блока.
+         *
+         * @return активный {@link TopicEnsurer}, готовый обрабатывать ensure-вызовы
+         */
+        private TopicEnsurer buildActiveEnsurer() {
+            Properties props = new Properties();
+            if (!baseAdminProps.isEmpty()) {
+                props.putAll(baseAdminProps);
+            }
+            String clientId = prepareClientId(props);
+            AdminClient adminClient = AdminClient.create(props);
+            KafkaTopicAdmin admin = new KafkaTopicAdminClient(adminClient);
+            TopicEnsureConfig config = TopicEnsureConfig.from(ensureSettings, topicSettings);
+
+            try (EnsureLifecycle lifecycle = EnsureLifecycle.create(admin, config, clientId)) {
+                TopicEnsurer ensurer = new TopicEnsurer(lifecycle);
+                lifecycle.transferOwnership();
+                return ensurer;
+            }
+        }
+
+        /**
+         * Обновляет client.id для AdminClient, добавляя hostname, PID и метку времени.
+         * Это гарантирует уникальность идентификатора и предотвращает конфликты MBean AppInfo.
+         *
+         * @param props копия настроек AdminClient
+         * @return сгенерированный уникальный client.id
+         */
+        private static String prepareClientId(Properties props) {
+            String baseId = props.getProperty(AdminClientConfig.CLIENT_ID_CONFIG, "h2k-admin");
+            String clientId = uniqueClientId(baseId);
+            props.put(AdminClientConfig.CLIENT_ID_CONFIG, clientId);
+            return clientId;
+        }
+
+        /**
+         * Формирует уникальное имя клиента AdminClient, используя хост, PID процесса и текущую метку времени.
+         *
+         * @param base базовый client.id из конфигурации (может быть пустым)
+         * @return уникальный идентификатор client.id
+         */
+        private static String uniqueClientId(String base) {
+            String host = safeHostname();
+            String pid = runtimePid();
+            long ts = System.currentTimeMillis();
+            String prefix = (base == null || base.trim().isEmpty()) ? "h2k-admin" : base.trim();
+            return prefix + "-" + host + "-" + pid + "-" + ts;
+        }
+
+        /**
+         * @return hostname текущего узла или строку-заглушку при невозможности определения.
+         */
+        private static String safeHostname() {
+            try {
+                return InetAddress.getLocalHost().getHostName();
+            } catch (UnknownHostException ignore) {
+                return "host";
+            }
+        }
+
+        /**
+         * @return PID текущего процесса, извлечённый из MXBean JVM.
+         */
+        private static String runtimePid() {
+            String pid = ManagementFactory.getRuntimeMXBean().getName();
+            int at = pid.indexOf('@');
+            if (at > 0) {
+                return pid.substring(0, at);
+            }
+            return pid;
+        }
     }
 
     /**

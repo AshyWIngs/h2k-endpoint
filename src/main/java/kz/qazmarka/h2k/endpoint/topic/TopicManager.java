@@ -9,10 +9,6 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.LongAdder;
 import java.util.function.LongSupplier;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.RejectedExecutionException;
-import java.util.concurrent.ThreadFactory;
 
 import org.apache.hadoop.hbase.TableName;
 import org.slf4j.Logger;
@@ -25,6 +21,15 @@ import kz.qazmarka.h2k.kafka.ensure.TopicEnsurer;
  * Отвечает за разрешение имён Kafka-топиков и ленивые ensure-вызовы.
  * Использует {@link TopicNamingSettings#resolve(TableName)} для кеширования с учётом шаблона,
  * а также {@link TopicEnsurer} в режиме NOOP/active — вызывающий код не проверяет конфигурацию.
+ * 
+ * Оптимизации производительности:
+ * 
+ *     1. ensure-вызовы выполняются в вызывающем потоке без собственного executor-а,
+ *     так как {@link TopicEnsurer} уже обрабатывает тяжелые операции асинхронно; это сокращает
+ *     время инициализации и уменьшает число фоновых потоков;
+ *     2. кеши имён и метрик по-прежнему используют {@link ConcurrentHashMap}, что обеспечивает
+ *     O(1) доступ в горячем пути без дополнительной синхронизации.
+ * 
  */
 public final class TopicManager {
 
@@ -40,7 +45,6 @@ public final class TopicManager {
     private final ConcurrentMap<String, LongSupplier> extraMetrics = new ConcurrentHashMap<>(8);
     private final ConcurrentMap<String, EnsureState> ensureStates = new ConcurrentHashMap<>(8);
     private final LongAdder ensureSkipped = new LongAdder();
-    private final ExecutorService ensureExecutor;
 
     private static final long ENSURE_SUCCESS_COOLDOWN_MS = TimeUnit.MINUTES.toMillis(1);
     private static final long ENSURE_FAILURE_RETRY_MS = TimeUnit.SECONDS.toMillis(5);
@@ -48,7 +52,6 @@ public final class TopicManager {
     public TopicManager(TopicNamingSettings topicSettings, TopicEnsurer topicEnsurer) {
         this.topicSettings = Objects.requireNonNull(topicSettings, "настройки топиков h2k");
         this.topicEnsurer = topicEnsurer == null ? TopicEnsurer.disabled() : topicEnsurer;
-        this.ensureExecutor = this.topicEnsurer.isEnabled() ? newEnsureExecutor() : null;
     }
 
     /**
@@ -70,6 +73,10 @@ public final class TopicManager {
     /**
      * Ленивая ensure-проверка: при необходимости вызывает {@link TopicEnsurer#ensureTopic(String)}
      * после валидации имени. В режиме NOOP вызов безопасно игнорируется.
+     * 
+     * Вызов выполняется в том же потоке, что и обработка WAL, однако
+     * {@link TopicEnsurer} самостоятельно делегирует тяжёлую работу на фоновые очереди,
+     * поэтому горячий путь репликации остаётся неблокирующим.
      */
     public void ensureTopicIfNeeded(String topic) {
         if (topic == null || topic.isEmpty()) {
@@ -84,7 +91,7 @@ public final class TopicManager {
             ensureSkipped.increment();
             return;
         }
-        scheduleEnsure(topic, state);
+        runEnsure(topic, state);
     }
 
     /**
@@ -176,10 +183,6 @@ public final class TopicManager {
      * Закрывает обёрнутый {@link TopicEnsurer}, проглатывая исключения на случай остановки.
      */
     public void closeQuietly() {
-        ExecutorService executor = ensureExecutor;
-        if (executor != null) {
-            executor.shutdownNow();
-        }
         try {
             topicEnsurer.close();
         } catch (Exception e) {
@@ -189,24 +192,15 @@ public final class TopicManager {
         }
     }
 
-    private void scheduleEnsure(String topic, EnsureState state) {
-        ExecutorService executor = ensureExecutor;
-        if (executor == null) {
-            runEnsure(topic, state);
-            return;
-        }
-        try {
-            executor.submit(() -> runEnsure(topic, state));
-        } catch (RejectedExecutionException ex) {
-            ensureSkipped.increment();
-            state.finish(false, System.currentTimeMillis());
-            LOG.warn("EnsureTopic '{}' не запланирован: {}", topic, ex.getMessage());
-            if (LOG.isDebugEnabled()) {
-                LOG.debug("EnsureTopic '{}' — трассировка отказа планирования", topic, ex);
-            }
-        }
-    }
-
+    /**
+     * Вызывает {@link TopicEnsurer#ensureTopic(String)}, фиксирует результат вызова
+     * и обновляет состояние ограничения частоты. В горячем пути метод выполняется
+     * быстро, поскольку {@link TopicEnsurer} ставит задачи в собственные очереди
+     * и не блокирует поток репликации.
+     *
+     * @param topic имя Kafka-топика, прошедшее предварительную проверку
+     * @param state состояние, управляющее интервалами повторных ensure-вызовов
+     */
     private void runEnsure(String topic, EnsureState state) {
         boolean success = false;
         try {
@@ -220,15 +214,6 @@ public final class TopicManager {
         } finally {
             state.finish(success, System.currentTimeMillis());
         }
-    }
-
-    private ExecutorService newEnsureExecutor() {
-        ThreadFactory factory = r -> {
-            Thread t = new Thread(r, "h2k-topic-ensure");
-            t.setDaemon(true);
-            return t;
-        };
-        return Executors.newSingleThreadExecutor(factory);
     }
 
     /**
