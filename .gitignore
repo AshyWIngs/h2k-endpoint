@@ -85,7 +85,7 @@ replay_pid*
 .serena/
 .codex/
 .sonarcloud.properties
-.codacy
+.codacy/
 
 # Локальные вспомогательные скрипты среды
-scripts/install-codacy-wsl-shim.sh
+scripts/
