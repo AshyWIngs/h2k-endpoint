@@ -63,8 +63,8 @@ codacy-security.sarif
 .codacy/logs/
 
 # --- Автоматические инструкции и служебные каталоги ---
-# Все файлы в .github/ и .mvn/ обычно должны быть под контролем версий,
-# поэтому не игнорируем их здесь.
+.github
+.vscode
 
 # --- Прочее ---
 # Краш-дампы JVM
@@ -85,6 +85,7 @@ replay_pid*
 .serena/
 .codex/
 .sonarcloud.properties
+.codacy
 
 # Локальные вспомогательные скрипты среды
 scripts/install-codacy-wsl-shim.sh
