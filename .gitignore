@@ -45,6 +45,8 @@ dependency-reduced-pom.xml
 release.properties
 pom.xml.releaseBackup
 pom.xml.tag
+META-INF/
+.mvn/
 
 # Отчёты тестов (если выкладывать не планируешь)
 surefire-reports/
