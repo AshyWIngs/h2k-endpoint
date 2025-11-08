@@ -17,16 +17,21 @@ log4j.appender.h2k_stdout=org.apache.log4j.ConsoleAppender
 log4j.appender.h2k_stdout.target=System.err
 log4j.appender.h2k_stdout.encoding=UTF-8
 log4j.appender.h2k_stdout.layout=org.apache.log4j.PatternLayout
-log4j.appender.h2k_stdout.layout.ConversionPattern=%d{ISO8601} %-5p %c{1} [%t] %X{table} %X{cf} %X{region} - %m%n
-log4j.appender.h2k_stdout.Threshold=DEBUG
+log4j.appender.h2k_stdout.layout.ConversionPattern=h2k-endpoint %d{ISO8601} %-5p %c{1} [%t] %X{table} %X{cf} %X{region} - %m%n
+# Для PROD держите INFO, чтобы отсеивать DEBUG на аппендере; для отладки временно ставьте DEBUG
+log4j.appender.h2k_stdout.Threshold=INFO
 log4j.appender.h2k_stdout.ImmediateFlush=true
 log4j.throwableRenderer=org.apache.log4j.EnhancedThrowableRenderer
 
-# === Наш пакет целиком — INFO, вывод в отдельный аппендер без дублирования на root ===
+# === Наш пакет целиком — INFO в проде, вывод только в наш аппендер ===
+# Держите parent-пакет на INFO, а детальный DEBUG включайте точечно на подпакетах/классах ниже.
 log4j.logger.kz.qazmarka.h2k=INFO,h2k_stdout
+# additivity=false — записи НЕ «поднимаются» к rootLogger и не дублируются в его аппендеры.
+# Ставьте true только если осознанно хотите дублировать в корневые appenders.
 log4j.additivity.kz.qazmarka.h2k=false
 
-# === DEBUG для всех пакетов проекта (endpoint/kafka/payload/schema/config/utils) ===
+# === DEBUG для всех модулей проекта (включайте ТОЛЬКО на стенде или на время расследования) ===
+# В проде оставляйте только нужные подпакеты (endpoint + конкретные serializer/ensure) во избежание шума.
 log4j.logger.kz.qazmarka.h2k.endpoint=DEBUG
 log4j.logger.kz.qazmarka.h2k.kafka.ensure=DEBUG
 log4j.logger.kz.qazmarka.h2k.kafka.ensure.admin=DEBUG
@@ -63,6 +68,19 @@ log4j.logger.org.apache.phoenix=WARN
 - Репликацию HBase можно вернуть на `INFO`, когда отладка завершена: оставьте строку, заменив `DEBUG → INFO`.
 - После изменения файла перезапустите RegionServer (`service hbase-regionserver restart` или
   `bin/hbase-daemon.sh restart regionserver`) и проверяйте вывод `journalctl -fu hbase-regionserver`.
+- Все сообщения H2K имеют префикс `h2k-endpoint`, поэтому фильтрация стала проще:
+  ```bash
+  journalctl -u hbase-regionserver-default.service -o cat --since "2 days ago" | grep h2k-endpoint
+  ```
+  Таким образом можно видеть INFO/DEBUG/ERROR сразу, без перечисления названий классов.
+- Для поиска по конкретной таблице добавляйте `grep "table=MY_TABLE"` — значения MDC `table/cf/region` остаются в шаблоне.
+
+### Практические рекомендации по уровням и additivity
+
+- Прод: держите `log4j.logger.kz.qazmarka.h2k=INFO,h2k_stdout` и `log4j.additivity.kz.qazmarka.h2k=false`.
+  Это исключает дублирование в root appenders и оставляет только информационные сообщения.
+- Отладка: временно поднимайте подпакеты до `DEBUG` и одновременно снизьте порог аппендера (`log4j.appender.h2k_stdout.Threshold=DEBUG`), иначе DEBUG‑записи отфильтрует аппендер.
+- `additivity=true` используйте только когда нужно дублирование в корневые аппендеры (например, отдельный файл/сборщик логов). По умолчанию — `false`.
 
 ## Проверка конфигурации
 - Убедиться, что задан h2k.kafka.bootstrap.servers.
@@ -100,18 +118,16 @@ log4j.logger.org.apache.phoenix=WARN
   - Проверить права у Kafka Admin.
   - Проверить h2k.topic.replication и h2k.topic.partitions.
   - Проверить h2k.admin.timeout.ms и h2k.ensure.unknown.backoff.ms.
-  - В логах EnsureCoordinator ищите метрики `ensure.*`, `exists.*`, `create.*` — они показываются при DEBUG и
-    доступны через `TopicManager.getMetrics()`. Поле `unknown.backoff.size` отражает размер очереди ожидания без
-    лишних копий.
-  - Для диагностики отказов репликации добавлены метрики `replicate.failures.total` и `replicate.last.failure.epoch.ms`.
+  - В логах EnsureCoordinator ищите метрики `ensure.*`, `exists.*`, `create.*` — они показываются при DEBUG и доступны через `TopicManager.getMetrics()`. Поле `ensure.бэкофф.размер` отражает размер очереди ожидания без лишних копий.
+  - Для диагностики отказов репликации добавлены метрики `репликация.ошибок.всего` и `репликация.последняя.ошибка.epoch.ms`.
     Они регистрируются через `TopicManager.registerMetric(...)` и доступны в снимке `TopicManager.getMetrics()`.
     Первая — общий счётчик неуспешных попыток `replicate()`, вторая — отметка времени (epoch ms) последней ошибки.
   - Для детального анализа backoff включите DEBUG для `kz.qazmarka.h2k.kafka.ensure.TopicBackoffManager` — в логах
     будет указан дедлайн повторной попытки. Дополнительно можно сериализовать `TopicManager.getMetrics()` в JMX и
-    следить за `ensure.*`/`create.*`/`unknown.backoff.size` в реальном времени.
+    следить за `ensure.*`/`создание.*`/`ensure.бэкофф.размер` в реальном времени.
 
 ### Рост `wal.rowbuffer.*`
-  - Метрики `wal.rowbuffer.upsizes` и `wal.rowbuffer.trims` показывают, как часто горячий путь увеличивает
+  - Метрики `wal.rowbuffer.расширения` и `wal.rowbuffer.сжатия` показывают, как часто горячий путь увеличивает
     временный буфер строк. Upsize происходит, если в строке более 32 ячеек; trim — когда строка содержит ≥4096 ячеек и
     буфер принудительно ужимается назад.
   - Быстрый рост счётчиков указывает, что CF-фильтр пропускает неожиданные колонки или таблица содержит «широкие» строки.

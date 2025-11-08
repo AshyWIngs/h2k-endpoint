@@ -117,7 +117,11 @@ public final class PayloadBuilder implements AutoCloseable {
      */
     @Override
     public void close() {
-        serializer.close();
+        try {
+            serializer.close();
+        } finally {
+            assembler.close();
+        }
     }
 
     private Path resolveSchemaDir(AvroSettings settings) {

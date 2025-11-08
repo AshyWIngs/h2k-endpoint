@@ -30,7 +30,7 @@ import kz.qazmarka.h2k.util.RowKeySlice;
  * Формирует Avro {@link GenericData.Record} для строки WAL без промежуточных карт.
  * План обработки таблицы вычисляется один раз и кешируется.
  */
-final class RowPayloadAssembler {
+final class RowPayloadAssembler implements AutoCloseable {
 
     private static final org.slf4j.Logger LOG =
             org.slf4j.LoggerFactory.getLogger(RowPayloadAssembler.class);
@@ -69,6 +69,11 @@ final class RowPayloadAssembler {
         applyFlags(schema, avroRecord, state, walSeq, walWriteTime);
         schema.verifyPrimaryKey(table, avroRecord);
         return avroRecord;
+    }
+
+    @Override
+    public void close() {
+        qualifierCache.cleanupThreadLocal();
     }
 
     private void ensureRowKeyPresent(TableName table, RowKeySlice rowKey) {
@@ -519,8 +524,11 @@ final class RowPayloadAssembler {
                 return race != null ? race : created;
             } finally {
                 key.clear();
-                lookup.remove();
             }
+        }
+
+        void cleanupThreadLocal() {
+            lookup.remove();
         }
 
         private abstract static class AbstractKey {

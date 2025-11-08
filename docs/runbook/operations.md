@@ -5,7 +5,7 @@
 ## 1. Требования окружения
 
 - Java 8 на RegionServer и Kafka CLI.
-- На каждом RS лежит **толстый JAR** `h2k-endpoint-<версія>.jar` (внутри шейдятся Avro/Jackson/Gson/Confluent 5.3.8).
+- На каждом RS лежит **толстый JAR** `h2k-endpoint-<версия>.jar` (внутри шейдятся Avro/Jackson/Confluent 5.3.8).
 - Kafka clients 2.3.1, без SASL/SSL (безопасность обеспечивается инфраструктурой).
 - Все новые ключи `h2k.*` документируются в [`docs/config.md`](../config.md).
 
@@ -59,7 +59,7 @@ cfg['CONFIG'].select { |k,_| k.start_with?('h2k.') }
 - **Контроль версий** — убедитесь, что на стенде разложен JAR, собранный с `jackson-*-2.17.2` и `guava-24.1.1-jre` (`java -jar h2k-endpoint-*.jar --version` выводит список шейдженных библиотек в логах при старте RS).
 - **Schema Registry** — выполните повторную регистрацию схемы по тестовой таблице (`KafkaReplicationEndpointIntegrationTest` сценарий на стенде: `produce int_test_table`). Логи `ConfluentAvroPayloadSerializer` не должны содержать `No schema registered under subject!` после первой успешной регистрации.
 - **WAL hot-path** — прогоните нагрузочный сценарий (5–10 минут WAL репликации) и сравните метрики `WalCounterService` и `EnsureCoordinator` с предыдущими запусками; всплесков ошибок сериализации быть не должно.
-- **Kafka потребители** — на тестовом consumer убедитесь, что гуавовские структуры (например, `ImmutableMap` в payload) корректно сериализуются и читаются. При необходимости запустите smoke-консьюмер `kafka-console-consumer` и проверьте, что сообщения десериализуются avro-tools без ошибок.
+- **Kafka потребители** — на тестовом consumer убедитесь, что структуры Guava (например, `ImmutableMap` в payload) корректно сериализуются и читаются. При необходимости запустите smoke‑консьюмер `kafka-console-consumer` и проверьте, что сообщения десериализуются avro-tools без ошибок.
 - **Регресс при ensure** — проверьте, что ensure-топики создаются с прежними параметрами, задержек `slowCreate`/таймаутов не прибавилось.
 - **Фиксация результатов** — если все проверки прошли, отметьте выполнение пункта 13 в [`refactor-progress.instructions.md`](../../.github/instructions/refactor-progress.instructions.md) и сохраните ссылку на Grafana/логи в вики команды.
 
@@ -75,7 +75,7 @@ cfg['CONFIG'].select { |k,_| k.start_with?('h2k.') }
 
 1. **Smoke до старта** — на одном RS отключите peer, очистите кэш Confluent (`schema-registry-cli subjects delete --hard default:INT_TEST_TABLE`) и выполните тестовую публикацию `bin/h2k-smoke.sh int_test_table`.
 2. **Регистрация схемы** — убедитесь по логам `ConfluentAvroPayloadSerializer` в качестве INFO-сообщения, что идентификатор схемы получен и fingerprint совпадает (`fingerprint` WARN отсутствует).
-3. **Нагрузочный прогон** — включите peer на стенде, подайте WAL-нагрузку `h2k-wal-driver` минимум на 10 минут. Следите, что `schema.registry.register.failures` не растёт.
+3. **Нагрузочный прогон** — включите peer на стенде, подайте WAL-нагрузку `h2k-wal-driver` минимум на 10 минут. Следите, что `sr.регистрация.ошибок` не растёт.
 4. **Валидация потребителей** — запустите `kafka-console-consumer` (или боевого consumer в dry-run) и `avro-tools frombinary` для нескольких сообщений.
 5. **Ensure контроль** — запросите `TopicEnsurer` метрики (`/metrics` или JMX), проверьте отсутствие повторных попыток создания топиков.
 6. **Завершение** — верните peer в исходное состояние, задокументируйте результаты в журнале.
@@ -109,29 +109,33 @@ Ensure: ok (create retries=0)
    - Всегда читает метаданные WAL (`sequenceId`, `writeTime`) и передаёт их дальше (флаг `includeWalMeta` больше не используется).
    - Собирает CF-фильтр, группирует ячейки по rowkey и добавляет futures в `BatchSender`.
 4. **`BatchSender`** — накапливает Futures и блокирующе вызывает `flush()` при достижении порога `awaitEvery`. При закрытии (`try-with-resources`) гарантирует обработку оставшихся записей.
-5. **Обработка ошибок** — любые исключения ловит `ReplicationExecutor.failReplicate(...)`: пишет WARN/ERROR (stacktrace в DEBUG) и обновляет метрики `replicate.failures.total` и `replicate.last.failure.epoch.ms`. Эти показатели видны через `TopicManager.getMetrics()` и JMX (`H2kMetricsJmx`).
+5. **Обработка ошибок** — любые исключения ловит `ReplicationExecutor.failReplicate(...)`: пишет WARN/ERROR (stacktrace в DEBUG) и обновляет метрики `репликация.ошибок.всего` и `репликация.последняя.ошибка.epoch.ms`. Эти показатели видны через `TopicManager.getMetrics()` и JMX (`H2kMetricsJmx`).
 
-> Админам: при анализе инцидентов фиксируйте DEBUG‑лог `"Репликация: записей=..., awaitEvery=..., awaitTimeoutMs=..."` и текущее значение `replicate.failures.total` — это ускоряет поиск узкого места.
+> Админам: при анализе инцидентов фиксируйте DEBUG‑лог `"Репликация: записей=..., awaitEvery=..., awaitTimeoutMs=..."` и текущее значение `репликация.ошибок.всего` — это ускоряет поиск узкого места.
 
 ## 5. Мониторинг
 
 - `status 'replication'` — `SizeOfLogQueue`, `AgeOfLastShippedOp`.
 - Метрики `TopicEnsurer` (через JMX или логи).
-- `TopicManager.getMetrics()`/JMX: отслеживайте `wal.rowbuffer.upsizes` (широкие строки требуют >32 ячеек) и `wal.rowbuffer.trims` (гигантские строки ≥4096 ячеек). Эти счётчики должны расти медленно; резкий рост указывает, что CF-фильтр пропускает слишком много данных.
+- `TopicManager.getMetrics()`/JMX: отслеживайте `wal.rowbuffer.расширения` (широкие строки требуют >32 ячеек) и `wal.rowbuffer.сжатия` (гигантские строки ≥4096 ячеек). Эти счётчики должны расти медленно; резкий рост указывает, что CF-фильтр пропускает слишком много данных.
 - Schema Registry: `curl $SR/subjects`, latency, ошибки 4xx/5xx.
 - При падении SR Endpoint продолжает отправку с последним зарегистрированным `schemaId` и запускает фоновые
   попытки повторной регистрации (экспоненциальный бэкофф до 8 шагов). Следите за счётчиком
   `SchemaRegistryMetrics.registrationFailures` и логами `Schema Registry недоступен, использую ранее зарегистрированный id`.
-- Ensure-topic: метрика `ensure.cooldown.skipped` показывает количество пропусков ensure-вызовов, заблокированных cooldown-логикой. Если она растёт — ensure срабатывает часто, но находится в окне удержания (1 минута после последнего успеха, 5 секунд после ошибки). Проверьте журналы Kafka или вручную инициируйте ensure для проблемного топика.
+- Ensure-topic: метрика `ensure.пропуски.из-за.паузы` показывает количество пропусков ensure-вызовов, заблокированных логикой паузы (cooldown). Если она растёт — ensure срабатывает часто, но находится в окне удержания (1 минута после последнего успеха, 5 секунд после ошибки). Проверьте журналы Kafka или вручную инициируйте ensure для проблемного топика.
 - Лог `KafkaReplicationEndpoint` выводит throughput каждые 5 с (`Скорость WAL…`).
 
 Добавление Prometheus JMX exporter — см. раздел «Сбор метрик» в [`docs/runbook/troubleshooting.md`](troubleshooting.md#сбор-метрик-через-prometheus).
 
 ## 6. Быстрая диагностика
 
-- Логи: `journalctl -u hbase-regionserver -n 200` или выделенный аппендер `h2k_stdout` (см. troubleshooting).
+- Логи: `journalctl -u hbase-regionserver -n 200 | grep h2k-endpoint` (шаблон логов теперь начинается с префикса) или выделенный аппендер `h2k_stdout` (см. troubleshooting).
 - DEBUG для точечных пакетов (`kz.qazmarka.h2k.endpoint`, `...payload.serializer.avro`, `...schema.registry`) включается через log4j (инструкция — в [`docs/runbook/troubleshooting.md`](troubleshooting.md#отладочное-логирование-replicationendpoint)).
 - Типичные проблемы и решения — в том же файле.
+- Быстрый grep для сводок и медленных операций:
+  - `journalctl -u hbase-regionserver -o cat | grep "Сводка ensure"`
+  - `journalctl -u hbase-regionserver -o cat | grep "Сводка SR"`
+  - `journalctl -u hbase-regionserver -o cat | grep "Медленный сброс батча Kafka"`
 
 ## 7. Полезные ссылки
 
@@ -142,3 +146,24 @@ Ensure: ok (create retries=0)
 - Диагностика: [`docs/runbook/troubleshooting.md`](troubleshooting.md)
 
 Документ держим коротким: если добавляется новая процедура — опишите её здесь одним абзацем и дайте ссылку на подробный гайд.
+
+## Приложение: словарь метрик
+
+Ключи метрик, экспортируемых через `TopicManager.getMetrics()` и JMX:
+
+- wal.записей.всего — сколько записей WAL обработано.
+- wal.строк.всего — сколько строк отправлено в Kafka.
+- wal.ячеек.всего — сколько ячеек обработано.
+- wal.строк.отфильтровано — сколько строк отброшено CF‑фильтром.
+- wal.rowbuffer.расширения — сколько раз буфер строк расширяли >32 ячеек.
+- wal.rowbuffer.сжатия — сколько раз буфер строк ужимали после ≥4096 ячеек.
+- ensure.вызовов.всего/принято/отклонено — счётчики решений ensure.
+- существует.да/нет/неизвестно — результаты describe существования топика.
+- создание.успех/гонка/ошибка — исходы create.
+- ensure.бэкофф.размер — текущая очередь отложенных ensure (шт.).
+- ensure.очередь.ожидает — задач в очереди EnsureExecutor (шт.).
+- ensure.пропуски.из-за.паузы — сколько ensure пропущено из‑за cooldown.
+- ensure.подтверждено.тем — тем в кеше «подтверждённых» ensure.
+- sr.регистрация.успехов/ошибок — регистрации схем в Schema Registry (успехи/ошибки).
+- репликация.ошибок.всего — суммарные отказы replicate().
+- репликация.последняя.ошибка.epoch.ms — отметка последней ошибки (epoch ms).

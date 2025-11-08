@@ -23,8 +23,8 @@ import kz.qazmarka.h2k.schema.registry.PhoenixTableMetadataProvider;
 class H2kConfigBuilderTest {
 
     @Test
-    @DisplayName("buildData: коллекции копируются и не зависят от исходных ссылок")
-    void buildDataCopiesCollections() {
+    @DisplayName("build(): коллекции копируются и не зависят от исходных ссылок")
+    void buildCopiesCollections() {
         H2kConfigBuilder builder = new H2kConfigBuilder("kafka:9092");
 
     Map<String, String> topicConfigs = new HashMap<>();
@@ -66,8 +66,9 @@ class H2kConfigBuilderTest {
                 .done();
 
         builder.observersEnabled(true);
+        builder.jmxEnabled(false);
 
-        H2kConfigData data = builder.buildData();
+        H2kConfig config = builder.build();
 
         // мутируем исходные коллекции — DTO не должно измениться
         topicConfigs.put("retention.ms", "1000");
@@ -75,28 +76,29 @@ class H2kConfigBuilderTest {
         auth.put("basic.password", "secret");
         props.put("mode", "json");
 
-        assertEquals("compact", data.topic.getTopicConfigs().get("cleanup.policy"));
-        assertEquals(1, data.topic.getTopicConfigs().size());
-        assertEquals("http://sr1:8081", data.avro.getRegistryUrls().get(0));
-        assertEquals(1, data.avro.getRegistryUrls().size());
-        assertEquals("user", data.avro.getRegistryAuth().get("basic.username"));
-        assertFalse(data.avro.getRegistryAuth().containsKey("basic.password"));
-        assertEquals("avro", data.avro.getProperties().get("mode"));
-        assertTrue(data.observersEnabled);
+        assertEquals("compact", config.getTopicSettings().getTopicConfigs().get("cleanup.policy"));
+        assertEquals(1, config.getTopicSettings().getTopicConfigs().size());
+        assertEquals("http://sr1:8081", config.getAvroSettings().getRegistryUrls().get(0));
+        assertEquals(1, config.getAvroSettings().getRegistryUrls().size());
+        assertEquals("user", config.getAvroSettings().getRegistryAuth().get("basic.username"));
+        assertFalse(config.getAvroSettings().getRegistryAuth().containsKey("basic.password"));
+        assertEquals("avro", config.getAvroSettings().getProperties().get("mode"));
+        assertTrue(config.isObserversEnabled());
+        assertFalse(config.isJmxEnabled());
 
-        Map<String, String> configsView = data.topic.getTopicConfigs();
+        Map<String, String> configsView = config.getTopicSettings().getTopicConfigs();
         UnsupportedOperationException topicConfigsError = assertThrows(
                 UnsupportedOperationException.class,
                 () -> configsView.put("new", "value"));
         assertNotNull(topicConfigsError);
 
-        List<String> immutableUrls = data.avro.getRegistryUrls();
+        List<String> immutableUrls = config.getAvroSettings().getRegistryUrls();
         UnsupportedOperationException urlsError = assertThrows(
                 UnsupportedOperationException.class,
                 () -> immutableUrls.add("http://invalid:8081"));
         assertNotNull(urlsError);
 
-        Map<String, String> immutableAuth = data.avro.getRegistryAuth();
+        Map<String, String> immutableAuth = config.getAvroSettings().getRegistryAuth();
         UnsupportedOperationException authError = assertThrows(
                 UnsupportedOperationException.class,
                 () -> immutableAuth.put("basic.realm", "demo"));
@@ -104,8 +106,8 @@ class H2kConfigBuilderTest {
     }
 
     @Test
-    @DisplayName("buildData: нормализация граничных значений и safe defaults")
-    void buildDataNormalizesBounds() {
+    @DisplayName("build(): нормализация граничных значений и safe defaults")
+    void buildNormalizesBounds() {
         H2kConfigBuilder builder = new H2kConfigBuilder("kafka:9092");
 
         builder.topic()
@@ -137,25 +139,26 @@ class H2kConfigBuilderTest {
                 .awaitTimeoutMs(0)
                 .done();
 
-        H2kConfigData data = builder.buildData();
+        H2kConfig config = builder.build();
 
-        assertTrue(data.topic.getTopicConfigs().isEmpty());
-        assertTrue(data.avro.getRegistryUrls().isEmpty());
-        assertTrue(data.avro.getRegistryAuth().isEmpty());
-        assertTrue(data.avro.getProperties().isEmpty());
+        assertTrue(config.getTopicSettings().getTopicConfigs().isEmpty());
+        assertTrue(config.getAvroSettings().getRegistryUrls().isEmpty());
+        assertTrue(config.getAvroSettings().getRegistryAuth().isEmpty());
+        assertTrue(config.getAvroSettings().getProperties().isEmpty());
 
-        EnsureSettings.TopicSpec topicSpec = data.ensure.getTopicSpec();
+        EnsureSettings.TopicSpec topicSpec = config.getEnsureSettings().getTopicSpec();
         assertEquals(1, topicSpec.getPartitions());
         assertEquals(1, topicSpec.getReplication());
 
-        EnsureSettings.AdminSpec adminSpec = data.ensure.getAdminSpec();
+        EnsureSettings.AdminSpec adminSpec = config.getEnsureSettings().getAdminSpec();
         assertEquals(1L, adminSpec.getTimeoutMs());
         assertEquals("client-id", adminSpec.getClientId());
         assertEquals(1L, adminSpec.getUnknownBackoffMs());
 
-        assertEquals(1, data.producer.getAwaitEvery());
-        assertEquals(1, data.producer.getAwaitTimeoutMs());
-        assertSame(PhoenixTableMetadataProvider.NOOP, data.metadataProvider);
-        assertFalse(data.observersEnabled);
+        assertEquals(1, config.getProducerSettings().getAwaitEvery());
+        assertEquals(1, config.getProducerSettings().getAwaitTimeoutMs());
+        assertSame(PhoenixTableMetadataProvider.NOOP, config.getTableMetadataProvider());
+        assertFalse(config.isObserversEnabled());
+        assertTrue(config.isJmxEnabled());
     }
 }

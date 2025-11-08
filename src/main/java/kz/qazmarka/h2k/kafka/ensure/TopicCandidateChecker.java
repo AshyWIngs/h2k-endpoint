@@ -111,6 +111,7 @@ final class TopicCandidateChecker {
 
         String normalizedName() {
             if (normalizedName == null) {
+                // Текст исключения фиксируется в тестах — оставляем английский вариант
                 throw new IllegalStateException("normalized name is unavailable for status " + status);
             }
             return normalizedName;

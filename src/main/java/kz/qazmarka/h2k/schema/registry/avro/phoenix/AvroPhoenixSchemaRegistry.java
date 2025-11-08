@@ -92,7 +92,7 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
     /** Позволяет временно подменить логгер для модульных тестов. */
     static AutoCloseable withLoggerForTest(Logger testLogger) {
         if (testLogger == null) {
-            throw new IllegalArgumentException("testLogger == null");
+            throw new IllegalArgumentException("Аргумент 'testLogger' не может быть null");
         }
         Logger previous = LOG.getAndSet(testLogger);
         return () -> LOG.set(previous);

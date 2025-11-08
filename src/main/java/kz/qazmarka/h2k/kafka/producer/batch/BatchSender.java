@@ -9,6 +9,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
 import org.apache.kafka.clients.producer.RecordMetadata;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Минимальный буфер отправок Kafka: накапливает {@link Future} и блокирующе
@@ -17,6 +19,11 @@ import org.apache.kafka.clients.producer.RecordMetadata;
  * Безопасность потоков: экземпляр не потокобезопасен.
  */
 public final class BatchSender implements AutoCloseable {
+
+    private static final Logger LOG = LoggerFactory.getLogger(BatchSender.class);
+    // Порог для предупреждения о «медленном» сбросе батча; можно переопределить
+    // через системное свойство -Dh2k.batch.slow.warn.ms=NNN
+    private static final int SLOW_FLUSH_WARN_MS = Integer.getInteger("h2k.batch.slow.warn.ms", 500);
 
     private final int batchSize;
     private final int timeoutMs;
@@ -75,7 +82,13 @@ public final class BatchSender implements AutoCloseable {
         if (pending.isEmpty()) {
             return;
         }
+        final long startNs = System.nanoTime();
         waitAll(pending, timeoutMs);
+        final long tookMs = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startNs);
+        if (tookMs >= SLOW_FLUSH_WARN_MS) {
+            // Сообщение о медленном ожидании подтверждений от Kafka; выводим редко и только при превышении порога
+            LOG.warn("Медленный сброс батча Kafka: {} мс (размер={}, timeoutMs={})", tookMs, peakSize, timeoutMs);
+        }
         // Если пиковый размер превысил удвоенный batchSize — освобождаем память перед clear()
         if (peakSize > batchSize * 2) {
             pending.trimToSize(); // Уменьшает capacity до текущего size

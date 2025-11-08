@@ -97,7 +97,8 @@ public final class WalEntryProcessor implements AutoCloseable {
         logEntrySummary(context);
 
         finalizeEntry(context.table, context.counters, context.filterActive, context.cfSnapshot, context.tableOptions);
-        counterService.logThroughput(context.counters, LOG);
+        // Периодический INFO‑лог throughput + дополнительные метрики из TopicManager
+        counterService.logThroughput(context.counters, LOG, topicManager::getMetrics);
     }
 
     /**

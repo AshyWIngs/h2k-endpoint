@@ -49,65 +49,68 @@ class RowPayloadAssemblerTest {
 
     @Test
     void assembleShouldPopulatePkValuesAndWalMetadata() {
-        TestContext ctx = newContext();
-        List<Cell> cells = new ArrayList<>();
-        cells.add(putCell("version", 123L, bytes("42")));
-        Cell payloadCell = putCell("payload", 321L, bytes("abc"));
-        cells.add(payloadCell);
+        try (TestContext ctx = newContext()) {
+            List<Cell> cells = new ArrayList<>();
+            cells.add(putCell("version", 123L, bytes("42")));
+            Cell payloadCell = putCell("payload", 321L, bytes("abc"));
+            cells.add(payloadCell);
 
-        RowKeySlice rowKey = RowKeySlice.whole(bytes("id-1"));
-        GenericData.Record actual = ctx.assembler.assemble(TABLE, cells, rowKey, 777L, 888L);
+            RowKeySlice rowKey = RowKeySlice.whole(bytes("id-1"));
+            GenericData.Record actual = ctx.assembler.assemble(TABLE, cells, rowKey, 777L, 888L);
 
-        assertEquals("id-1", actual.get("id"));
-        assertEquals(42L, actual.get("version"));
+            assertEquals("id-1", actual.get("id"));
+            assertEquals(42L, actual.get("version"));
 
-        ByteBuffer payloadBuffer = (ByteBuffer) actual.get("payload");
-        assertSame(payloadCell.getValueArray(), payloadBuffer.array(),
-                "BinarySlice должен использовать исходный буфер ячейки");
-        assertEquals(payloadCell.getValueLength(), payloadBuffer.remaining(),
-                "Payload должен передаваться без копий и с корректной длиной");
-        byte[] restored = new byte[payloadBuffer.remaining()];
-        payloadBuffer.duplicate().get(restored);
-        assertEquals("abc", new String(restored, UTF_8));
+            ByteBuffer payloadBuffer = (ByteBuffer) actual.get("payload");
+            assertSame(payloadCell.getValueArray(), payloadBuffer.array(),
+                    "BinarySlice должен использовать исходный буфер ячейки");
+            assertEquals(payloadCell.getValueLength(), payloadBuffer.remaining(),
+                    "Payload должен передаваться без копий и с корректной длиной");
+            byte[] restored = new byte[payloadBuffer.remaining()];
+            payloadBuffer.duplicate().get(restored);
+            assertEquals("abc", new String(restored, UTF_8));
 
-        assertEquals(321L, actual.get(PayloadFields.EVENT_TS));
-        assertEquals(Boolean.FALSE, actual.get(PayloadFields.DELETE));
-        assertEquals(777L, actual.get(PayloadFields.WAL_SEQ));
-        assertEquals(888L, actual.get(PayloadFields.WAL_WRITE_TIME));
+            assertEquals(321L, actual.get(PayloadFields.EVENT_TS));
+            assertEquals(Boolean.FALSE, actual.get(PayloadFields.DELETE));
+            assertEquals(777L, actual.get(PayloadFields.WAL_SEQ));
+            assertEquals(888L, actual.get(PayloadFields.WAL_WRITE_TIME));
+        }
     }
 
     @Test
     void assembleShouldMarkDeleteAndSkipDecoderForDeleteCells() {
-        TestContext ctx = newContext();
-        List<Cell> cells = new ArrayList<>();
-        cells.add(putCell("version", 100L, bytes("100")));
-        cells.add(deleteCell("payload", 200L));
+        try (TestContext ctx = newContext()) {
+            List<Cell> cells = new ArrayList<>();
+            cells.add(putCell("version", 100L, bytes("100")));
+            cells.add(deleteCell("payload", 200L));
 
-        RowKeySlice rowKey = RowKeySlice.whole(bytes("id-del"));
-        GenericData.Record actual = ctx.assembler.assemble(TABLE, cells, rowKey, 500L, 600L);
+            RowKeySlice rowKey = RowKeySlice.whole(bytes("id-del"));
+            GenericData.Record actual = ctx.assembler.assemble(TABLE, cells, rowKey, 500L, 600L);
 
-        assertEquals("id-del", actual.get("id"));
-        assertEquals(100L, actual.get("version"), "Put-ячейка должна быть декодирована");
-        assertEquals(Boolean.TRUE, actual.get(PayloadFields.DELETE), "Delete-флаг должен быть выставлен");
-        assertEquals(200L, actual.get(PayloadFields.EVENT_TS), "Максимальная метка времени учитывает delete");
-        assertEquals(1, ctx.decoder.decodeCalls("version"), "Декодер должен вызываться только для Put-ячейки");
-        assertEquals(0, ctx.decoder.decodeCalls("payload"), "Delete-ячейка не декодируется");
+            assertEquals("id-del", actual.get("id"));
+            assertEquals(100L, actual.get("version"), "Put-ячейка должна быть декодирована");
+            assertEquals(Boolean.TRUE, actual.get(PayloadFields.DELETE), "Delete-флаг должен быть выставлен");
+            assertEquals(200L, actual.get(PayloadFields.EVENT_TS), "Максимальная метка времени учитывает delete");
+            assertEquals(1, ctx.decoder.decodeCalls("version"), "Декодер должен вызываться только для Put-ячейки");
+            assertEquals(0, ctx.decoder.decodeCalls("payload"), "Delete-ячейка не декодируется");
+        }
     }
 
     @Test
     void assembleShouldSkipColumnsMarkedAsIgnoredInSchema() {
-        TestContext ctx = newContext();
-        List<Cell> cells = new ArrayList<>();
-        cells.add(putCell("skip_me", 101L, bytes("ignored")));
-        cells.add(putCell("version", 102L, bytes("2")));
+        try (TestContext ctx = newContext()) {
+            List<Cell> cells = new ArrayList<>();
+            cells.add(putCell("skip_me", 101L, bytes("ignored")));
+            cells.add(putCell("version", 102L, bytes("2")));
 
-        RowKeySlice rowKey = RowKeySlice.whole(bytes("skip-row"));
-        GenericData.Record actual = ctx.assembler.assemble(TABLE, cells, rowKey, 10L, 20L);
+            RowKeySlice rowKey = RowKeySlice.whole(bytes("skip-row"));
+            GenericData.Record actual = ctx.assembler.assemble(TABLE, cells, rowKey, 10L, 20L);
 
-        assertEquals("skip-row", actual.get("id"));
-        assertEquals(2L, actual.get("version"));
-        assertNull(actual.get("skip_me"), "Поле с h2k.payload.skip должно оставаться по умолчанию");
-        assertEquals(0, ctx.decoder.decodeCalls("skip_me"), "Декодер не должен вызываться для пропускаемых колонок");
+            assertEquals("skip-row", actual.get("id"));
+            assertEquals(2L, actual.get("version"));
+            assertNull(actual.get("skip_me"), "Поле с h2k.payload.skip должно оставаться по умолчанию");
+            assertEquals(0, ctx.decoder.decodeCalls("skip_me"), "Декодер не должен вызываться для пропускаемых колонок");
+        }
     }
 
     @Test
@@ -147,100 +150,105 @@ class RowPayloadAssemblerTest {
 
     @Test
     void assemblerReusesPkCollectorBetweenRows() {
-        TestContext ctx = newContext();
-        List<Cell> firstRow = new ArrayList<>();
-        firstRow.add(putCell("version", 10L, bytes("1")));
-        RowKeySlice rk1 = RowKeySlice.whole(bytes("first"));
-        GenericData.Record firstActual = ctx.assembler.assemble(TABLE, firstRow, rk1, 1L, 1L);
-        assertEquals("first", firstActual.get("id"));
-        assertEquals(1L, firstActual.get("version"));
+        try (TestContext ctx = newContext()) {
+            List<Cell> firstRow = new ArrayList<>();
+            firstRow.add(putCell("version", 10L, bytes("1")));
+            RowKeySlice rk1 = RowKeySlice.whole(bytes("first"));
+            GenericData.Record firstActual = ctx.assembler.assemble(TABLE, firstRow, rk1, 1L, 1L);
+            assertEquals("first", firstActual.get("id"));
+            assertEquals(1L, firstActual.get("version"));
 
-        List<Cell> secondRow = new ArrayList<>();
-        RowKeySlice rk2 = RowKeySlice.whole(bytes("second"));
-        GenericData.Record secondActual = ctx.assembler.assemble(TABLE, secondRow, rk2, 2L, 2L);
-        assertEquals("second", secondActual.get("id"));
-        assertNull(secondActual.get("version"), "Значение из предыдущей строки не должно протекать");
-        assertNull(secondActual.get(PayloadFields.EVENT_TS), "Без ячеек нет событийного времени");
-        assertEquals(Boolean.FALSE, secondActual.get(PayloadFields.DELETE), "Флаг delete сбрасывается");
+            List<Cell> secondRow = new ArrayList<>();
+            RowKeySlice rk2 = RowKeySlice.whole(bytes("second"));
+            GenericData.Record secondActual = ctx.assembler.assemble(TABLE, secondRow, rk2, 2L, 2L);
+            assertEquals("second", secondActual.get("id"));
+            assertNull(secondActual.get("version"), "Значение из предыдущей строки не должно протекать");
+            assertNull(secondActual.get(PayloadFields.EVENT_TS), "Без ячеек нет событийного времени");
+            assertEquals(Boolean.FALSE, secondActual.get(PayloadFields.DELETE), "Флаг delete сбрасывается");
+        }
     }
 
     @Test
     void assembleShouldFailWhenRowKeyMissing() {
-        TestContext ctx = newContext();
-        List<Cell> noCells = new ArrayList<>();
-        IllegalStateException ex = assertThrows(IllegalStateException.class,
-                () -> ctx.assembler.assemble(TABLE, noCells, null, 0L, 0L),
-                "Отсутствующий rowkey должен приводить к ошибке");
-        assertTrue(ex.getMessage().contains("rowkey"), "Диагностика должна указывать на отсутствие rowkey");
+        try (TestContext ctx = newContext()) {
+            List<Cell> noCells = new ArrayList<>();
+            IllegalStateException ex = assertThrows(IllegalStateException.class,
+                    () -> ctx.assembler.assemble(TABLE, noCells, null, 0L, 0L),
+                    "Отсутствующий rowkey должен приводить к ошибке");
+            assertTrue(ex.getMessage().contains("rowkey"), "Диагностика должна указывать на отсутствие rowkey");
+        }
     }
 
     @Test
     void assembleShouldDecodeRowKeyWhenSaltConfigured() {
         SaltAwareDecoder saltAware = new SaltAwareDecoder();
         Decoder decoder = saltAware;
-        RowPayloadAssembler assembler = new RowPayloadAssembler(
+        try (RowPayloadAssembler assembler = new RowPayloadAssembler(
                 decoder,
                 configWithProvider(metadataProvider(1)),
-                new AvroSchemaRegistry(Paths.get("src", "test", "resources", "avro")));
+                new AvroSchemaRegistry(Paths.get("src", "test", "resources", "avro")))) {
 
-        byte[] rowKeyBytes = new byte[]{(byte) 0x7F, 'i', 'd', '-', 's', 'a', 'l', 't'};
-        GenericData.Record avroRecord = assembler.assemble(
-                TABLE,
-                Collections.emptyList(),
-                RowKeySlice.whole(rowKeyBytes),
-                0L,
-                0L);
+            byte[] rowKeyBytes = new byte[]{(byte) 0x7F, 'i', 'd', '-', 's', 'a', 'l', 't'};
+            GenericData.Record avroRecord = assembler.assemble(
+                    TABLE,
+                    Collections.emptyList(),
+                    RowKeySlice.whole(rowKeyBytes),
+                    0L,
+                    0L);
 
-        assertEquals("id-salt", avroRecord.get("id"));
-        assertEquals(1, saltAware.lastSaltBytes(),
-                "Decoder должен получать число байтов соли из конфигурации");
+            assertEquals("id-salt", avroRecord.get("id"));
+            assertEquals(1, saltAware.lastSaltBytes(),
+                    "Decoder должен получать число байтов соли из конфигурации");
+        }
     }
 
     @Test
     void assembleShouldPassZeroSaltWhenMetadataMissing() {
         SaltAwareDecoder saltAware = new SaltAwareDecoder();
         Decoder decoder = saltAware;
-        RowPayloadAssembler assembler = new RowPayloadAssembler(
+        try (RowPayloadAssembler assembler = new RowPayloadAssembler(
                 decoder,
                 configWithProvider(metadataProvider(null)),
-                new AvroSchemaRegistry(Paths.get("src", "test", "resources", "avro")));
+                new AvroSchemaRegistry(Paths.get("src", "test", "resources", "avro")))) {
 
-        byte[] rowKeyBytes = Bytes.toBytes("plain-rowkey");
-        GenericData.Record avroRecord = assembler.assemble(
-                TABLE,
-                Collections.emptyList(),
-                RowKeySlice.whole(rowKeyBytes),
-                0L,
-                0L);
+            byte[] rowKeyBytes = Bytes.toBytes("plain-rowkey");
+            GenericData.Record avroRecord = assembler.assemble(
+                    TABLE,
+                    Collections.emptyList(),
+                    RowKeySlice.whole(rowKeyBytes),
+                    0L,
+                    0L);
 
-        assertEquals("plain-rowkey", avroRecord.get("id"));
-        assertEquals(0, saltAware.lastSaltBytes(),
-                "При отсутствии соли в метаданных RowPayloadAssembler должен передавать 0");
+            assertEquals("plain-rowkey", avroRecord.get("id"));
+            assertEquals(0, saltAware.lastSaltBytes(),
+                    "При отсутствии соли в метаданных RowPayloadAssembler должен передавать 0");
+        }
     }
 
     @Test
     void assembleShouldFailWhenRowKeyShorterThanSaltBytes() {
         SaltAwareDecoder saltAware = new SaltAwareDecoder();
         Decoder decoder = saltAware;
-        RowPayloadAssembler assembler = new RowPayloadAssembler(
+        try (RowPayloadAssembler assembler = new RowPayloadAssembler(
                 decoder,
                 configWithProvider(metadataProvider(1)),
-                new AvroSchemaRegistry(Paths.get("src", "test", "resources", "avro")));
+                new AvroSchemaRegistry(Paths.get("src", "test", "resources", "avro")))) {
 
-        byte[] rowKeyBytes = new byte[]{0x42}; // только байт соли, без PK
-        List<Cell> emptyCells = Collections.emptyList();
-        RowKeySlice rowKeySlice = RowKeySlice.whole(rowKeyBytes);
-        IllegalStateException ex = assertThrows(IllegalStateException.class,
-                () -> assembler.assemble(
-                        TABLE,
-                        emptyCells,
-                        rowKeySlice,
-                        0L,
-                        0L));
-        assertTrue(ex.getMessage().contains("PK 'id'"),
-                "Диагностика должна указывать на отсутствие декодированного PK");
-        assertEquals(1, saltAware.lastSaltBytes(),
-                "Даже при ошибке декодер получает ожидаемое число байтов соли");
+            byte[] rowKeyBytes = new byte[]{0x42}; // только байт соли, без PK
+            List<Cell> emptyCells = Collections.emptyList();
+            RowKeySlice rowKeySlice = RowKeySlice.whole(rowKeyBytes);
+            IllegalStateException ex = assertThrows(IllegalStateException.class,
+                    () -> assembler.assemble(
+                            TABLE,
+                            emptyCells,
+                            rowKeySlice,
+                            0L,
+                            0L));
+            assertTrue(ex.getMessage().contains("PK 'id'"),
+                    "Диагностика должна указывать на отсутствие декодированного PK");
+            assertEquals(1, saltAware.lastSaltBytes(),
+                    "Даже при ошибке декодер получает ожидаемое число байтов соли");
+        }
     }
 
     private TestContext newContext() {
@@ -361,13 +369,18 @@ class RowPayloadAssemblerTest {
         }
     }
 
-    private static final class TestContext {
+    private static final class TestContext implements AutoCloseable {
         final StubDecoder decoder;
         final RowPayloadAssembler assembler;
 
         TestContext(StubDecoder decoder, RowPayloadAssembler assembler) {
             this.decoder = decoder;
             this.assembler = assembler;
+        }
+
+        @Override
+        public void close() {
+            assembler.close();
         }
     }
 }

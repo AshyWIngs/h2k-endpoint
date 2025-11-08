@@ -139,8 +139,8 @@ public final class ConfluentAvroPayloadSerializer implements AutoCloseable {
      * @throws IllegalStateException если схема неожиданная либо Schema Registry недоступен и нет подходящего кэша
      */
     public byte[] serialize(TableName table, GenericData.Record avroRecord) {
-        Objects.requireNonNull(table, "не передано имя таблицы");
-        Objects.requireNonNull(avroRecord, "record == null");
+        Objects.requireNonNull(table, "Не передано имя таблицы");
+        Objects.requireNonNull(avroRecord, "Avro-запись не может быть null");
 
         final String subject = buildSubject(table);
         SchemaInfo info = cache.get(subject);

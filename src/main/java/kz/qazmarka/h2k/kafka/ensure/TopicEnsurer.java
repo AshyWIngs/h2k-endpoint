@@ -28,7 +28,7 @@ import kz.qazmarka.h2k.kafka.ensure.config.TopicEnsureConfig;
  * когда ensure отключён конфигурацией или отсутствуют настройки bootstrap. Благодаря этому
  * вызывающий код не обязан проверять {@code null} и может работать с единым API.
  * 
- * Фабрика {@link #createIfEnabled(EnsureSettings, TopicNamingSettings, String, Properties)}
+     * Фабрика {@link #createIfEnabled(EnsureSettings, TopicNamingSettings, String, Properties)}
  * использует ленивую инициализацию: фактический {@link AdminClient} и ensure-цепочка создаются по требованию.
  * Это сокращает время загрузки и объём используемых ресурсов для кластеров, где ensure может не понадобиться.
  */
@@ -89,7 +89,7 @@ public final class TopicEnsurer implements AutoCloseable {
      */
     public static TopicEnsurer testingDelegate(EnsureDelegate delegate) {
         if (delegate == null) {
-            throw new IllegalArgumentException("delegate == null");
+            throw new IllegalArgumentException("Аргумент 'delegate' не может быть null");
         }
         return new TopicEnsurer(delegate);
     }
@@ -109,7 +109,7 @@ public final class TopicEnsurer implements AutoCloseable {
         }
         String trimmedBootstrap = bootstrap == null ? "" : bootstrap.trim();
         if (trimmedBootstrap.isEmpty()) {
-            LOG.warn("TopicEnsurer: не задан bootstrap Kafka — ensureTopics будет отключён");
+            LOG.warn("TopicEnsurer: bootstrap Kafka не задан — автосоздание тем (ensure) будет отключено");
             return disabled();
         }
         Properties baseProps = new Properties();
@@ -251,20 +251,20 @@ public final class TopicEnsurer implements AutoCloseable {
         Map<String, Long> base = coordinator != null ? coordinator.getMetrics() : Collections.emptyMap();
         Map<String, Long> snapshot = new LinkedHashMap<>(base);
         if (state != null) {
-            snapshot.put("state.ensured.count", (long) state.ensuredSize());
+            snapshot.put("ensure.подтверждено.тем", (long) state.ensuredSize());
         }
         if (executor != null) {
-            snapshot.put("queue.pending", (long) executor.queuedTopics());
+            snapshot.put("ensure.очередь.ожидает", (long) executor.queuedTopics());
         }
         return Collections.unmodifiableMap(snapshot);
     }
 
     public boolean isEnabled() { return mode != Mode.DISABLED; }
 
-    @Override
     /**
      * Закрывает обёрнутый {@link EnsureCoordinator}; в режиме NOOP ничего не делает.
      */
+    @Override
     public void close() {
         if (mode == Mode.DISABLED) {
             return;
@@ -304,7 +304,7 @@ public final class TopicEnsurer implements AutoCloseable {
             closeable.close();
         } catch (Exception ex) {
             if (LOG.isDebugEnabled()) {
-                LOG.debug("Ignoring exception while closing resource", ex);
+                LOG.debug("Игнорирую исключение при закрытии ресурса", ex);
             }
         }
     }

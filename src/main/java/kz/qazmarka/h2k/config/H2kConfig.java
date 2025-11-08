@@ -109,6 +109,8 @@ public final class H2kConfig implements TableMetadataView {
     public static final String DEFAULT_AVRO_SCHEMA_DIR = "conf/avro";
     /** По умолчанию наблюдатели таблиц отключены. */
     static final boolean DEFAULT_OBSERVERS_ENABLED = false;
+    /** По умолчанию JMX-метрики включены. */
+    static final boolean DEFAULT_JMX_ENABLED = true;
 
     // ==== Базовые ====
     private final String bootstrap;
@@ -121,8 +123,8 @@ public final class H2kConfig implements TableMetadataView {
     private final ProducerAwaitSettings producerSettings;
     /** Внешний поставщик табличных метаданных (например, Avro-схемы). */
     private final PhoenixTableMetadataProvider tableMetadataProvider;
-    /** Включены ли наблюдатели TableCapacity/CfFilter. */
-    private final boolean observersEnabled;
+    /** Настройки мониторинга (диагностика + JMX). */
+    private final MonitoringSettings monitoringSettings;
     /** Кэш вычисленных опций таблиц для повторного использования в горячем пути. */
     private final ConcurrentMap<String, TableOptionsSnapshot> tableOptionsCache = new ConcurrentHashMap<>(8);
 
@@ -145,41 +147,25 @@ public final class H2kConfig implements TableMetadataView {
         public static final String AVRO_SUBJECT_STRATEGY    = "h2k.avro.subject.strategy";
         public static final String AVRO_COMPATIBILITY       = "h2k.avro.compatibility";
         public static final String AVRO_BINARY              = "h2k.avro.binary";
+        /** Включение JMX-метрик (H2kMetricsJmx). */
+        public static final String JMX_ENABLED = "h2k.jmx.enabled";
 
         private Keys() {}
     }
 
-    /**
-     * Приватный конструктор: используется коллекцией параметров {@link H2kConfigData},
-     * которую формирует внешний билдер {@link H2kConfigBuilder}. Позволяет централизованно
-     * инициализировать все final‑поля за один проход и сохранить иммутабельность без длинного
-     * конструктора с десятками параметров.
-     */
-    private H2kConfig(H2kConfigData data) {
-        if (data == null) {
-            throw new IllegalArgumentException("Параметры конфигурации не могут быть null");
+    H2kConfig(String bootstrap, Sections sections) {
+        String trimmedBootstrap = Objects.requireNonNull(bootstrap, "bootstrap не может быть null").trim();
+        if (trimmedBootstrap.isEmpty()) {
+            throw new IllegalArgumentException("Адреса bootstrap не могут быть пустыми");
         }
-
-    // Проверяем, что все секции заполнены загрузчиком, иначе выдаём понятные сообщения ещё до запуска endpoint.
-    this.bootstrap = Objects.requireNonNull(data.bootstrap, "Адреса bootstrap не могут быть null");
-
-    this.topicSettings = Objects.requireNonNull(data.topic, "Секция topic не может быть null");
-    this.avroSettings = Objects.requireNonNull(data.avro, "Секция avro не может быть null");
-    this.ensureSettings = Objects.requireNonNull(data.ensure, "Секция ensure не может быть null");
-    this.producerSettings = Objects.requireNonNull(data.producer, "Секция producer не может быть null");
-        PhoenixTableMetadataProvider provider = (data.metadataProvider == null)
-                ? PhoenixTableMetadataProvider.NOOP
-                : data.metadataProvider;
-        this.tableMetadataProvider = provider;
-        this.observersEnabled = data.observersEnabled;
-    }
-
-    /**
-     * Пакетная фабрика: создаёт {@link H2kConfig} на основе заранее подготовленных данных.
-     * Вынесена отдельно, чтобы внешний билдер не раскрывал детали конструктора.
-     */
-    static H2kConfig fromData(H2kConfigData data) {
-        return new H2kConfig(data);
+        this.bootstrap = trimmedBootstrap;
+        Sections nonNull = Objects.requireNonNull(sections, "Секции конфигурации не могут быть null");
+        this.topicSettings = nonNull.topicSettings;
+        this.avroSettings = nonNull.avroSettings;
+        this.ensureSettings = nonNull.ensureSettings;
+        this.producerSettings = nonNull.producerSettings;
+        this.tableMetadataProvider = nonNull.metadataProvider;
+        this.monitoringSettings = nonNull.monitoringSettings;
     }
 
     /**
@@ -232,6 +218,36 @@ public final class H2kConfig implements TableMetadataView {
         return topicSettings.sanitize(raw);
     }
 
+    /**
+     * Упаковывает зависимые секции конфигурации в единый объект, чтобы не раздувать конструктор.
+     */
+    static final class Sections {
+        final TopicNamingSettings topicSettings;
+        final AvroSettings avroSettings;
+        final EnsureSettings ensureSettings;
+        final ProducerAwaitSettings producerSettings;
+        final PhoenixTableMetadataProvider metadataProvider;
+        final MonitoringSettings monitoringSettings;
+
+        Sections(TopicNamingSettings topicSettings,
+                 AvroSettings avroSettings,
+                 EnsureSettings ensureSettings,
+                 ProducerAwaitSettings producerSettings,
+                 PhoenixTableMetadataProvider metadataProvider,
+                 MonitoringSettings monitoringSettings) {
+            this.topicSettings = Objects.requireNonNull(topicSettings, "Секция topic не может быть null");
+            this.avroSettings = Objects.requireNonNull(avroSettings, "Секция avro не может быть null");
+            this.ensureSettings = Objects.requireNonNull(ensureSettings, "Секция ensure не может быть null");
+            this.producerSettings = Objects.requireNonNull(producerSettings, "Секция producer не может быть null");
+            this.metadataProvider = metadataProvider == null
+                    ? PhoenixTableMetadataProvider.NOOP
+                    : metadataProvider;
+            this.monitoringSettings = monitoringSettings == null
+                    ? new MonitoringSettings(DEFAULT_OBSERVERS_ENABLED, DEFAULT_JMX_ENABLED)
+                    : monitoringSettings;
+        }
+    }
+
 
     // ===== Итоговые геттеры =====
     /** @return список Kafka bootstrap.servers */
@@ -248,6 +264,8 @@ public final class H2kConfig implements TableMetadataView {
     public Map<String, String> getAvroSrAuth() { return avroSettings.getRegistryAuth(); }
     /** @return неизменяемая карта AVRO-свойств */
     public Map<String, String> getAvroProps() { return avroSettings.getProperties(); }
+    /** @return провайдер табличных метаданных Phoenix. */
+    public PhoenixTableMetadataProvider getTableMetadataProvider() { return tableMetadataProvider; }
     /** @return имя Avro-свойства, помечающего поле для пропуска при построении payload */
     public String getPayloadSkipProperty() { return AvroSchemaProperties.PAYLOAD_SKIP; }
 
@@ -339,7 +357,9 @@ public final class H2kConfig implements TableMetadataView {
 
     /** @return включены ли наблюдатели статистики таблиц. */
     @Override
-    public boolean isObserversEnabled() { return observersEnabled; }
+    public boolean isObserversEnabled() { return monitoringSettings.isObserversEnabled(); }
+    /** @return включён ли экспорт метрик через JMX. */
+    public boolean isJmxEnabled() { return monitoringSettings.isJmxEnabled(); }
 
     /**
      * Возвращает подсказку ёмкости для заданной таблицы (если задана).

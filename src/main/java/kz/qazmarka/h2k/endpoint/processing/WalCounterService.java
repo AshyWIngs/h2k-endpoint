@@ -47,7 +47,7 @@ final class WalCounterService {
         counters.maxRowCellsSent);
     }
 
-    void logThroughput(EntryCounters counters, Logger log) {
+    void logThroughput(EntryCounters counters, Logger log, java.util.function.Supplier<java.util.Map<String, Long>> extraMetricsSupplier) {
         entriesWindow.increment();
         addIfPositive(rowsWindow, counters.rowsSent);
         addIfPositive(cellsWindow, counters.cellsSent);
@@ -72,7 +72,22 @@ final class WalCounterService {
         long cells = cellsWindow.sumThenReset();
         long filteredRows = filteredRowsWindow.sumThenReset();
 
-        emitThroughput(elapsed, entries, rows, cells, filteredRows, log);
+        java.util.Map<String, Long> extras = (extraMetricsSupplier == null) ? java.util.Collections.emptyMap() : safeExtras(extraMetricsSupplier);
+        emitThroughput(elapsed, entries, rows, cells, filteredRows, extras, log);
+    }
+
+    // Сохранение бинарной совместимости для тестов/старых вызовов
+    void logThroughput(EntryCounters counters, Logger log) {
+        logThroughput(counters, log, null);
+    }
+
+    private static java.util.Map<String, Long> safeExtras(java.util.function.Supplier<java.util.Map<String, Long>> s) {
+        try {
+            java.util.Map<String, Long> m = s.get();
+            return (m == null) ? java.util.Collections.<String, Long>emptyMap() : m;
+        } catch (RuntimeException e) {
+            return java.util.Collections.emptyMap();
+        }
     }
 
     /**
@@ -125,6 +140,7 @@ final class WalCounterService {
                                 long rows,
                                 long cells,
                                 long filteredRows,
+                                java.util.Map<String, Long> extras,
                                 Logger log) {
         if (elapsedNs <= 0L || !log.isInfoEnabled()) {
             return;
@@ -136,6 +152,7 @@ final class WalCounterService {
         double rowsPerSec = rows / intervalSeconds;
         double cellsPerSec = cells / intervalSeconds;
 
+        // Базовая строка throughput (совместима с тестами/документацией)
         log.info(
                 "Скорость WAL: записей={}, строк={}, строк/с={}, ячеек={}, ячеек/с={}, отфильтровано_строк={}, интервал_мс={}",
                 entries,
@@ -145,6 +162,65 @@ final class WalCounterService {
                 formatDecimal(cellsPerSec),
                 filteredRows,
                 TimeUnit.NANOSECONDS.toMillis(elapsedNs));
+
+        // Дополнительные метрики — только в DEBUG, чтобы не шуметь в проде и не ломать парсинг
+        if (log.isDebugEnabled() && extras != null && !extras.isEmpty()) {
+            long ensureQueue = get(extras, "ensure.очередь.ожидает");
+            long ensureBackoff = get(extras, "ensure.бэкофф.размер");
+            long srFailures = get(extras, "sr.регистрация.ошибок");
+            long cooldownSkipped = get(extras, "ensure.пропуски.из-за.паузы");
+            // Локализованные подписи, значения берём из внутренних ключей метрик (совместимость JMX/тестов)
+            log.debug(
+                    "Скорость WAL (доп. метрики): очередь ensure={}, бэкофф ensure={}, ошибки регистрации SR={}, пропуски из-за cooldown={}",
+                    ensureQueue, ensureBackoff, srFailures, cooldownSkipped);
+        }
+        // Периодические агрегированные сводки ensure/SR
+        emitPeriodicSummaries(extras, log);
+    }
+
+    private static long get(java.util.Map<String, Long> m, String key) {
+        if (m == null) return 0L;
+        Long v = m.get(key);
+        return v == null ? 0L : v;
+    }
+
+    // ==== Периодические сводки ====
+    private static final long ENSURE_SUMMARY_INTERVAL_NS = TimeUnit.SECONDS.toNanos(60);
+    private static final long SR_SUMMARY_INTERVAL_NS = TimeUnit.MINUTES.toNanos(5);
+    private final java.util.concurrent.atomic.AtomicLong nextEnsureSummaryAt = new java.util.concurrent.atomic.AtomicLong(System.nanoTime());
+    private final java.util.concurrent.atomic.AtomicLong nextSrSummaryAt = new java.util.concurrent.atomic.AtomicLong(System.nanoTime());
+
+    private void emitPeriodicSummaries(java.util.Map<String, Long> extras, Logger log) {
+        if (extras == null || extras.isEmpty()) return;
+        long now = System.nanoTime();
+        // Сводка ensure (INFO)
+        long targetEnsure = nextEnsureSummaryAt.get();
+        if (now >= targetEnsure
+                && nextEnsureSummaryAt.compareAndSet(targetEnsure, now + ENSURE_SUMMARY_INTERVAL_NS)
+                && log.isInfoEnabled()) {
+            long accepted = get(extras, "ensure.вызовов.принято");
+            long rejected = get(extras, "ensure.вызовов.отклонено");
+            long existsYes = get(extras, "существует.да");
+            long existsNo = get(extras, "существует.нет");
+            long existsUnknown = get(extras, "существует.неизвестно");
+            long createdOk = get(extras, "создание.успех");
+            long createdRace = get(extras, "создание.гонка");
+            long createdFail = get(extras, "создание.ошибка");
+            long backoffSize = get(extras, "ensure.бэкофф.размер");
+            long queuePending = get(extras, "ensure.очередь.ожидает");
+            log.info("Сводка ensure: принято={}, отклонено={}, существует[да/нет/неизв]={}/{}/{}, создание[ok/гонка/ош] ={}/{}/{}, бэкофф={}, очередь={}",
+                    accepted, rejected, existsYes, existsNo, existsUnknown,
+                    createdOk, createdRace, createdFail, backoffSize, queuePending);
+        }
+        // Сводка Schema Registry (DEBUG)
+        long targetSr = nextSrSummaryAt.get();
+        if (now >= targetSr
+                && nextSrSummaryAt.compareAndSet(targetSr, now + SR_SUMMARY_INTERVAL_NS)
+                && log.isDebugEnabled()) {
+            long srOk = get(extras, "sr.регистрация.успехов");
+            long srFail = get(extras, "sr.регистрация.ошибок");
+            log.debug("Сводка SR: регистраций ок={}, ошибок={}", srOk, srFail);
+        }
     }
 
     private static String formatDecimal(double value) {

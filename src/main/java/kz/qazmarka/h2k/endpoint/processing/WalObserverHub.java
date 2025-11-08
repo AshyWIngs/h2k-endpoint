@@ -1,7 +1,5 @@
 package kz.qazmarka.h2k.endpoint.processing;
 
-import java.util.Objects;
-
 import org.apache.hadoop.hbase.TableName;
 
 import kz.qazmarka.h2k.config.CfFilterSnapshot;
@@ -20,13 +18,18 @@ final class WalObserverHub {
     }
 
     static WalObserverHub create(TableMetadataView metadata) {
-        Objects.requireNonNull(metadata, "метаданные таблиц");
+        if (metadata == null || !metadata.isObserversEnabled()) {
+            return new WalObserverHub(null);
+        }
         return new WalObserverHub(WalDiagnostics.create(metadata));
     }
 
     void observeRow(TableName table,
                     TableOptionsSnapshot tableOptions,
                     int rowKeyLength) {
+        if (diagnostics == null) {
+            return;
+        }
         diagnostics.recordRow(table, tableOptions, rowKeyLength);
     }
 
@@ -35,6 +38,9 @@ final class WalObserverHub {
                         boolean filterActive,
                         CfFilterSnapshot cfSnapshot,
                         TableOptionsSnapshot tableOptions) {
+        if (diagnostics == null) {
+            return;
+        }
         if (summary.rowsSeen <= 0L) {
             return;
         }

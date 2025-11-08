@@ -79,6 +79,8 @@ add_peer 'h2k_balanced',
       'h2k.admin.timeout.ms'                => '30000',
       # 'h2k.admin.client.id'               => 'h2k-admin',
       'h2k.ensure.unknown.backoff.ms'       => '5000',
+      # Мониторинг: JMX включён, наблюдатели (WalDiagnostics) выключены
+      'h2k.jmx.enabled'                     => 'true',
       'h2k.observers.enabled'               => 'false'
     }
   }

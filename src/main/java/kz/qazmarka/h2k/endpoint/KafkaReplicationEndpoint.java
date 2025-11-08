@@ -35,7 +35,6 @@ import kz.qazmarka.h2k.config.TopicNamingSettings;
 import kz.qazmarka.h2k.endpoint.metrics.H2kMetricsJmx;
 import kz.qazmarka.h2k.endpoint.processing.WalEntryProcessor;
 import kz.qazmarka.h2k.endpoint.topic.TopicManager;
-import kz.qazmarka.h2k.kafka.ensure.TopicEnsurer;
 import kz.qazmarka.h2k.kafka.producer.batch.BatchSender;
 import kz.qazmarka.h2k.kafka.serializer.RowKeySliceSerializer;
 import kz.qazmarka.h2k.payload.builder.PayloadBuilder;
@@ -88,6 +87,8 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
     private PhoenixTableMetadataProvider tableMetadataProvider = PhoenixTableMetadataProvider.NOOP;
     /** Имя зарегистрированного JMX MBean с метриками H2K (для корректного снятия регистрации). */
     private javax.management.ObjectName h2kJmxName;
+    /** Компоновка горячих ресурсов: PayloadBuilder, TopicManager, WalEntryProcessor. */
+    private ReplicationResources resources;
 
     /**
      * Счётчики отказов репликации и отметка времени последней ошибки.
@@ -110,41 +111,41 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
         // обязательный параметр
         final String bootstrap = readBootstrapOrThrow(cfg);
 
-        // producer
+        // продьюсер
         setupProducer(cfg, bootstrap);
 
-        // decoder
+        // декодер
         Decoder decoder = chooseDecoder(cfg);
 
         // immut-конфиг, билдер и энсюрер
         H2kConfig runtimeConfig = H2kConfig.from(cfg, bootstrap, tableMetadataProvider);
+        this.resources = ReplicationResources.create(runtimeConfig, decoder, producer);
         this.topicSettings = runtimeConfig.getTopicSettings();
         this.ensureSettings = runtimeConfig.getEnsureSettings();
         this.producerSettings = runtimeConfig.getProducerSettings();
-    final PayloadBuilder payload = new PayloadBuilder(decoder, runtimeConfig);
-    warmupPayloadSchemas(payload, runtimeConfig);
-        final TopicEnsurer topicEnsurer = TopicEnsurer.createIfEnabled(
-                ensureSettings,
-                topicSettings,
-                bootstrap,
-                null); // AdminClient конфигурация формируется внутри TopicEnsurer
-        this.topicManager = new TopicManager(topicSettings, topicEnsurer);
-        this.walEntryProcessor = new WalEntryProcessor(payload, topicManager, producer, runtimeConfig);
+        final PayloadBuilder payload = resources.payloadBuilder();
+        this.topicManager = resources.topicManager();
+        this.walEntryProcessor = resources.walEntryProcessor();
+        warmupPayloadSchemas(payload, runtimeConfig);
         registerMetrics(payload, walEntryProcessor);
-        // JMX экспорт метрик через DynamicMBean: безопасно пытаемся зарегистрировать
-        try {
-            javax.management.ObjectName name = H2kMetricsJmx.register(this.topicManager);
-            this.h2kJmxName = name;
-            if (name != null && LOG.isInfoEnabled()) {
-                LOG.info("JMX-метрики H2K зарегистрированы: {}", name);
-            } else if (name == null) {
-                LOG.warn("JMX-метрики H2K не были зарегистрированы (см. DEBUG для деталей)");
+        if (runtimeConfig.isJmxEnabled()) {
+            // JMX экспорт метрик через DynamicMBean: безопасно пытаемся зарегистрировать
+            try {
+                javax.management.ObjectName name = H2kMetricsJmx.register(this.topicManager);
+                this.h2kJmxName = name;
+                if (name != null && LOG.isInfoEnabled()) {
+                    LOG.info("JMX-метрики H2K зарегистрированы: {}", name);
+                } else if (name == null) {
+                    LOG.warn("JMX-метрики H2K не были зарегистрированы (см. DEBUG для деталей)");
+                }
+            } catch (RuntimeException ex) {
+                LOG.warn("Не удалось зарегистрировать JMX-метрики H2K: {}", ex.getMessage());
+                if (LOG.isDebugEnabled()) {
+                    LOG.debug("Трассировка ошибки регистрации JMX-метрик H2K", ex);
+                }
             }
-        } catch (RuntimeException ex) {
-            LOG.warn("Не удалось зарегистрировать JMX-метрики H2K: {}", ex.getMessage());
-            if (LOG.isDebugEnabled()) {
-                LOG.debug("Трассировка ошибки регистрации JMX-метрик H2K", ex);
-            }
+        } else if (LOG.isDebugEnabled()) {
+            LOG.debug("JMX-метрики H2K отключены (h2k.jmx.enabled=false)");
         }
         logPayloadSerializer(payload);
         logInitSummary();
@@ -206,18 +207,18 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
     }
 
     private void registerMetrics(PayloadBuilder payload, WalEntryProcessor walProcessor) {
-        registerMetric("wal.entries.total", walProcessor::entriesTotal);
-        registerMetric("wal.rows.total", walProcessor::rowsTotal);
-        registerMetric("wal.cells.total", walProcessor::cellsTotal);
-        registerMetric("wal.rows.filtered", walProcessor::rowsFilteredTotal);
-        registerMetric("schema.registry.register.success", payload::schemaRegistryRegisteredCount);
-        registerMetric("schema.registry.register.failures", payload::schemaRegistryFailedCount);
-        registerMetric("wal.rowbuffer.upsizes", walProcessor::rowBufferUpsizeCount);
-        registerMetric("wal.rowbuffer.trims", walProcessor::rowBufferTrimCount);
-        registerMetric("ensure.cooldown.skipped", topicManager::ensureSkippedCount);
+        registerMetric("wal.записей.всего", walProcessor::entriesTotal);
+        registerMetric("wal.строк.всего", walProcessor::rowsTotal);
+        registerMetric("wal.ячеек.всего", walProcessor::cellsTotal);
+        registerMetric("wal.строк.отфильтровано", walProcessor::rowsFilteredTotal);
+        registerMetric("sr.регистрация.успехов", payload::schemaRegistryRegisteredCount);
+        registerMetric("sr.регистрация.ошибок", payload::schemaRegistryFailedCount);
+        registerMetric("wal.rowbuffer.расширения", walProcessor::rowBufferUpsizeCount);
+        registerMetric("wal.rowbuffer.сжатия", walProcessor::rowBufferTrimCount);
+        registerMetric("ensure.пропуски.из-за.паузы", topicManager::ensureSkippedCount);
         // Метрики отказов репликации
-        registerMetric("replicate.failures.total", replicateFailures::sum);
-        registerMetric("replicate.last.failure.epoch.ms", lastReplicateFailureAt::get);
+        registerMetric("репликация.ошибок.всего", replicateFailures::sum);
+        registerMetric("репликация.последняя.ошибка.epoch.ms", lastReplicateFailureAt::get);
     }
 
     private void registerMetric(String name, LongSupplier supplier) {
@@ -399,7 +400,7 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
      * Исключения при закрытии не пробрасываются и логируются на уровне DEBUG.
      */
     @Override protected void doStop() {
-        closeWalEntryProcessor();
+        closeResources();
         try {
             if (producer != null) {
                 producer.flush();
@@ -410,9 +411,6 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
             if (LOG.isDebugEnabled()) {
                 LOG.debug("doStop(): ошибка при закрытии Kafka producer (игнорируется при завершении работы)", e);
             }
-        }
-        if (topicManager != null) {
-            topicManager.closeQuietly();
         }
         // Снятие регистрации JMX-метрик (если были зарегистрированы)
         try {
@@ -428,19 +426,17 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
         notifyStopped();
     }
 
-    private void closeWalEntryProcessor() {
-        WalEntryProcessor processor = this.walEntryProcessor;
-        if (processor == null) {
+    private void closeResources() {
+        ReplicationResources current = this.resources;
+        if (current == null) {
             return;
         }
         try {
-            processor.close();
-        } catch (Exception ex) {
-            if (LOG.isDebugEnabled()) {
-                LOG.debug("KafkaReplicationEndpoint: ошибка при закрытии WalEntryProcessor (игнорируется)", ex);
-            }
+            current.close();
         } finally {
+            this.resources = null;
             this.walEntryProcessor = null;
+            this.topicManager = null;
         }
     }
     /**

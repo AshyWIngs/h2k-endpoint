@@ -301,14 +301,14 @@ class TopicEnsurerTest {
     @Test
     @DisplayName("createIfEnabled отключает ensure при пустом bootstrap")
     void factoryDisablesEnsureForBlankBootstrap() {
-        H2kConfig cfg = minimalConfig("   ", true);
-    TopicEnsurer ensurer = TopicEnsurer.createIfEnabled(
-        cfg.getEnsureSettings(),
-        cfg.getTopicSettings(),
-        cfg.getBootstrap(),
-        null);
+        H2kConfig cfg = minimalConfig("mock:9092", true);
+        TopicEnsurer ensurer = TopicEnsurer.createIfEnabled(
+                cfg.getEnsureSettings(),
+                cfg.getTopicSettings(),
+                "   ",
+                null);
 
-    assertFalse(ensurer.isEnabled(),
+        assertFalse(ensurer.isEnabled(),
                 "Пустой bootstrap обязан приводить к отключению ensureTopics");
     }
 
@@ -342,14 +342,14 @@ class TopicEnsurerTest {
                 Collections.emptyMap(), /*backoff*/ 10);
 
         assertTrue(te.ensureTopicOk("foo"), "После успешного create тема должна считаться обеспеченной");
-        assertEquals(1L, m(te, "exists.false"));
-        assertEquals(1L, m(te, "create.ok"));
-        assertEquals(0L, m(te, "create.fail"));
+        assertEquals(1L, m(te, "существует.нет"));
+        assertEquals(1L, m(te, "создание.успех"));
+        assertEquals(0L, m(te, "создание.ошибка"));
     }
 
     /**
      * Сценарий гонки: describe → UnknownTopic, create → {@link TopicExistsException}.
-     * Ожидаем: трактуем как успех (тему уже создали параллельно), счётчик create.race увеличен.
+     * Ожидаем: трактуем как успех (тему уже создали параллельно), счётчик создание.гонка увеличен.
      */
     @Test
     @DisplayName("ensureTopicOk: гонка при создании (TopicExists) трактуется как успех")
@@ -361,8 +361,8 @@ class TopicEnsurerTest {
                 Collections.emptyMap(), 10);
 
         assertTrue(te.ensureTopicOk("bar"), "TopicExists во время create должен считаться успешным исходом");
-        assertEquals(1L, m(te, "create.race"));
-        assertEquals(0L, m(te, "create.fail"));
+        assertEquals(1L, m(te, "создание.гонка"));
+        assertEquals(0L, m(te, "создание.ошибка"));
     }
 
     /**
@@ -395,8 +395,8 @@ class TopicEnsurerTest {
         TopicEnsurer te = newEnsurer(fa, /*timeout*/ 10, 1, (short) 1, Collections.emptyMap(), /*backoff*/ 20);
 
         te.ensureTopic("slow"); // приведёт к TimeoutException на get()
-        assertEquals(1L, m(te, "exists.unknown"));
-        assertTrue(m(te, "unknown.backoff.size") >= 1, "Должна появиться запись backoff для темы");
+        assertEquals(1L, m(te, "существует.неизвестно"));
+        assertTrue(m(te, "ensure.бэкофф.размер") >= 1, "Должна появиться запись backoff для темы");
     }
 
     /**
@@ -414,11 +414,11 @@ class TopicEnsurerTest {
         TopicEnsurer te = newEnsurer(fa, 10, 2, (short) 1, Collections.emptyMap(), 15);
 
         te.ensureTopics(Arrays.asList("t1", "t2", "t3"));
-        assertEquals(1L, m(te, "exists.true"));
-        assertEquals(1L, m(te, "exists.unknown"));
-        assertEquals(1L, m(te, "exists.false"));
-        assertEquals(1L, m(te, "create.ok"));
-        assertTrue(m(te, "unknown.backoff.size") >= 1);
+        assertEquals(1L, m(te, "существует.да"));
+        assertEquals(1L, m(te, "существует.неизвестно"));
+        assertEquals(1L, m(te, "существует.нет"));
+        assertEquals(1L, m(te, "создание.успех"));
+        assertTrue(m(te, "ensure.бэкофф.размер") >= 1);
     }
 
     /**
@@ -435,7 +435,7 @@ class TopicEnsurerTest {
     }
     /**
      * Позитив: существующая тема не создаётся повторно.
-     * Проверяем, что ensureTopicOk возвращает true и create.ok не увеличивается.
+     * Проверяем, что ensureTopicOk возвращает true и создание.успех не увеличивается.
      */
     @Test
     @DisplayName("ensureTopicOk: существующая тема → без create (idempotent)")
@@ -445,13 +445,13 @@ class TopicEnsurerTest {
         TopicEnsurer te = newEnsurer(fa, 20, 2, (short) 1, Collections.emptyMap(), 10);
 
         assertTrue(te.ensureTopicOk("exists"));
-        assertEquals(1L, m(te, "exists.true"));
-        assertEquals(0L, m(te, "create.ok"));
+        assertEquals(1L, m(te, "существует.да"));
+        assertEquals(0L, m(te, "создание.успех"));
     }
 
     /**
      * Негатив: ошибка создания (ExecutionException) приводит к возврату false.
-     * Метрики фиксируют попытку (exists.false=1) и create.fail=1.
+     * Метрики фиксируют попытку (существует.нет=1) и создание.ошибка=1.
      */
     @Test
     @DisplayName("ensureTopicOk: ошибка create (FAIL) → false и счётчик fail")
@@ -462,16 +462,16 @@ class TopicEnsurerTest {
         TopicEnsurer te = newEnsurer(fa, 25, 3, (short) 2, Collections.emptyMap(), 10);
 
         assertFalse(te.ensureTopicOk("bad"));
-        assertEquals(1L, m(te, "exists.false"));
-        assertEquals(1L, m(te, "create.fail"));
-        assertEquals(0L, m(te, "create.ok"));
+        assertEquals(1L, m(te, "существует.нет"));
+        assertEquals(1L, m(te, "создание.ошибка"));
+        assertEquals(0L, m(te, "создание.успех"));
     }
 
     /**
-     * Негатив: таймаут создания (TimeoutException) → false, без учёта как create.ok.
+     * Негатив: таймаут создания (TimeoutException) → false, без учёта как создание.успех.
      */
     @Test
-    @DisplayName("ensureTopicOk: таймаут при create → false, без create.ok")
+    @DisplayName("ensureTopicOk: таймаут при create → false, без создание.успех")
     void ensureCreateTimeoutReturnsFalse() {
         FakeAdmin fa = new FakeAdmin()
                 .willDescribeNotFound("slowCreate")
@@ -479,8 +479,8 @@ class TopicEnsurerTest {
         TopicEnsurer te = newEnsurer(fa, 15, 2, (short) 1, Collections.emptyMap(), 10);
 
         assertFalse(te.ensureTopicOk("slowCreate"));
-        assertEquals(1L, m(te, "exists.false"));
-        assertEquals(0L, m(te, "create.ok"));
+        assertEquals(1L, m(te, "существует.нет"));
+        assertEquals(0L, m(te, "создание.успех"));
     }
 
     /**
@@ -538,8 +538,8 @@ class TopicEnsurerTest {
         TopicEnsurer te = newEnsurer(fa, 15, 1, (short) 1, Collections.emptyMap(), 10);
 
         te.ensureTopics(Arrays.asList("ok-exists", "", ".", "ok-new", " "));
-        assertEquals(1L, m(te, "exists.true"));
-        assertEquals(1L, m(te, "exists.false"));
-        assertEquals(1L, m(te, "create.ok"));
+        assertEquals(1L, m(te, "существует.да"));
+        assertEquals(1L, m(te, "существует.нет"));
+        assertEquals(1L, m(te, "создание.успех"));
     }
 }

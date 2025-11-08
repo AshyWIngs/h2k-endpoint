@@ -49,7 +49,8 @@ final class H2kConfigLoader {
         applyAvroSection(builder, sections.avro);
         applyEnsureSection(builder, sections.ensure);
         applyProducerSection(builder, sections.batch);
-        builder.observersEnabled(sections.observersEnabled);
+        builder.observersEnabled(sections.monitoring.isObserversEnabled());
+        builder.jmxEnabled(sections.monitoring.isJmxEnabled());
         return builder.build();
     }
 
@@ -98,20 +99,20 @@ final class H2kConfigLoader {
         final EnsureSection ensure;
         final ProducerBatchSection batch;
         final Map<String, String> topicConfigs;
-        final boolean observersEnabled;
+        final MonitoringSettings monitoring;
 
         private ConfigSections(TopicSection topic,
                                AvroSection avro,
                                EnsureSection ensure,
                                ProducerBatchSection batch,
                                Map<String, String> topicConfigs,
-                               boolean observersEnabled) {
+                               MonitoringSettings monitoring) {
             this.topic = topic;
             this.avro = avro;
             this.ensure = ensure;
             this.batch = batch;
             this.topicConfigs = topicConfigs;
-            this.observersEnabled = observersEnabled;
+            this.monitoring = monitoring;
         }
 
         static ConfigSections collect(Configuration cfg) {
@@ -124,7 +125,12 @@ final class H2kConfigLoader {
                     cfg,
                     H2kConfig.Keys.OBSERVERS_ENABLED,
                     H2kConfig.DEFAULT_OBSERVERS_ENABLED);
-            return new ConfigSections(topic, avro, ensure, batch, topicConfigs, observersEnabled);
+            boolean jmxEnabled = Parsers.readBoolean(
+                    cfg,
+                    H2kConfig.Keys.JMX_ENABLED,
+                    H2kConfig.DEFAULT_JMX_ENABLED);
+            MonitoringSettings monitoring = new MonitoringSettings(observersEnabled, jmxEnabled);
+            return new ConfigSections(topic, avro, ensure, batch, topicConfigs, monitoring);
         }
     }
 }

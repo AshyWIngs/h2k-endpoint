@@ -65,7 +65,8 @@ codacy-security.sarif
 .codacy/logs/
 
 # --- Автоматические инструкции и служебные каталоги ---
-.github
+.github/*
+!.github/workflows/
 .vscode
 
 # --- Прочее ---
@@ -90,4 +91,7 @@ replay_pid*
 .codacy/
 
 # Локальные вспомогательные скрипты среды
-scripts/
+scripts/** */
+!scripts/javadoc_html_lint.py
+!scripts/comment_lint.py
+!scripts/log_lint.py

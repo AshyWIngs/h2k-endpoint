@@ -3,7 +3,7 @@
 **Пакет:** `kz.qazmarka.h2k.endpoint`  
 **Endpoint‑класс:** `kz.qazmarka.h2k.endpoint.KafkaReplicationEndpoint`
 
-Лёгкий и быстрый `ReplicationEndpoint` для HBase 1.4.x. Формат полезной нагрузки — строго **Avro (Confluent Schema Registry)**. Минимум аллокаций, стабильный порядок полей, дружелюбные логи на русском.
+Лёгкий и быстрый `ReplicationEndpoint` для HBase 1.4.x. Формат полезной нагрузки — строго **Avro (Confluent Schema Registry)** (только Avro с Confluent Schema Registry). Минимум аллокаций, стабильный порядок полей, дружелюбные логи на русском.
 
 ---
 
@@ -66,6 +66,7 @@ bin/hbase shell conf/add_peer_shell_balanced.txt
 - **HBase:** 1.4.13 (совместимо с 1.4.x)
 - **Kafka (клиенты):** 2.3.1
 - **Phoenix:** 4.14/4.15 (совместимо; используется Avro Phoenix registry)
+- **Schema Registry:** Confluent 5.3.8 (совместимо с 5.x)
 
 > RegionServer и Endpoint должны работать на **Java 8**.
 
@@ -81,6 +82,34 @@ bin/hbase shell conf/add_peer_shell_balanced.txt
      *(если измените `compression.type` на `snappy`, добавьте `snappy-java-1.1.x+.jar`)*
    > Avro/Jackson и Confluent Schema Registry 5.3.8 шейдятся внутрь `h2k-endpoint-*.jar`, поэтому дополнительные Confluent JAR не нужны.
 3. Перезапустите RegionServer.
+
+Если используете тонкий JAR (`h2k-endpoint-<version>.jar`):
+
+- Дополнительно положите на classpath RS следующие библиотеки строгих версий:
+  - org.apache.avro:avro:1.11.4
+  - com.fasterxml.jackson.core:jackson-core:2.17.2
+  - com.fasterxml.jackson.core:jackson-databind:2.17.2
+  - com.fasterxml.jackson.core:jackson-annotations:2.17.2
+  - org.apache.commons:commons-compress:1.26.0
+  - org.apache.commons:commons-lang3:3.18.0
+  - io.confluent:kafka-avro-serializer:5.3.8
+  - io.confluent:kafka-schema-registry-client:5.3.8
+  - io.confluent:common-config:5.3.8
+  - io.confluent:common-utils:5.3.8
+  - com.101tec:zkclient:0.10
+  - (если на RS отсутствуют) org.apache.kafka:kafka-clients:2.3.1, org.lz4:lz4-java:1.6.0,
+    а при использовании компрессии: org.xerial.snappy:snappy-java:1.1.7+ или com.github.luben:zstd-jni (для zstd)
+
+- Быстрая выгрузка зависимостей через Maven:
+  ```bash
+  mvn -q -DincludeScope=runtime dependency:copy-dependencies \
+    -DoutputDirectory=target/lib-thin
+  # скопируйте из target/lib-thin перечисленные выше JAR на RS в HBASE_HOME/lib/
+  ```
+
+Примечания для тонкого JAR:
+- Не добавляйте `slf4j-simple` на RS — у HBase уже есть свой биндинг SLF4J (log4j).
+- Следите, чтобы на classpath не лежали параллельно старые Avro/Jackson: используйте версии, указанные выше.
 
 Быстрая проверка:
 ```bash
@@ -110,8 +139,6 @@ h2k.topic.pattern=${table}
 
 | Ключ | Назначение | Примечание |
 |---|---|---|
-| Ключ | Назначение | Примечание |
-|---|---|---|
 | `h2k.kafka.bootstrap.servers` | Список брокеров Kafka | `host:port[,host2:port2]` |
 | `h2k.avro.sr.urls` | URL Schema Registry | Обязателен; перечисляйте через запятую |
 | `h2k.avro.schema.dir` | Каталог локальных `.avsc` | По умолчанию `conf/avro` |
@@ -119,6 +146,7 @@ h2k.topic.pattern=${table}
 | `h2k.topic.pattern` | Шаблон имени топика | `${table}` по умолчанию |
 | `h2k.ensure.topics` | Автосоздание тем | true/false |
 | `h2k.topic.config.*` | Доп. параметры Kafka-топика | Передаются в AdminClient при ensure |
+| `h2k.jmx.enabled` | Регистрация MBean `H2kMetricsJmx` | true/false (дефолт `true`); отключайте только если JMX запрещён |
 
 
 > Фильтрация по CF задаётся на уровне Avro-схемы: укажите `"h2k.cf.list": "cf1,cf2"` в `conf/avro/<TABLE>.avsc`.
@@ -128,11 +156,12 @@ h2k.topic.pattern=${table}
 > Файл `schema.json` более не используется.
 
 > Полная справка по ключам и значениям — см. **docs/config.md**.
-### Наблюдатели горячего пути
+### Наблюдатели и JMX
 
 - Диагностика (`WalDiagnostics`) выключена по умолчанию (`h2k.observers.enabled=false`) и не влияет на горячий путь.
 - Включайте флаг точечно для диагностики: появятся рекомендации по `h2k.capacityHint` (из Avro) и предупреждения об неэффективных CF-фильтрах и настройках соли.
 - Метрики и WARN-логи помогают уточнить подсказки для таблиц; после тюнинга флаг можно снова отключить.
+- JMX-метрики (`H2kMetricsJmx`) публикуются, пока `h2k.jmx.enabled=true` (значение по умолчанию). Отключайте только если на RS запрещён JMX — иначе Prometheus/grafana не увидят метрики.
 
 ### Настройки продьюсера (синхронизированы с `conf/add_peer_shell_balanced.txt`)
 
@@ -209,9 +238,9 @@ Endpoint публикует события в формате Avro (Confluent Sch
 
 При старте endpoint выводит строку уровня INFO вида `Payload: payload.format=AVRO_BINARY, serializer.class=..., schema.registry.urls=...` — по ней видно, что активен Confluent SR и какие URL используются.
 
-Метрики `schema.registry.register.success` и `schema.registry.register.failures`, публикуемые через `TopicManager.getMetrics()`, напрямую отражают работу сериализатора Avro Confluent: успехи и ошибки регистрации схем в Schema Registry заметны без дополнительных логов.
+Метрики `sr.регистрация.успехов` и `sr.регистрация.ошибок`, публикуемые через `TopicManager.getMetrics()`, напрямую отражают работу сериализатора Avro Confluent: успехи и ошибки регистрации схем в Schema Registry заметны без дополнительных логов (см. JMX‑алиасы в `docs/prometheus-jmx.md`).
 
-Отдельная метрика `ensure.cooldown.skipped` показывает, сколько ensure-вызовов сработало в режиме «пропуск по cooldown». Допуски жёстко заданы в коде (1 минута после успешной проверки, 5 секунд после ошибки); рост счётчика означает, что темы часто попадают в окно удержания. Проверьте доступность Kafka/AdminClient и при необходимости инициируйте ensure вручную (например, через `TopicEnsurer#ensureTopicOk` в тестовых утилитах).
+Отдельная метрика `ensure.пропуски.из-за.паузы` показывает, сколько ensure-вызовов сработало в режиме «пропуск по cooldown». Допуски жёстко заданы в коде (1 минута после успешной проверки, 5 секунд после ошибки); рост счётчика означает, что темы часто попадают в окно удержания. Проверьте доступность Kafka/AdminClient и при необходимости инициируйте ensure вручную (например, через `TopicEnsurer#ensureTopicOk` в тестовых утилитах).
 
 ## Безопасность и ограничения
 
@@ -226,9 +255,17 @@ Endpoint публикует события в формате Avro (Confluent Sch
 1. **Staged rollout.** Раскатайте JAR на один RegionServer, включите peer только для части таблиц и убедитесь, что Schema Registry зарегистрировал схемы без конфликтов.
 2. **Метрики GC/throughput.** Снимите `HRegionServer.GcTimeMillis`, `ReplicationSource.avgReplicationDelay`, а также нагрузку на Kafka продьюсер (`records-sec`, `request-latency`).
 3. **Наблюдаемость Kafka.** Проверяйте `UnderReplicatedPartitions`, `RecordErrorRate`, ошибки `org.apache.kafka.clients` в логах RS.
-4. **Метрики endpoint.** `TopicManager.getMetrics()` возвращает счётчики ensure и свежие показатели `wal.*`, `schema.registry.*`; `wal.rowbuffer.upsizes` и `wal.rowbuffer.trims` помогают заметить широкие строки (более 32 ячеек) и редкие «гигантские» записи (≥4096 ячеек), а INFO-лог `Скорость WAL: ...` появляется примерно каждые 5 секунд и показывает фактическую скорость строк/сек. Цепочка `TopicEnsurer` (AdminClient + executor) поднимается лениво при первом ensure-вызове, поэтому время старта Endpoint минимально; первый же ensure может занять немного дольше обычного.
-5. **Расширение.** После 1–2 часов без аномалий включайте остальные RS и таблицы; держите предыдущую версию JAR в каталоге `lib/backup` до полного завершения миграции.
-6. **Откат.** При необходимости отключите peer (`disable_peer`), удалите новый JAR, верните предыдущий и перезапустите RS.
+4. **Метрики endpoint.** `TopicManager.getMetrics()` возвращает счётчики ensure и свежие показатели `wal.*`, `sr.*`; `wal.rowbuffer.расширения` и `wal.rowbuffer.сжатия` помогают заметить широкие строки (более 32 ячеек) и редкие «гигантские» записи (≥4096 ячеек), а INFO-лог `Скорость WAL: ...` появляется примерно каждые 5 секунд и показывает фактическую скорость строк/сек. Цепочка `TopicEnsurer` (AdminClient + executor) поднимается лениво при первом ensure-вызове, поэтому время старта Endpoint минимально; первый же ensure может занять немного дольше обычного.
+5. **Журналы.** Все записи Endpoint теперь начинаются с `h2k-endpoint`, поэтому диагностика сводится к `journalctl -u hbase-regionserver-default.service -o cat --since "2h" | grep h2k-endpoint`. Для таблиц можно дополнительно фильтровать по `table=NAME`.
+6. **Расширение.** После 1–2 часов без аномалий включайте остальные RS и таблицы; держите предыдущую версию JAR в каталоге `lib/backup` до полного завершения миграции.
+7. **Откат.** При необходимости отключите peer (`disable_peer`), удалите новый JAR, верните предыдущий и перезапустите RS.
+
+### Вспомогательные классы горячего пути
+
+- **`kz.qazmarka.h2k.endpoint.ReplicationResources`** — единая фабрика/контейнер для `PayloadBuilder`, `TopicManager`, `WalEntryProcessor`. Создаёт их атомарно и хранит ссылки, чтобы `KafkaReplicationEndpoint` мог безопасно стартовать и завершаться без дублирования кода.
+- **`ReplicationResources.ResourceGuard`** — стековый guard, автоматически закрывающий уже созданные ресурсы, если инициализация оборвётся. Как только все компоненты подняты успешно, guard высвобождается (`releaseAll()`), а ответственность переходит к endpoint’у.
+- **`TopicManager`** — тонкий фасад над `TopicEnsurer` и `TopicNamingSettings`, гарантирует ленивое ensure и отдаёт метрики для JMX/логов.
+- Эти классы не участвуют в непосредственной обработке WAL, но упрощают жизненный цикл и предотвращают утечки Kafka-продьюсеров/ensure-цепочек. При доработках горячего пути начинайте с `ReplicationResources#create`: там видно, какие зависимости поднимаются в каком порядке.
 
 ### Поток обработки WAL
 
@@ -238,7 +275,7 @@ Endpoint публикует события в формате Avro (Confluent Sch
   1. Разрешает имя топика и при необходимости запускает Ensure-топик.
   2. Считывает метаданные WAL (sequenceId/writeTime) — дополнительный флаг `includeWalMeta` больше не требуется.
   3. Собирает CF‑фильтр, группирует ячейки по rowkey и отправляет строки в Kafka, накапливая futures в `BatchSender`.
-- `ReplicationExecutor` ловит исключения, пишет WARN/ERROR и увеличивает метрики `replicate.failures.*`; DEBUG‑лог содержит стек. Метрики доступны через `TopicManager.getMetrics()` и JMX.
+- `ReplicationExecutor` ловит исключения, пишет WARN/ERROR и увеличивает метрики `репликация.ошибок.*`; DEBUG‑лог содержит стек. Метрики доступны через `TopicManager.getMetrics()` и JMX.
 
 ### Разработка (IDE)
 
@@ -270,8 +307,8 @@ Endpoint публикует события в формате Avro (Confluent Sch
 
 ## Структура пакетов
 
-- `kz.qazmarka.h2k.endpoint` — точка входа `KafkaReplicationEndpoint`, инициализация и публичный API.
-- `kz.qazmarka.h2k.endpoint.internal` — `TopicManager`, метрики, вспомогательные сервисы endpoint’а.
+- `kz.qazmarka.h2k.endpoint` — точка входа `KafkaReplicationEndpoint`, вспомогательные классы жизненного цикла (`ReplicationResources`, `ResourceGuard`).
+- `kz.qazmarka.h2k.endpoint.topic` — `TopicManager` и обвязка ensure-логики.
 - `kz.qazmarka.h2k.endpoint.processing` — горячий путь WAL→Kafka: группировка строк, фильтрация CF, построение payload, счётчики.
 - `kz.qazmarka.h2k.kafka.ensure` — автоматическое создание/согласование топиков (ядро `EnsureCoordinator`, фоновой `TopicEnsureExecutor`, управление бэкоффом `TopicBackoffManager`; подпакеты `admin`, `config`).
 - `kz.qazmarka.h2k.kafka.producer.batch` — минимальный буфер Kafka Futures с пороговым `flush`.

@@ -5,11 +5,12 @@
 
 Поддерживаются два источника метрик:
 - Метрики ensure и дополнительные счётчики из `TopicManager.getMetrics()`;
-- Новые метрики репликации на уровне эндпоинта: `replicate.failures.total` и `replicate.last.failure.epoch.ms`.
+- Новые метрики репликации на уровне эндпоинта: `репликация.ошибок.всего` и `репликация.последняя.ошибка.epoch.ms`.
 
 Начиная с этой версии, метрики H2K экспонируются через JMX в виде DynamicMBean:
 - ObjectName: `kz.qazmarka.h2k:type=Endpoint,name=H2KMetrics`
 - Атрибуты (read‑only): нормализованные имена метрик, значения — `Long`
+- Регистрация MBean управляется флагом `h2k.jmx.enabled` (дефолт `true`). Не выключайте его на тех peers, где нужны метрики.
 
 Примеры атрибутов:
 - ensure.invocations.total → ensure_invocations_total
@@ -17,10 +18,36 @@
 - ensure.invocations.rejected → ensure_invocations_rejected
 - ensure.cache.hit → ensure_cache_hit
 - ensure.batch.count → ensure_batch_count
-- create.ok → create_ok
-- unknown.backoff.size → unknown_backoff_size
-- replicate.failures.total → replicate_failures_total
-- replicate.last.failure.epoch.ms → replicate_last_failure_epoch_ms
+- создание.успех → алиас create.ok → create_ok
+- ensure.бэкофф.размер → алиас unknown.backoff.size → unknown_backoff_size
+- репликация.ошибок.всего → алиас replicate.failures.total → replicate_failures_total
+- репликация.последняя.ошибка.epoch.ms → алиас replicate.last.failure.epoch.ms → replicate_last_failure_epoch_ms
+
+#### Таблица JMX‑алиасов (ключ → алиас → атрибут)
+
+- wal.записей.всего → wal.entries.total → wal_entries_total
+- wal.строк.всего → wal.rows.total → wal_rows_total
+- wal.ячеек.всего → wal.cells.total → wal_cells_total
+- wal.строк.отфильтровано → wal.rows.filtered → wal_rows_filtered
+- wal.rowbuffer.расширения → wal.rowbuffer.upsizes → wal_rowbuffer_upsizes
+- wal.rowbuffer.сжатия → wal.rowbuffer.trims → wal_rowbuffer_trims
+- ensure.вызовов.всего → ensure.invocations.total → ensure_invocations_total
+- ensure.вызовов.принято → ensure.invocations.accepted → ensure_invocations_accepted
+- ensure.вызовов.отклонено → ensure.invocations.rejected → ensure_invocations_rejected
+- существует.да → exists.true → exists_true
+- существует.нет → exists_false → exists_false
+- существует.неизвестно → exists.unknown → exists_unknown
+- создание.успех → create.ok → create_ok
+- создание.гонка → create.race → create_race
+- создание.ошибка → create.fail → create_fail
+- ensure.бэкофф.размер → unknown.backoff.size → unknown_backoff_size
+- ensure.подтверждено.тем → state.ensured.count → state_ensured_count
+- ensure.очередь.ожидает → queue.pending → queue_pending
+- ensure.пропуски.из-за.паузы → ensure.cooldown.skipped → ensure_cooldown_skipped
+- sr.регистрация.успехов → schema.registry.register.success → schema_registry_register_success
+- sr.регистрация.ошибок → schema.registry.register.failures → schema_registry_register_failures
+- репликация.ошибок.всего → replicate.failures.total → replicate_failures_total
+- репликация.последняя.ошибка.epoch.ms → replicate.last.failure.epoch.ms → replicate_last_failure_epoch_ms
 
 Обратите внимание: в JMX имена атрибутов нормализованы (все небуквенно‑цифровые символы заменяются на `_`).
 
@@ -163,29 +190,29 @@ scrape_configs:
 - ensure.invocations.rejected — фильтры кандидатов (пустые имена, невалидные, backoff)
 - ensure.cache.hit — попадания кеша ensure
 - ensure.batch.count — количество топиков, обработанных через batch ensure
-- exists.true / exists.false / exists.unknown — результаты проверки существования топика
-- create.ok / create.race / create.fail — исходы создания топика
-- unknown.backoff.size — размер очереди отложенных ensure
-- state.ensured.count — число тем в локальном кеше «подтверждённых» ensure
-- queue.pending — размер очереди фонового EnsureExecutor
+- существует.да / существует.нет / существует.неизвестно — результаты проверки существования топика
+- создание.успех / создание.гонка / создание.ошибка — исходы создания топика
+- ensure.бэкофф.размер — размер очереди отложенных ensure
+- ensure.подтверждено.тем — число тем в локальном кеше «подтверждённых» ensure
+- ensure.очередь.ожидает — размер очереди фонового EnsureExecutor
 
 Метрики WAL/построения payload:
-- wal.entries.total — обработанные записи WAL
-- wal.rows.total — обработанные строки
-- wal.cells.total — обработанные ячейки
-- wal.rows.filtered — отброшенные строки CF‑фильтром
-- wal.rowbuffer.upsizes — увеличения буфера строк
-- wal.rowbuffer.trims — усадки буфера строк
+- wal.записей.всего — обработанные записи WAL
+- wal.строк.всего — обработанные строки
+- wal.ячеек.всего — обработанные ячейки
+- wal.строк.отфильтровано — отброшенные строки CF‑фильтром
+- wal.rowbuffer.расширения — увеличения буфера строк
+- wal.rowbuffer.сжатия — усадки буфера строк
 
-`wal.rowbuffer.upsizes` инкрементируется, когда для новой строки требуется вместить больше базовых 32 ячеек: это сигнал, что встречаются широкие строки и горячий путь временно увеличил `ArrayList`. `wal.rowbuffer.trims` растёт при обработке строк из ≥4096 ячеек, после чего буфер принудительно ужимается обратно до 32 элементов. Если значения быстро накапливаются, проверьте схемы и фильтры CF: возможно, из репликации не исключены архивные или «широкие» таблицы, что способно увеличить давление на GC.
+`wal.rowbuffer.расширения` инкрементируется, когда для новой строки требуется вместить больше базовых 32 ячеек: это сигнал, что встречаются широкие строки и горячий путь временно увеличил `ArrayList`. `wal.rowbuffer.сжатия` растёт при обработке строк из ≥4096 ячеек, после чего буфер принудительно ужимается обратно до 32 элементов. Если значения быстро накапливаются, проверьте схемы и фильтры CF: возможно, из репликации не исключены архивные или «широкие» таблицы, что способно увеличить давление на GC.
 
 Метрики Schema Registry:
-- schema.registry.register.success — успешные регистрации схем
-- schema.registry.register.failures — ошибки регистрации схем
+- sr.регистрация.успехов — успешные регистрации схем
+- sr.регистрация.ошибок — ошибки регистрации схем
 
 Новые метрики отказов репликации:
-- replicate.failures.total — суммарное число отказов `replicate()`
-- replicate.last.failure.epoch.ms — отметка времени последней ошибки (epoch ms)
+- репликация.ошибок.всего — суммарное число отказов `replicate()`
+- репликация.последняя.ошибка.epoch.ms — отметка времени последней ошибки (epoch ms)
 
 Все эти метрики доступны как атрибуты MBean `H2KMetrics` и автоматически экспортируются
 JMX Exporter по правилу из примера.

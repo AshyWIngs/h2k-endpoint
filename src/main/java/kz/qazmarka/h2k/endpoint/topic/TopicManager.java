@@ -118,7 +118,7 @@ public final class TopicManager {
         Objects.requireNonNull(supplier, "metric supplier");
         String trimmed = name.trim();
         if (trimmed.isEmpty()) {
-            throw new IllegalArgumentException("metric name must not be blank");
+            throw new IllegalArgumentException("Имя метрики не может быть пустым");
         }
         extraMetrics.put(trimmed, supplier);
     }
@@ -136,7 +136,7 @@ public final class TopicManager {
             }
             Map<String, Long> snapshot = new LinkedHashMap<>(ensureMetrics.size() + 1);
             snapshot.putAll(ensureMetrics);
-            snapshot.put("ensure.cooldown.skipped", ensureSkipped.sum());
+            snapshot.put("ensure.пропуски.из-за.паузы", ensureSkipped.sum());
             return Collections.unmodifiableMap(snapshot);
         }
         int extra = extraMetrics.size();
@@ -156,7 +156,7 @@ public final class TopicManager {
             }
         }
         if (ensureSkipped.sum() > 0) {
-            snapshot.put("ensure.cooldown.skipped", ensureSkipped.sum());
+            snapshot.put("ensure.пропуски.из-за.паузы", ensureSkipped.sum());
         }
         return Collections.unmodifiableMap(snapshot);
     }

@@ -100,19 +100,20 @@ final class EnsureCoordinator implements AutoCloseable {
 
     Map<String, Long> getMetrics() {
         Map<String, Long> m = new LinkedHashMap<>(16);
-        m.put("ensure.invocations.total", state.ensureEvaluations().longValue());
-        m.put("ensure.invocations.accepted", state.ensureInvocations().longValue());
-        m.put("ensure.invocations.rejected", state.ensureRejected().longValue());
-        m.put("ensure.invocations", state.ensureInvocations().longValue());
-        m.put("ensure.cache.hit",   state.ensureHitCache().longValue());
-        m.put("ensure.batch.count", state.ensureBatchCount().longValue());
-        m.put("exists.true",        state.existsTrue().longValue());
-        m.put("exists.false",       state.existsFalse().longValue());
-        m.put("exists.unknown",     state.existsUnknown().longValue());
-        m.put("create.ok",          state.createOk().longValue());
-        m.put("create.race",        state.createRace().longValue());
-        m.put("create.fail",        state.createFail().longValue());
-        m.put("unknown.backoff.size", (long) state.unknownSize());
+        // Полная локализация ключей метрик ensure
+        m.put("ensure.вызовов.всего",     state.ensureEvaluations().longValue());
+        m.put("ensure.вызовов.принято",   state.ensureInvocations().longValue());
+        m.put("ensure.вызовов.отклонено", state.ensureRejected().longValue());
+        m.put("ensure.вызовов",           state.ensureInvocations().longValue());
+        m.put("ensure.кэш.попаданий",     state.ensureHitCache().longValue());
+        m.put("ensure.пакетов",           state.ensureBatchCount().longValue());
+        m.put("существует.да",            state.existsTrue().longValue());
+        m.put("существует.нет",           state.existsFalse().longValue());
+        m.put("существует.неизвестно",    state.existsUnknown().longValue());
+        m.put("создание.успех",           state.createOk().longValue());
+        m.put("создание.гонка",           state.createRace().longValue());
+        m.put("создание.ошибка",          state.createFail().longValue());
+        m.put("ensure.бэкофф.размер",     (long) state.unknownSize());
         return Collections.unmodifiableMap(m);
     }
 

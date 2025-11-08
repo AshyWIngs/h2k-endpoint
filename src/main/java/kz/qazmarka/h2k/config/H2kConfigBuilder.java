@@ -8,7 +8,7 @@ import java.util.Map;
 import kz.qazmarka.h2k.schema.registry.PhoenixTableMetadataProvider;
 
 /**
- * Отдельный билдер для сборки {@link H2kConfigData} и итогового {@link H2kConfig} без жёсткой связности.
+ * Отдельный билдер для сборки итогового {@link H2kConfig} без жёсткой связности.
  * Используется загрузчиком конфигурации и тестами для декларативной настройки секций.
  */
 public final class H2kConfigBuilder {
@@ -32,6 +32,7 @@ public final class H2kConfigBuilder {
     private Map<String, String> topicConfigs = Collections.emptyMap();
     private PhoenixTableMetadataProvider tableMetadataProvider = PhoenixTableMetadataProvider.NOOP;
     private boolean observersEnabled = H2kConfig.DEFAULT_OBSERVERS_ENABLED;
+    private boolean jmxEnabled = H2kConfig.DEFAULT_JMX_ENABLED;
 
     public H2kConfigBuilder(String bootstrap) {
         this.bootstrap = bootstrap;
@@ -44,6 +45,11 @@ public final class H2kConfigBuilder {
 
     public H2kConfigBuilder observersEnabled(boolean enabled) {
         this.observersEnabled = enabled;
+        return this;
+    }
+
+    public H2kConfigBuilder jmxEnabled(boolean enabled) {
+        this.jmxEnabled = enabled;
         return this;
     }
 
@@ -63,7 +69,7 @@ public final class H2kConfigBuilder {
         return new ProducerOptions();
     }
 
-    H2kConfigData buildData() {
+    public H2kConfig build() {
         List<String> urls = (avroSchemaRegistryUrls == null) ? Collections.<String>emptyList() : avroSchemaRegistryUrls;
         Map<String, String> auth = (avroSrAuth == null) ? Collections.<String, String>emptyMap() : avroSrAuth;
         Map<String, String> props = (avroProps == null) ? Collections.<String, String>emptyMap() : avroProps;
@@ -100,18 +106,15 @@ public final class H2kConfigBuilder {
                 awaitEvery,
                 awaitTimeoutMs);
 
-        return new H2kConfigData(
-                bootstrap,
+        MonitoringSettings monitoring = new MonitoringSettings(observersEnabled, jmxEnabled);
+        H2kConfig.Sections sections = new H2kConfig.Sections(
                 topicSettings,
                 avroSettings,
                 ensureSettings,
                 producerAwaitSettings,
                 tableMetadataProvider,
-                observersEnabled);
-    }
-
-    public H2kConfig build() {
-        return H2kConfig.fromData(buildData());
+                monitoring);
+        return new H2kConfig(bootstrap, sections);
     }
 
     public final class TopicOptions {

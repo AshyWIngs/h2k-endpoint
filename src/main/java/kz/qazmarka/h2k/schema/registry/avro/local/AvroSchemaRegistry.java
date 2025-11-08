@@ -48,7 +48,7 @@ public final class AvroSchemaRegistry {
      */
     public AvroSchemaRegistry(Path baseDir) {
         if (baseDir == null) {
-            throw new IllegalArgumentException("baseDir == null");
+            throw new IllegalArgumentException("Аргумент 'baseDir' не может быть null");
         }
         this.baseDir = baseDir;
     }
@@ -128,7 +128,7 @@ public final class AvroSchemaRegistry {
         return resolvePath(tableName.toUpperCase(Locale.ROOT));
     }
 
-    // ---------- internal ----------
+    // ---------- внутреннее ----------
 
     private Path resolvePath(String upperTableName) {
         String fileName = upperTableName.toLowerCase(Locale.ROOT) + ".avsc";

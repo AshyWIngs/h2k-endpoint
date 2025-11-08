@@ -29,7 +29,7 @@ public final class EnsureRuntimeState {
     private final LongAdder createRace       = new LongAdder();
     private final LongAdder createFail       = new LongAdder();
 
-    // ------- Ensured cache operations -------
+    // ------- Операции кеша подтверждённых ensure -------
 
     public boolean markEnsured(String topic) {
         return ensured.add(topic);
@@ -51,7 +51,7 @@ public final class EnsureRuntimeState {
         ensured.remove(topic);
     }
 
-    // ------- Backoff operations are reused as-is -------
+    // ------- Операции бэкоффа переиспользуются как есть -------
 
     public void resetUnknownUntil(String topic) {
         unknownUntil.remove(topic);
@@ -73,7 +73,7 @@ public final class EnsureRuntimeState {
         return unknownUntil.size();
     }
 
-    // ------- Metric accessors -------
+    // ------- Методы доступа к метрикам -------
 
     public LongAdder ensureEvaluations() {
         return ensureEvaluations;
@@ -119,4 +119,3 @@ public final class EnsureRuntimeState {
         return createFail;
     }
 }
-

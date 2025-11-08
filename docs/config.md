@@ -25,16 +25,15 @@
 Начиная с шага рефакторинга от 2025‑10‑17 конфигурация читается в несколько компактных DTO. Это снижает
 связность `H2kConfig` и упрощает тесты/фабрики:
 
-- `H2kConfigLoader` извлекает ключи `h2k.*` и наполняет специализированный билдер `H2kConfigBuilder`.
-- Билдер формирует `H2kConfigData` — плоский снимок секций без бизнес-логики. Внутри него хранятся
-	неизменяемые экземпляры `TopicNamingSettings`, `AvroSettings`, `EnsureSettings`, `ProducerAwaitSettings`
-	и ссылка на табличный провайдер `PhoenixTableMetadataProvider`.
-- `H2kConfig.fromData(...)` принимает снимок и конструирует финальный иммутабельный объект, который реализует
-	интерфейс `TableMetadataView`. В горячем пути используются только методы интерфейса и снапшоты
-	`TableOptionsSnapshot`/`CfFilterSnapshot` — они безопасны для публикации между потоками.
+- `H2kConfigLoader` извлекает ключи `h2k.*`, формирует секции (`TopicSection`, `AvroSection`, `EnsureSection`,
+	`ProducerBatchSection`) и напрямую создаёт иммутабельный `H2kConfig`. Отдельного промежуточного снапшота больше нет
+	— секции сразу превращаются в финальные `TopicNamingSettings`, `AvroSettings`, `EnsureSettings`,
+	`ProducerAwaitSettings` и ссылку на `PhoenixTableMetadataProvider`.
+- `H2kConfig` реализует `TableMetadataView`, поэтому горячему пути доступны только неизменяемые представления
+	табличных опций/фильтров (`TableOptionsSnapshot`, `CfFilterSnapshot`), безопасные для публикации между потоками.
 
-> Для модульных тестов можно напрямую использовать `H2kConfigBuilder`: он избавляет от необходимости
-> собирать `org.apache.hadoop.conf.Configuration` и даёт предсказуемые неизменяемые коллекции.
+> Для модульных тестов остался `H2kConfigBuilder`: он собирает секции вручную и создаёт `H2kConfig`
+> без необходимости поднимать `org.apache.hadoop.conf.Configuration`.
 
 ---
 
@@ -43,6 +42,7 @@
 | Ключ | Назначение | Допустимые значения / Дефолт | Пример |
 |---|---|---|---|
 | **`h2k.kafka.bootstrap.servers`** | Список брокеров Kafka | `host:port[,host2:port2]` | `10.254.3.111:9092,10.254.3.112:9092` |
+| **`h2k.jmx.enabled`** | Включение регистрации JMX‑метрик (`H2kMetricsJmx`) | `true`/`false` (дефолт: `true`) | `false` отключит регистрацию MBean, если JMX не нужен |
 
 ---
 
@@ -139,7 +139,7 @@ PhoenixTableMetadataProvider provider = PhoenixTableMetadataProvider.builder()
 
 При `h2k.ensure.topics=true` создаётся связка `EnsureCoordinator` + `TopicEnsureExecutor`: горячий путь лишь ставит темы в очередь, а отдельный поток проверяет `describeTopics()` и отвечает за создание. Цепочка поднимается лениво при первом ensure‑вызове, поэтому старт Endpoint не тратит время на создание `AdminClient`. Флаг `h2k.ensure.increase.partitions` разрешает плановый апгрейд числа партиций, `h2k.ensure.diff.configs` — применение отличающихся конфигураций (например, `retention.ms`, `cleanup.policy`). Ключи `h2k.topic.config.*` проксируются в AdminClient как map `config → value`; используйте их для точечной настройки (`retention.ms`, `compression.type`, `min.insync.replicas`). Параметр `h2k.ensure.unknown.backoff.ms` задаёт базовый бэкофф при временных ошибках (таймаут, ACL, сеть) — значения уменьшаются джиттером в `TopicBackoffManager`.
 
-Метрики ensure попадают в `TopicEnsurer#getMetrics()` и дальше в `TopicManager.getMetrics()`. Снимок содержит счётчики `ensure.*`, `exists.*`, `create.*`, а также размер кеша `state.ensured.count` и очередь задач (см. `TopicEnsurer#toString()`). Для диагностики включите DEBUG для `kz.qazmarka.h2k.kafka.ensure` — внутри пишутся решения об ensure, бэкоффе и апгрейдах конфигов.
+Метрики ensure попадают в `TopicEnsurer#getMetrics()` и дальше в `TopicManager.getMetrics()`. Снимок содержит счётчики `ensure.*`, `существует.*`, `создание.*`, а также размер кеша `ensure.подтверждено.тем` и очередь задач `ensure.очередь.ожидает` (см. `TopicEnsurer#toString()`). Для диагностики включите DEBUG для `kz.qazmarka.h2k.kafka.ensure` — внутри пишутся решения об ensure, бэкоффе и апгрейдах конфигов.
 
 ---
 

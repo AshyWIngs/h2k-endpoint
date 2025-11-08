@@ -54,19 +54,55 @@ public final class H2kMetricsJmx implements DynamicMBean {
     /** Метаданные MBean — фиксированный набор атрибутов. */
     private final MBeanInfo mbeanInfo;
 
+    private static final Map<String, String> JMX_ALIASES;
+    static {
+        Map<String, String> a = new HashMap<>();
+        // Счётчики WAL
+        a.put("wal.записей.всего", "wal.entries.total");
+        a.put("wal.строк.всего", "wal.rows.total");
+        a.put("wal.ячеек.всего", "wal.cells.total");
+        a.put("wal.строк.отфильтровано", "wal.rows.filtered");
+        a.put("wal.rowbuffer.расширения", "wal.rowbuffer.upsizes");
+        a.put("wal.rowbuffer.сжатия", "wal.rowbuffer.trims");
+        // Метрики ensure
+        a.put("ensure.вызовов.всего", "ensure.invocations.total");
+        a.put("ensure.вызовов.принято", "ensure.invocations.accepted");
+        a.put("ensure.вызовов.отклонено", "ensure.invocations.rejected");
+        a.put("ensure.вызовов", "ensure.invocations");
+        a.put("ensure.кэш.попаданий", "ensure.cache.hit");
+        a.put("ensure.пакетов", "ensure.batch.count");
+        a.put("существует.да", "exists.true");
+        a.put("существует.нет", "exists.false");
+        a.put("существует.неизвестно", "exists.unknown");
+        a.put("создание.успех", "create.ok");
+        a.put("создание.гонка", "create.race");
+        a.put("создание.ошибка", "create.fail");
+        a.put("ensure.бэкофф.размер", "unknown.backoff.size");
+        a.put("ensure.подтверждено.тем", "state.ensured.count");
+        a.put("ensure.очередь.ожидает", "queue.pending");
+        a.put("ensure.пропуски.из-за.паузы", "ensure.cooldown.skipped");
+        // Schema Registry
+        a.put("sr.регистрация.успехов", "schema.registry.register.success");
+        a.put("sr.регистрация.ошибок", "schema.registry.register.failures");
+        // Ошибки репликации
+        a.put("репликация.ошибок.всего", "replicate.failures.total");
+        a.put("репликация.последняя.ошибка.epoch.ms", "replicate.last.failure.epoch.ms");
+        JMX_ALIASES = Collections.unmodifiableMap(a);
+    }
+
     private H2kMetricsJmx(Supplier<Map<String, Long>> snapshotSupplier) {
         this.snapshotSupplier = Objects.requireNonNull(snapshotSupplier, "snapshotSupplier");
         Map<String, Long> snapshot = safeSnapshot();
         Map<String, String> mapping = new HashMap<>(snapshot.size());
         List<MBeanAttributeInfo> infos = new ArrayList<>(snapshot.size());
         for (String key : snapshot.keySet()) {
-            String baseName = normalizeMetricName(key);
+            String baseName = aliasAttributeName(key);
             String attr = ensureUniqueAttributeName(baseName, mapping);
             mapping.put(attr, key);
             infos.add(new MBeanAttributeInfo(
                     attr,
                     Long.class.getName(),
-                    "Метрика '" + key + "' (чтение)",
+                    "Метрика '" + key + "' (JMX-алиас: '" + aliasForKeyOrSame(key) + "')",
                     true,
                     false,
                     false
@@ -136,6 +172,17 @@ public final class H2kMetricsJmx implements DynamicMBean {
     }
 
     private static String buildObjectName() { return OBJECT_NAME_BASE; }
+
+    private static String aliasForKeyOrSame(String key) {
+        String alias = JMX_ALIASES.get(key);
+        return alias == null ? key : alias;
+    }
+
+    private static String aliasAttributeName(String key) {
+        // Берём английский алиас, если он известен, затем нормализуем в допустимый ASCII
+        String alias = aliasForKeyOrSame(key);
+        return normalizeMetricName(alias);
+    }
 
     private static String normalizeMetricName(String key) {
         if (key == null || key.isEmpty()) {
@@ -222,7 +269,7 @@ public final class H2kMetricsJmx implements DynamicMBean {
     @Override
     public void setAttribute(Attribute attribute)
             throws AttributeNotFoundException, InvalidAttributeValueException, MBeanException, ReflectionException {
-        throw new AttributeNotFoundException("read-only");
+        throw new AttributeNotFoundException("Атрибут доступен только для чтения");
     }
 
     @Override
