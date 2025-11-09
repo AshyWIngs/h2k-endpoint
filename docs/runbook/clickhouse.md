@@ -1,87 +1,203 @@
+# ClickHouse Kafka Ingestion — Runbook
+
+_Версия документа: v1.6 (обновлено: 2025-11-09)_  
+_Документ протестирован на ClickHouse 24.8.14.39 (official build)_
+
+## Ключевые изменения в v1.6
+
+- ✅ **Модульная структура для множества таблиц**: раздел 4 теперь содержит подразделы для каждой таблицы
+- ✅ Добавлен шаблон для быстрого создания DDL для новых топиков Kafka
+- ✅ Раздел 4.1: полный набор DDL для TBL_JTI_TRACE_CIS_HISTORY (7 объектов)
+- ✅ Раздел 4.2: заготовка для TBL_JTI_TRACE_DOCUMENT_ERRORS
+- ✅ Раздел 4.3: плейсхолдер для следующих таблиц
+- ✅ Перенумерованы разделы: управление (5), тюнинг (6), мониторинг (7), деплой (8), DR (9), команды (10)
+
+## Изменения в v1.5
+
+- ✅ Исправлен ZK-путь для `shardless`
+- ✅ Заменён `kafka_commit_every_batch` на `kafka_commit_on_select = 0`
+- ✅ Оптимизирован ORDER BY для dedupe
+- ✅ Добавлен `coalesce` в TTL
+- ✅ Убран избыточный ключ шардирования
+- ✅ Устранены дубликаты
+
+---
+
 ## Содержание
-- [Подготовка ClickHouse](#подготовка-clickhouse)
-- [1. Настройка кластера per_host_allnodes](#1-настройка-кластера-per_host_allnodes)
-- [2. Общий каталог для всех таблиц из Kafka](#2-общий-каталог-для-всех-таблиц-из-kafka)
-- [3. TBL_JTI_TRACE_CIS_HISTORY](#3-tbl_jti_trace_cis_history)
-  - [3.1 RAW приёмник (локально на каждом узле) + TTL по __ingest_ts](#31-raw-приёмник-локально-на-каждом-узле--ttl-по-__ingest_ts)
-  - [3.2 Источник: Kafka (AvroConfluent + SR), по 1 консьюмеру на узел](#32-источник-kafka-avroconfluent--sr-по-1-консьюмеру-на-узел)
-  - [3.3 Материализованное представление (конверсия мс → DateTime64)](#33-материализованное-представление-конверсия-мс--datetime64)
-  - [3.4 «Собиратель» для запросов со всех узлов](#34-собиратель-для-запросов-со-всех-узлов)
-  - [3.5 Устойчивая (реплицированная) витрина для аналитики](#35-устойчивая-реплицированная-витрина-для-аналитики)
-  - [3.6 Контроль целостности и оффсетов](#36-контроль-целостности-и-оффсетов)
-  - [3.7 Продвинутый аудит оффсетов и целостности RAW](#37-продвинутый-аудит-оффсетов-и-целостности-raw)
-  - [3.8 Тюнинг производительности ingestion](#38-тюнинг-производительности-ingestion)
-- [4. Чек-лист релиза и перехода схемы (QA → PROD)](#4-чек-лист-релиза-и-перехода-схемы-qa--prod)
-- [5. Быстрые команды для оператора](#5-быстрые-команды-для-оператора)
-- [6. Пошаговый боевой сценарий (QA → PROD)](#6-пошаговый-боевой-сценарий-qa--prod)
-- [7. High Availability и восстановление после сбоя](#7-high-availability-и-восстановление-после-сбоя)
 
-# Подготовка ClickHouse
+- [0. Проверка окружения](#0-проверка-окружения)
+- [1. Архитектура системы](#1-архитектура-системы)
+- [2. Настройка кластеров](#2-настройка-кластеров)
+- [3. Создание базы данных](#3-создание-базы-данных)
+- [4. Таблицы Kafka → ClickHouse](#4-таблицы-kafka--clickhouse)
+  - [4.1. TBL_JTI_TRACE_CIS_HISTORY](#41-tbl_jti_trace_cis_history)
+  - [4.2. TBL_JTI_TRACE_DOCUMENT_ERRORS](#42-tbl_jti_trace_document_errors)
+  - [4.3. [Добавить следующую таблицу]](#43-добавить-следующую-таблицу)
+- [5. Управление ingestion](#5-управление-ingestion)
+- [6. Тюнинг производительности](#6-тюнинг-производительности)
+- [7. Мониторинг и алерты](#7-мониторинг-и-алерты)
+- [8. Деплой QA → PROD](#8-деплой-qa--prod)
+- [9. DR-сценарии](#9-dr-сценарии)
+- [10. Быстрые команды](#10-быстрые-команды)
+- [Приложения](#приложения)
 
-Документ описывает рабочие процедуры для ClickHouse 24.8.14.39. Инструкции по настройке кластера с отключенной репликацией для чтения из каждой ноды кластера Kafka и DDL по созданию таблиц для чтения данных из топиков Kafka.
+---
 
-Архитектура состоит из двух логических слоёв:
+## 0. Проверка окружения
 
-1. Ingestion-слой (`per_host_allnodes`) — каждый хост отдельный шард, без внутренней репликации. Здесь:
-   - Kafka-источники (`ENGINE = Kafka`);
-   - локальные RAW-таблицы (`MergeTree`) с TTL;
-   - служебные Distributed-таблицы для чтения со всех узлов.
-2. Надёжный слой (`shardless`) — 1 шард × N реплик с `internal_replication = true`. Здесь:
-   - реплицированные таблицы (`Replicated(Replacing)MergeTree`);
-   - финальные витрины для аналитики.
+Перед выполнением инструкций убедитесь:
 
-Ingestion отвечает за скорость и распараллеливание чтения из Kafka, надёжный слой — за долговременное хранение и отказоустойчивость.
+1. **ClickHouse доступен** по TCP:9000 и HTTP:8123 на всех нодах
+2. **Конфигурация идентична** (`clickhouse_remote_servers.xml`, `macros.xml`)
+3. **Макросы корректны:**
+   - `core`: `{shard}`, `{replica}`
+   - `shardless`: `{shardless_repl}` (уникальный на каждой реплике)
+   - `per_host_allnodes`: макросы не используются
+4. **ZooKeeper доступен:**
+   ```sql
+   SELECT hostName(), path FROM system.zookeeper WHERE path = '/' LIMIT 1;
+   ```
+5. **Schema Registry доступен:**
+   ```bash
+   curl -sf http://schema-registry-host:8081/subjects || echo "SR недоступен"
+   ```
+6. **Kafka доступна:**
+   ```bash
+   kcat -L -b 10.254.3.111:9092
+   ```
+7. **Кластеры согласованы:**
+   ```sql
+   SELECT cluster, count() FROM system.clusters 
+   WHERE cluster IN ('core', 'shardless', 'per_host_allnodes') 
+   GROUP BY cluster;
+   ```
 
-## 1. Настройка кластера "per_host_allnodes"
+---
 
-- К существующему кластеру *shardless* добавить конфигурацию кластера *per_host_allnodes* по примеру *QA*
-/etc/clickhouse-server/config.d/clickhouse_remote_servers.xml:
+## 1. Архитектура системы
+
+### Поток данных
+
 ```
-    <per_host_allnodes>
-      <shard>
-          <internal_replication>false</internal_replication>
-          <replica>
-              <host>10.254.3.111</host>
-              <port>9000</port>
-          </replica>
-      </shard>
-      <shard>
-          <internal_replication>false</internal_replication>
-          <replica>
-              <host>10.254.3.112</host>
-              <port>9000</port>
-          </replica>
-      </shard>
-      <shard>
-          <internal_replication>false</internal_replication>
-          <replica>
-              <host>10.254.3.113</host>
-              <port>9000</port>
-          </replica>
-      </shard>
-      <shard>
-          <internal_replication>false</internal_replication>
-          <replica>
-              <host>10.254.3.114</host>
-              <port>9000</port>
-          </replica>
-      </shard>
-    </per_host_allnodes>
+Kafka (TBL_JTI_TRACE_CIS_HISTORY, 12 партиций)
+  ↓
+[per_host_allnodes] tbl_*_kafka (ENGINE=Kafka + AvroConfluent)
+  ↓ mv_*_to_raw
+[per_host_allnodes] tbl_*_raw (MergeTree, TTL 60d, локально на каждой ноде)
+  ↓ Distributed
+[shardless] tbl_*_raw_all (Distributed по per_host_allnodes)
+  ↓ mv_*_to_repl
+[shardless] tbl_*_repl (ReplicatedReplacingMergeTree, TTL 180d)
+  ↓ Distributed
+[shardless] tbl_*_repl_all ← ВСЯ АНАЛИТИКА ЧИТАЕТ ЗДЕСЬ
 ```
 
-**Важно:** `internal_replication` указывается внутри каждого `<shard>`. На уровне всего кластера (`<per_host_allnodes>`) этот элемент недопустим. Для PROD добавляем новые `<shard>` по мере роста, не меняя существующие.
+### Три логических кластера
 
-## 2. Общий каталог для всех таблиц из Kafka
+| Кластер | Топология | Репликация | Макросы | ZK-пути | Назначение |
+|---------|-----------|------------|---------|---------|------------|
+| **per_host_allnodes** | N×1 | `false` | — | — | Быстрый приём из Kafka |
+| **shardless** | 1×N | `true` | `{shardless_repl}` | `/clickhouse/tables/shardless/...` | Надёжное хранение, аналитика |
+| **core** | 2×2 | `true` | `{shard}`, `{replica}` | `/clickhouse/tables/{shard}/...` | Исторические таблицы |
+
+**Ключевые принципы:**
+- Ingestion без репликации → максимальная скорость
+- Витрины с репликацией → надёжность
+- ZK-пути не пересекаются
+- Core не трогаем
+
+---
+
+## 2. Настройка кластеров
+
+### 2.1. Конфигурация per_host_allnodes
+
+Добавить в `/etc/clickhouse-server/config.d/clickhouse_remote_servers.xml`:
+
+```xml
+<per_host_allnodes>
+  <shard>
+      <internal_replication>false</internal_replication>
+      <replica>
+          <host>10.254.3.111</host>
+          <port>9000</port>
+      </replica>
+  </shard>
+  <shard>
+      <internal_replication>false</internal_replication>
+      <replica>
+          <host>10.254.3.112</host>
+          <port>9000</port>
+      </replica>
+  </shard>
+  <shard>
+      <internal_replication>false</internal_replication>
+      <replica>
+          <host>10.254.3.113</host>
+          <port>9000</port>
+          </replica>
+  </shard>
+  <shard>
+      <internal_replication>false</internal_replication>
+      <replica>
+          <host>10.254.3.114</host>
+          <port>9000</port>
+      </replica>
+  </shard>
+</per_host_allnodes>
+```
+
+**Важно:**
+- `internal_replication` указывается внутри каждого `<shard>`
+- Для PROD добавлять новые шарды по мере роста
+
+### 2.2. Проверка
+
+```sql
+SELECT cluster, shard_num, replica_num, host_name
+FROM system.clusters
+WHERE cluster IN ('per_host_allnodes', 'shardless', 'core')
+ORDER BY cluster, shard_num, replica_num;
+```
+
+---
+
+## 3. Создание базы данных
 
 ```sql
 CREATE DATABASE IF NOT EXISTS kafka ON CLUSTER per_host_allnodes;
+CREATE DATABASE IF NOT EXISTS kafka ON CLUSTER shardless;
 ```
 
-## 3. TBL_JTI_TRACE_CIS_HISTORY
+---
 
-### 3.1 RAW приёмник (локально на каждом узле) + TTL по __ingest_ts
+## 4. Таблицы Kafka → ClickHouse
 
-Сохраним служебные поля из Kafka в RAW для диагностики: __kafka_partition, __kafka_offset, __kafka_ts. Для устойчивого хранения TTL считаем по времени приёма строки в ClickHouse: __ingest_ts.
+Для каждого топика Kafka создаётся набор из 7 объектов:
+
+| Кластер | Объект | Назначение |
+|---------|--------|------------|
+| `per_host_allnodes` | `tbl_*_raw` | RAW-таблица (MergeTree, TTL 60d) |
+| `per_host_allnodes` | `tbl_*_kafka` | Kafka-источник (ENGINE=Kafka) |
+| `per_host_allnodes` | `mv_*_to_raw` | MV: Kafka → RAW |
+| `shardless` | `tbl_*_raw_all` | Distributed по RAW |
+| `shardless` | `tbl_*_repl` | Витрина (ReplicatedReplacingMergeTree, TTL 180d) |
+| `shardless` | `tbl_*_repl_all` | Distributed по витрине (для аналитики) |
+| `shardless` | `mv_*_to_repl` | MV: RAW → витрина |
+
+### Шаблон для новых таблиц
+
+Скопируйте раздел 4.1 и замените:
+- Имя таблицы (`tbl_jti_trace_cis_history` → `tbl_your_table`)
+- Топик Kafka (`TBL_JTI_TRACE_CIS_HISTORY` → `YOUR_TOPIC`)
+- Consumer group (`ch_tbl_jti_trace_cis_history_qa` → `ch_your_table_qa`)
+- Структуру полей
+
+---
+
+### 4.1. TBL_JTI_TRACE_CIS_HISTORY
+
+#### 4.1.1. RAW-таблица (MergeTree + TTL)
 
 ```sql
 DROP TABLE IF EXISTS kafka.tbl_jti_trace_cis_history_raw ON CLUSTER per_host_allnodes SYNC;
@@ -92,41 +208,42 @@ CREATE TABLE kafka.tbl_jti_trace_cis_history_raw ON CLUSTER per_host_allnodes
   c String,
   t UInt8,
   opd DateTime64(3, 'UTC'),
-
-  -- бизнес-время события (может использоваться в витринах/аналитике)
   _event_ts DateTime64(3, 'UTC'),
-
-  -- логический флаг удаления
   _delete UInt8,
-
+  
   -- бизнес-поля
-  id Nullable(String), did Nullable(String), rid Nullable(String), rinn Nullable(String), rn Nullable(String),
-  sid Nullable(String), sinn Nullable(String), sn Nullable(String), gt Nullable(String), prid Nullable(String),
-  st Nullable(UInt8), ste Nullable(UInt8), elr Nullable(UInt8),
-  emd Nullable(DateTime64(3, 'UTC')), apd Nullable(DateTime64(3, 'UTC')), exd Nullable(DateTime64(3, 'UTC')),
-  p Nullable(String), pt Nullable(UInt8), o Nullable(String), pn Nullable(String), b Nullable(String),
-  tt Nullable(Int64), tm Nullable(DateTime64(3, 'UTC')),
-  ch Array(String), j Nullable(String), pg Nullable(UInt16), et Nullable(UInt8), pvad Nullable(String), ag Nullable(String),
-
-  -- метаданные Kafka (для аудита/сверок)
+  id Nullable(String), did Nullable(String), rid Nullable(String), 
+  rinn Nullable(String), rn Nullable(String), sid Nullable(String), 
+  sinn Nullable(String), sn Nullable(String), gt Nullable(String), 
+  prid Nullable(String), st Nullable(UInt8), ste Nullable(UInt8), 
+  elr Nullable(UInt8), emd Nullable(DateTime64(3, 'UTC')), 
+  apd Nullable(DateTime64(3, 'UTC')), exd Nullable(DateTime64(3, 'UTC')),
+  p Nullable(String), pt Nullable(UInt8), o Nullable(String), 
+  pn Nullable(String), b Nullable(String), tt Nullable(Int64), 
+  tm Nullable(DateTime64(3, 'UTC')), ch Array(String), 
+  j Nullable(String), pg Nullable(UInt16), et Nullable(UInt8), 
+  pvad Nullable(String), ag Nullable(String),
+  
+  -- метаданные Kafka
   __kafka_partition Int32,
-  __kafka_offset    UInt64,
-  __kafka_ts        DateTime,   -- Kafka timestamp: преобразуем из _timestamp (мс → сек)
-
-  -- техническое время приёма строки ClickHouse (используется для TTL)
-  __ingest_ts       DateTime
+  __kafka_offset UInt64,
+  __kafka_ts DateTime,
+  __ingest_ts DateTime
 )
 ENGINE = MergeTree
-ORDER BY (c, t, opd)
-TTL __ingest_ts + INTERVAL 60 DAY DELETE            -- ВАЖНО: TTL принимает Date/DateTime
+PARTITION BY toYYYYMM(__ingest_ts)
+ORDER BY (c, t, opd, __kafka_partition, __kafka_offset)
+TTL __ingest_ts + INTERVAL 60 DAY DELETE
 SETTINGS index_granularity = 8192;
 ```
 
-TTL в RAW считаем по __ingest_ts (факт приёма строки в ClickHouse). Значение выбирается с запасом относительно максимальной задержки ETL (включая аварийные простои). Рекомендуется согласовать TTL с Kafka retention по топику: минимальное из двух значений определяет горизонт, после которого восстановление пропущенных данных из Kafka или RAW будет невозможно.
+**Особенности:**
+- TTL по `__ingest_ts` (время приёма в CH), не по бизнес-времени
+- Партиционирование по месяцам устойчиво к «старым» событиям
+- ORDER BY включает Kafka-метаданные для быстрого аудита
+- TTL RAW (60d) < TTL витрины (180d)
 
-### 3.2 Источник: Kafka (AvroConfluent + SR), по 1 консьюмеру на узел
-
-Почему 1? У нас 4 узла → 4 консьюмера в группе. Для 12 партиций Kafka этого достаточно; при росте нагрузки можно увеличить kafka_num_consumers.
+#### 4.1.2. Kafka-источник (AvroConfluent)
 
 ```sql
 DROP TABLE IF EXISTS kafka.tbl_jti_trace_cis_history_kafka ON CLUSTER per_host_allnodes SYNC;
@@ -134,49 +251,41 @@ DROP TABLE IF EXISTS kafka.tbl_jti_trace_cis_history_kafka ON CLUSTER per_host_a
 CREATE TABLE kafka.tbl_jti_trace_cis_history_kafka ON CLUSTER per_host_allnodes
 (
   c String, t Int32, opd Int64,
-  id Nullable(String), did Nullable(String), rid Nullable(String), rinn Nullable(String), rn Nullable(String),
-  sid Nullable(String), sinn Nullable(String), sn Nullable(String), gt Nullable(String), prid Nullable(String),
-  st Nullable(Int32), ste Nullable(Int32), elr Nullable(Int32),
-  emd Nullable(Int64), apd Nullable(Int64), exd Nullable(Int64),
-  p Nullable(String), pt Nullable(Int32), o Nullable(String), pn Nullable(String), b Nullable(String),
-  tt Nullable(Int64), tm Nullable(Int64),
-  ch Array(String), j Nullable(String), pg Nullable(Int32), et Nullable(Int32), pvad Nullable(String), ag Nullable(String),
+  id Nullable(String), did Nullable(String), rid Nullable(String), 
+  rinn Nullable(String), rn Nullable(String), sid Nullable(String), 
+  sinn Nullable(String), sn Nullable(String), gt Nullable(String), 
+  prid Nullable(String), st Nullable(Int32), ste Nullable(Int32), 
+  elr Nullable(Int32), emd Nullable(Int64), apd Nullable(Int64), 
+  exd Nullable(Int64), p Nullable(String), pt Nullable(Int32), 
+  o Nullable(String), pn Nullable(String), b Nullable(String), 
+  tt Nullable(Int64), tm Nullable(Int64), ch Array(String), 
+  j Nullable(String), pg Nullable(Int32), et Nullable(Int32), 
+  pvad Nullable(String), ag Nullable(String),
   _event_ts Nullable(Int64),
-  _delete   UInt8
+  _delete UInt8
 )
 ENGINE = Kafka
 SETTINGS
   kafka_broker_list = '10.254.3.111:9092,10.254.3.112:9092,10.254.3.113:9092',
-  kafka_topic_list  = 'TBL_JTI_TRACE_CIS_HISTORY',
-  kafka_group_name  = 'ch_tbl_jti_trace_cis_history_qa',  -- новое имя группы; стартуем с начала истории вместе с kafka_auto_offset_reset='earliest'
+  kafka_topic_list = 'TBL_JTI_TRACE_CIS_HISTORY',
+  kafka_group_name = 'ch_tbl_jti_trace_cis_history_qa',
   kafka_auto_offset_reset = 'earliest',
-  kafka_format      = 'AvroConfluent',
-  format_avro_schema_registry_url = 'http://10.254.3.111:8081',  -- в 24.8 ИМЕННО так называется параметр
-  -- надёжность коммита оффсетов
-  -- оффсеты коммитятся только после успешной обработки батча
-  kafka_commit_every_batch = 1,
-  -- не пропускать битые сообщения: при ошибке десериализации ingestion останавливается
+  kafka_format = 'AvroConfluent',
+  format_avro_schema_registry_url = 'http://10.254.3.111:8081',  -- рекомендуется использовать общий LB, не IP ноды
+  kafka_commit_on_select = 0,
   kafka_skip_broken_messages = 0,
-  -- эволюция схем Avro (без падения ingest при добавлении nullable полей)
   input_format_avro_allow_missing_fields = 1,
   input_format_avro_null_as_default = 1,
-  -- производительность (подбирайте под нагрузку и CPU)
-  -- рекомендуется kafka_max_block_size 10k–50k в зависимости от SLA и CPU
-  kafka_num_consumers  = 1,
+  kafka_num_consumers = 1,
   kafka_max_block_size = 10000;
 ```
 
-Для надёжности:
-- `kafka_auto_offset_reset = 'earliest'` гарантирует чтение всей истории при первом запуске новой группы.
-- `kafka_commit_every_batch = 1` обеспечивает at-least-once доставку.
-- При ошибках десериализации явно задано `kafka_skip_broken_messages = 0` — ingestion останавливается, не теряя события.
+**Параметры надёжности:**
+- `kafka_commit_on_select = 0` — коммит только после MV
+- `kafka_skip_broken_messages = 0` — не пропускать битые сообщения
+- `kafka_auto_offset_reset = 'earliest'` — читать с начала
 
-Совместимость и семантика (24.8.14.39):
-- `kafka_format='AvroConfluent'` и `format_avro_schema_registry_url` поддерживаются.
-- Коммит оффсетов выполняется только при наличии MATERIALIZED VIEW, читающего из Kafka-таблицы (рекомендуемая связка: Kafka → MV → RAW).
-- Прямые `SELECT` из Kafka-таблиц в проде запрещены (могут нарушить семантику чтения и коммиты оффсетов).
-
-### 3.3 Материализованное представление (конверсия мс → DateTime64)
+#### 4.1.3. Materialized View (Kafka → RAW)
 
 ```sql
 DROP TABLE IF EXISTS kafka.mv_tbl_jti_trace_cis_history_to_raw ON CLUSTER per_host_allnodes SYNC;
@@ -186,388 +295,488 @@ TO kafka.tbl_jti_trace_cis_history_raw
 AS
 SELECT
   c,
-  CAST(t AS UInt8)                                   AS t,
-  toDateTime64(opd / 1000.0, 3, 'UTC')               AS opd,
-
-  -- важные времена
+  CAST(t AS UInt8) AS t,
+  toDateTime64(opd / 1000.0, 3, 'UTC') AS opd,
   ifNull(toDateTime64(_event_ts / 1000.0, 3, 'UTC'), NULL) AS _event_ts,
-
   _delete,
-
   id, did, rid, rinn, rn, sid, sinn, sn, gt, prid,
-  CAST(st  AS Nullable(UInt8))  AS st,
-  CAST(ste AS Nullable(UInt8))  AS ste,
-  CAST(elr AS Nullable(UInt8))  AS elr,
-
+  CAST(st AS Nullable(UInt8)) AS st,
+  CAST(ste AS Nullable(UInt8)) AS ste,
+  CAST(elr AS Nullable(UInt8)) AS elr,
   ifNull(toDateTime64(emd / 1000.0, 3, 'UTC'), NULL) AS emd,
   ifNull(toDateTime64(apd / 1000.0, 3, 'UTC'), NULL) AS apd,
   ifNull(toDateTime64(exd / 1000.0, 3, 'UTC'), NULL) AS exd,
   p, CAST(pt AS Nullable(UInt8)) AS pt, o, pn, b, tt,
-  ifNull(toDateTime64(tm  / 1000.0, 3, 'UTC'), NULL) AS tm,
-  ch, j, CAST(pg AS Nullable(UInt16)) AS pg, CAST(et AS Nullable(UInt8)) AS et, pvad, ag,
-
-  -- метаданные Kafka из виртуальных колонок
+  ifNull(toDateTime64(tm / 1000.0, 3, 'UTC'), NULL) AS tm,
+  ch, j, CAST(pg AS Nullable(UInt16)) AS pg, 
+  CAST(et AS Nullable(UInt8)) AS et, pvad, ag,
   _partition AS __kafka_partition,
-  _offset    AS __kafka_offset,
-  toDateTime(_timestamp / 1000) AS __kafka_ts,  -- _timestamp в Kafka в миллисекундах → секунды
+  _offset AS __kafka_offset,
+  ifNull(_timestamp, now()) AS __kafka_ts,
   now() AS __ingest_ts
 FROM kafka.tbl_jti_trace_cis_history_kafka;
+-- если _timestamp отсутствует, используется now()
 ```
 
-#### 3.2.1 Пауза/возобновление ingestion (без потери данных)
+**Конверсии:**
+- Миллисекунды → DateTime64(3)
+- Виртуальные колонки Kafka → физические поля
 
-Для безопасной паузы чтения из Kafka (оффсеты не коммитятся, сообщения остаются в брокере):
+#### 4.1.4. Distributed для объединения RAW
 
+```sql
+DROP TABLE IF EXISTS kafka.tbl_jti_trace_cis_history_raw_all ON CLUSTER shardless SYNC;
+
+CREATE TABLE kafka.tbl_jti_trace_cis_history_raw_all ON CLUSTER shardless
+AS kafka.tbl_jti_trace_cis_history_raw
+ENGINE = Distributed('per_host_allnodes', 'kafka', 'tbl_jti_trace_cis_history_raw', __kafka_partition)
+SETTINGS prefer_localhost_replica = 1;
+```
+
+#### 4.1.5. Реплицированная витрина
+
+```sql
+DROP TABLE IF EXISTS kafka.tbl_jti_trace_cis_history_repl ON CLUSTER shardless SYNC;
+
+CREATE TABLE kafka.tbl_jti_trace_cis_history_repl ON CLUSTER shardless
+(
+  c String, t UInt8, opd DateTime64(3, 'UTC'),
+  _event_ts DateTime64(3, 'UTC'), _delete UInt8,
+  id Nullable(String), did Nullable(String), rid Nullable(String), 
+  rinn Nullable(String), rn Nullable(String), sid Nullable(String), 
+  sinn Nullable(String), sn Nullable(String), gt Nullable(String), 
+  prid Nullable(String), st Nullable(UInt8), ste Nullable(UInt8), 
+  elr Nullable(UInt8), emd Nullable(DateTime64(3, 'UTC')), 
+  apd Nullable(DateTime64(3, 'UTC')), exd Nullable(DateTime64(3, 'UTC')),
+  p Nullable(String), pt Nullable(UInt8), o Nullable(String), 
+  pn Nullable(String), b Nullable(String), tt Nullable(Int64), 
+  tm Nullable(DateTime64(3, 'UTC')), ch Array(String), 
+  j Nullable(String), pg Nullable(UInt16), et Nullable(UInt8), 
+  pvad Nullable(String), ag Nullable(String),
+  __kafka_partition Int32,
+  __kafka_offset UInt64,
+  __kafka_ts DateTime,
+  ver DateTime DEFAULT now()
+)
+ENGINE = ReplicatedReplacingMergeTree(
+    '/clickhouse/tables/shardless/kafka.tbl_jti_trace_cis_history_repl',
+    '{shardless_repl}',
+    ver
+)
+PARTITION BY toYYYYMM(opd)
+ORDER BY (__kafka_partition, __kafka_offset, c, t, opd)
+TTL toDateTime(coalesce(_event_ts, __kafka_ts)) + INTERVAL 180 DAY DELETE
+SETTINGS index_granularity = 8192;
+```
+
+**Особенности:**
+- ReplacingMergeTree — дедупликация по `(__kafka_partition, __kafka_offset)`
+- TTL по бизнес-времени с fallback на Kafka timestamp
+- ZK-путь `/clickhouse/tables/shardless/...`
+- Каждая реплика в кластере shardless должна иметь уникальный макрос {shardless_repl} в macros.xml
+- Дедупликация основана на (__kafka_partition, __kafka_offset), повторные заливки не создают дублей
+
+#### 4.1.6. Distributed для аналитики
+
+```sql
+DROP TABLE IF EXISTS kafka.tbl_jti_trace_cis_history_repl_all ON CLUSTER shardless SYNC;
+
+CREATE TABLE kafka.tbl_jti_trace_cis_history_repl_all ON CLUSTER shardless
+AS kafka.tbl_jti_trace_cis_history_repl
+ENGINE = Distributed('shardless', 'kafka', 'tbl_jti_trace_cis_history_repl');
+```
+
+**Важно:** Для кластера с 1 шардом ключ шардирования не нужен.
+
+#### 4.1.7. Materialized View (RAW → витрина)
+
+```sql
+DROP TABLE IF EXISTS kafka.mv_tbl_jti_trace_cis_history_to_repl ON CLUSTER shardless SYNC;
+
+CREATE MATERIALIZED VIEW kafka.mv_tbl_jti_trace_cis_history_to_repl ON CLUSTER shardless
+TO kafka.tbl_jti_trace_cis_history_repl
+AS
+SELECT
+    c, t, opd, _event_ts, _delete,
+    id, did, rid, rinn, rn, sid, sinn, sn, gt, prid,
+    st, ste, elr, emd, apd, exd, p, pt, o, pn, b, tt, tm,
+    ch, j, pg, et, pvad, ag,
+    __kafka_partition, __kafka_offset, __kafka_ts,
+    now() AS ver
+FROM kafka.tbl_jti_trace_cis_history_raw_all;
+```
+
+**Примечание:** При перезапусках возможны повторные вставки — ReplacingMergeTree устраняет дубли.
+
+---
+
+### 4.2. TBL_JTI_TRACE_DOCUMENT_ERRORS
+
+_Раздел для второй таблицы — добавить аналогичные DDL по шаблону из 4.1_
+
+#### 4.2.1. RAW-таблица (MergeTree + TTL)
+```sql
+-- DROP TABLE IF EXISTS kafka.tbl_jti_trace_document_errors_raw ON CLUSTER per_host_allnodes SYNC;
+-- CREATE TABLE kafka.tbl_jti_trace_document_errors_raw ...
+-- TODO: добавить DDL
+```
+
+#### 4.2.2. Kafka-источник
+```sql
+-- TODO: добавить DDL
+```
+
+#### 4.2.3. Materialized View (Kafka → RAW)
+```sql
+-- TODO: добавить DDL
+```
+
+#### 4.2.4. Distributed для объединения RAW
+```sql
+-- TODO: добавить DDL
+```
+
+#### 4.2.5. Реплицированная витрина
+```sql
+-- TODO: добавить DDL
+```
+
+#### 4.2.6. Distributed для аналитики
+```sql
+-- TODO: добавить DDL
+```
+
+#### 4.2.7. Materialized View (RAW → витрина)
+```sql
+-- TODO: добавить DDL
+```
+
+---
+
+### 4.3. [Добавить следующую таблицу]
+
+_Используйте раздел 4.1 как шаблон для новых таблиц_
+
+---
+
+## 5. Управление ingestion
+
+### 5.1. Пауза и возобновление
+
+**Пауза (оффсеты НЕ коммитятся):**
 ```sql
 ALTER TABLE kafka.tbl_jti_trace_cis_history_kafka ON CLUSTER per_host_allnodes
   MODIFY SETTING kafka_num_consumers = 0;
 ```
 
-Для возобновления:
-
+**Возобновление:**
 ```sql
 ALTER TABLE kafka.tbl_jti_trace_cis_history_kafka ON CLUSTER per_host_allnodes
   MODIFY SETTING kafka_num_consumers = 1;
 ```
 
-### 3.4 «Собиратель» для запросов со всех узлов
+**ВАЖНО:** Не менять `kafka_group_name` без плана миграции!
 
-Эта таблица создаётся на надёжном кластере shardless и объединяет данные со всех ingestion-нод (per_host_allnodes). 
-Используется для аналитики и для передачи данных в реплицированные витрины.
-
-```sql
-DROP TABLE IF EXISTS kafka.tbl_jti_trace_cis_history_raw_all ON CLUSTER shardless SYNC;
-
-CREATE TABLE IF NOT EXISTS kafka.tbl_jti_trace_cis_history_raw_all ON CLUSTER shardless
-AS kafka.tbl_jti_trace_cis_history_raw
-ENGINE = Distributed(
-    'per_host_allnodes',
-    'kafka',
-    'tbl_jti_trace_cis_history_raw',
-    __kafka_partition
-);
-```
-
-### 3.5 Устойчивая (реплицированная) витрина для аналитики
-
-Реплицированная таблица — это основной источник правды (single source of truth) для аналитики.
-Сюда попадают данные после успешного ingestion и валидации.
+### 5.2. Проверка здоровья
 
 ```sql
--- TTL использует _event_ts (бизнес-время события).
--- Важно: _event_ts должен быть корректно заполнен в RAW/MV, иначе строки могут удаляться некорректно.
-```
-
-```sql
--- 3.5.1 Реплицированное хранилище на кластере shardless
-
--- Используем ReplacingMergeTree по полю ver для устранения дубликатов при повторных вставках.
-
--- ВАЖНО:
--- 1) Этот DDL выполняется ON CLUSTER shardless.
--- 2) Пути в ZooKeeper /clickhouse/tables/{shard}/... должны соответствовать macros.xml.
--- 3) TTL использует toDateTime(_event_ts), т.к. _event_ts хранится в DateTime64(3).
-
-DROP TABLE IF EXISTS kafka.tbl_jti_trace_cis_history_repl ON CLUSTER shardless SYNC;
-
-CREATE TABLE kafka.tbl_jti_trace_cis_history_repl ON CLUSTER shardless
-(
-  -- бизнес-данные (та же структура, что в RAW)
-  c String,
-  t UInt8,
-  opd DateTime64(3, 'UTC'),
-  _event_ts DateTime64(3, 'UTC'),
-  _delete UInt8,
-  id Nullable(String), did Nullable(String), rid Nullable(String), rinn Nullable(String), rn Nullable(String),
-  sid Nullable(String), sinn Nullable(String), sn Nullable(String), gt Nullable(String), prid Nullable(String),
-  st Nullable(UInt8), ste Nullable(UInt8), elr Nullable(UInt8),
-  emd Nullable(DateTime64(3, 'UTC')), apd Nullable(DateTime64(3, 'UTC')), exd Nullable(DateTime64(3, 'UTC')),
-  p Nullable(String), pt Nullable(UInt8), o Nullable(String), pn Nullable(String), b Nullable(String),
-  tt Nullable(Int64), tm Nullable(DateTime64(3, 'UTC')),
-  ch Array(String), j Nullable(String), pg Nullable(UInt16), et Nullable(UInt8), pvad Nullable(String), ag Nullable(String),
-
-  -- служебные поля из Kafka
-  __kafka_partition Int32,
-  __kafka_offset    UInt64,
-  __kafka_ts        DateTime,
-
-  -- версия для ReplacingMergeTree (устранение дубликатов)
-  ver DateTime DEFAULT now()
-)
-ENGINE = ReplicatedReplacingMergeTree(
-    '/clickhouse/tables/{shard}/kafka.tbl_jti_trace_cis_history_repl',
-    '{replica}',
-    ver
-)
-PARTITION BY toYYYYMM(opd)
-ORDER BY (c, t, opd, __kafka_partition, __kafka_offset)
-TTL toDateTime(_event_ts) + INTERVAL 180 DAY DELETE;
-
--- 3.5.2 Distributed-таблица для аналитики
-
-DROP TABLE IF EXISTS kafka.tbl_jti_trace_cis_history_repl_all ON CLUSTER shardless SYNC;
-
-CREATE TABLE kafka.tbl_jti_trace_cis_history_repl_all ON CLUSTER shardless
-AS kafka.tbl_jti_trace_cis_history_repl
-ENGINE = Distributed(
-    'shardless',
-    'kafka',
-    'tbl_jti_trace_cis_history_repl',
-    cityHash64(c)
-);
-```
-
-Выбор ключа `(c, t, opd, __kafka_partition, __kafka_offset)` и ReplacingMergeTree устраняет дубли по оффсетам: при повторной вставке с тем же `(__kafka_partition, __kafka_offset)` останется запись с наибольшей `ver`. Для строгих проверок используйте `FINAL` или агрегаты по ключу.
-
--- 3.5.3 Материализованное представление, переносящее данные из ingestion-слоя
-
--- Читает из распределённого RAW (per_host_allnodes) и пишет в реплицированное хранилище.
--- Выполняется ON CLUSTER shardless с использованием Distributed-таблицы сверху ingestion-слоя.
--- Предполагается, что kafka.tbl_jti_trace_cis_history_raw_all уже создан на кластере shardless как Distributed-таблица поверх per_host_allnodes (см. раздел 3.4).
-
-```sql
-DROP TABLE IF EXISTS kafka.mv_tbl_jti_trace_cis_history_to_repl ON CLUSTER shardless SYNC;
-
-CREATE MATERIALIZED VIEW kafka.mv_tbl_jti_trace_cis_history_to_repl
-ON CLUSTER shardless
-TO kafka.tbl_jti_trace_cis_history_repl
-AS
-SELECT
-    c, t, opd, _event_ts, _delete,
-    id, did, rid, rinn, rn,
-    sid, sinn, sn, gt, prid,
-    st, ste, elr,
-    emd, apd, exd,
-    p, pt, o, pn, b,
-    tt, tm,
-    ch, j, pg, et, pvad, ag,
-    __kafka_partition,
-    __kafka_offset,
-    __kafka_ts,
-    now() AS ver
-FROM kafka.tbl_jti_trace_cis_history_raw_all;
-```
-
-Этот материализованный вид обеспечивает автоматический перенос данных из ingestion-слоя в надёжный слой.
-Благодаря ReplacingMergeTree обеспечивается идемпотентность вставок: повторные данные по одинаковым оффсетам заменяются без дубликатов.
-
-Так как MV на `shardless` читает из Distributed-таблицы ingestion-слоя, возможны повторные вставки одних и тех же строк при перебоях сети. Это допустимо: витрина на ReplacingMergeTree устраняет дубликаты по `(__kafka_partition, __kafka_offset)`.
-
-### 3.6 Контроль целостности и оффсетов
-
-- Состояние консьюмеров (на ingestion-слое):
-
-```sql
-SELECT *
-FROM system.kafka_consumers
-WHERE database = 'kafka' AND table = 'tbl_jti_trace_cis_history_kafka' AND is_currently_used = 1;
-```
-
-Пример:
-```sql
-SELECT hostName() AS host, consumer_id, is_currently_used
+-- Активные консьюмеры
+SELECT hostName(), consumer_id, is_currently_used
 FROM system.kafka_consumers
 WHERE database = 'kafka'
   AND table = 'tbl_jti_trace_cis_history_kafka'
-ORDER BY host;
-```
+ORDER BY hostName();
 
-- Дубликаты и «дырки» по оффсетам (RAW, по партициям):
-
-```sql
-SELECT __kafka_partition,
-       count() AS rows,
-       countDistinct(__kafka_offset) AS uniq
+-- Данные в RAW по партициям
+SELECT __kafka_partition, count() AS rows
 FROM kafka.tbl_jti_trace_cis_history_raw
 GROUP BY __kafka_partition
 ORDER BY __kafka_partition;
+
+-- Ошибки DDL
+SELECT * FROM system.distributed_ddl_queue WHERE exception_code != 0;
+
+-- Состояние реплик
+SELECT database, table, is_readonly, absolute_delay, queue_size
+FROM system.replicas
+WHERE database = 'kafka' AND table LIKE 'tbl_jti_trace_cis_history_repl%';
 ```
 
-- Очередь распределённых DDL:
+### 5.3. Аудит оффсетов и целостности
 
-```sql
-SELECT *
-FROM system.distributed_ddl_queue
-WHERE exception_code != 0;
-```
-
-### 3.7 Продвинутый аудит оффсетов и целостности RAW
-
-Периодический (например, раз в час) аудит полноты и отсутствия пропусков (__kafka_offset) по каждой партиции. Формулы опираются на то, что оффсеты возрастают на 1 без дыр при отсутствии потерь.
-
-1. Сводка диапазонов и пропусков:
-
-```sql
-SELECT __kafka_partition,
-     min(__kafka_offset) AS min_offset,
-     max(__kafka_offset) AS max_offset,
-     countDistinct(__kafka_offset) AS uniq_offsets,
-     (max_offset - min_offset + 1) AS expected_span,
-     expected_span - uniq_offsets AS missing_offsets,
-     uniq_offsets - count() AS duplicate_offsets
-FROM kafka.tbl_jti_trace_cis_history_raw
-GROUP BY __kafka_partition
-ORDER BY __kafka_partition;
-```
-
-При обнаружении missing_offsets сверяемся с `kafka-consumer-groups.sh --describe` для той же группы; если Kafka уже удалил эти оффсеты, восстановление возможно только из бэкапов.
-
-Интерпретация:
-- missing_offsets > 0 ⇒ есть «дыры» (сообщения не попали или ещё не дочитаны).
-- duplicate_offsets > 0 ⇒ повторные вставки (атакуем через ReplacingMergeTree, не критично, но нужно наблюдать динамику).
-
-2. Быстрый список партиций с дырками:
-
+**Быстрая проверка дыр:**
 ```sql
 SELECT __kafka_partition, missing_offsets
 FROM (
   SELECT __kafka_partition,
-       (max(__kafka_offset)-min(__kafka_offset)+1) - countDistinct(__kafka_offset) AS missing_offsets
+         (max(__kafka_offset) - min(__kafka_offset) + 1) - countDistinct(__kafka_offset) AS missing_offsets
   FROM kafka.tbl_jti_trace_cis_history_raw
   GROUP BY __kafka_partition
-) t
-WHERE missing_offsets > 0
+) WHERE missing_offsets > 0
 ORDER BY missing_offsets DESC;
 ```
 
-3. Диапазоны оффсетов для проблемной партиции (подставьте партицию X):
-
+**Полный аудит:**
 ```sql
-SELECT __kafka_offset
-FROM kafka.tbl_jti_trace_cis_history_raw
-WHERE __kafka_partition = X
-ORDER BY __kafka_offset
-LIMIT 1000;  -- сузить для первичного анализа
-```
-
-4. Агрегированная задержка (lag) относительно последнего прочитанного оффсета в каждой партиции (если нужен Kafka CLI — сверить вручную):
-
-```sql
-SELECT __kafka_partition,
-     max(__kafka_offset) AS last_seen_offset
+SELECT
+  __kafka_partition,
+  min(__kafka_offset) AS min_offset,
+  max(__kafka_offset) AS max_offset,
+  countDistinct(__kafka_offset) AS uniq_offsets,
+  (max(__kafka_offset) - min(__kafka_offset) + 1) AS expected_span,
+  (max(__kafka_offset) - min(__kafka_offset) + 1) - countDistinct(__kafka_offset) AS missing_offsets,
+  count() - countDistinct(__kafka_offset) AS duplicate_offsets
 FROM kafka.tbl_jti_trace_cis_history_raw
 GROUP BY __kafka_partition
 ORDER BY __kafka_partition;
 ```
 
-Сравниваем с `kafka-consumer-groups.sh --describe` для той же группы.
+**Интерпретация:**
+- `missing_offsets > 0` — есть дыры (не дочитано или потеряно)
+- `duplicate_offsets > 0` — повторные вставки (ReplacingMergeTree устранит)
 
-5. Оперативная оценка «скорости» поступления (Δ оффсетов) за интервал (пример: последние 15 минут):
-
+**Скорость ingestion (15 мин):**
 ```sql
 SELECT __kafka_partition,
-     (max(__kafka_offset) - min(__kafka_offset)) AS delta_offsets
+       max(__kafka_offset) - min(__kafka_offset) AS delta_offsets
 FROM kafka.tbl_jti_trace_cis_history_raw
-WHERE __kafka_ts >= now() - INTERVAL 15 MINUTE
+WHERE __ingest_ts >= now() - INTERVAL 15 MINUTE
 GROUP BY __kafka_partition
 ORDER BY delta_offsets DESC;
 ```
 
-### 3.8 Тюнинг производительности ingestion
+---
 
-- Увеличение `kafka_max_block_size` даёт прирост пропускной способности, но растит задержку первой записи в блоке. Подбирать под SLA (обычно диапазон 10k–50k).
-- Если партиций существенно больше, чем консьюмеров × узлов, постепенно увеличивать `kafka_num_consumers` (по одному за релиз) при наличии свободного CPU.
-- Следить за средним размером блока через метрику `system.query_log` (поле `read_rows`).
-- При всплесках задержек уменьшить блок до прежнего значения (оперативный rollback).
+## 6. Тюнинг производительности
 
-Не меняем `kafka_group_name` у существующей таблицы при перезапуске. Для паузы ingestion используем только `ALTER TABLE ... MODIFY SETTING kafka_num_consumers=0`.
+### 6.1. Параметры Kafka
 
-### 4. Чек-лист релиза и перехода схемы (QA → PROD)
+```sql
+-- Увеличить throughput (подбирать под SLA):
+ALTER TABLE kafka.tbl_jti_trace_cis_history_kafka ON CLUSTER per_host_allnodes
+  MODIFY SETTING kafka_max_block_size = 20000;
 
-Перед запуском новой версии / сменой Avro-схемы:
+-- Увеличить консьюмеров (при наличии CPU):
+ALTER TABLE kafka.tbl_jti_trace_cis_history_kafka ON CLUSTER per_host_allnodes
+  MODIFY SETTING kafka_num_consumers = 2;
 
-1. Зафиксировать действующее `kafka_group_name` (vN) и подготовить новое (vN+1) — только при несовместимых изменениях.
-2. Проверить, что все оффсеты дочитаны (нет missing_offsets) в текущей группе.
-3. Снять снапшот метрик: объём за 15 мин (delta_offsets), максимальные оффсеты.
-4. Проверить `system.kafka_consumers` (is_currently_used=1, нет залипших партиций).
-5. Проверить отказоустойчивость ZooKeeper путей перед созданием/обновлением реплицированных таблиц.
-6. На QA применить новую схему Avro; убедиться, что ingest не падает (нет ошибок десериализации).
-7. Запустить новую consumer group (vN+1) в QA: старт с earliest, сверить полноту против старой группы.
-8. Перенести на PROD: создать новую группу, старая продолжает до подтверждения полноты.
-9. После подтверждения: заархивировать мониторинг старой группы, оставить только новую.
-10. Обновить runbook и схемы (хранить версионные метки: commit SHA + версию Avro). 
-
-Отмена (rollback):
-- Отключить новую группу (`kafka_num_consumers=0`), вернуть старую (если она ещё активна).
-- Проверить, что оффсеты старой группы не продвинулись нелинейно (отсутствие скачков или пропусков).
-
-### 5. Быстрые команды для оператора
-
-```bash
-# Состояние консьюмеров ClickHouse
-clickhouse-client --query "SELECT __kafka_partition, max(__kafka_offset) last FROM kafka.tbl_jti_trace_cis_history_raw GROUP BY __kafka_partition ORDER BY __kafka_partition" | column -t
-
-# Пауза ingest (QA)
-clickhouse-client --query "ALTER TABLE kafka.tbl_jti_trace_cis_history_kafka ON CLUSTER per_host_allnodes MODIFY SETTING kafka_num_consumers=0"
-
-# Возобновление ingest (QA)
-clickhouse-client --query "ALTER TABLE kafka.tbl_jti_trace_cis_history_kafka ON CLUSTER per_host_allnodes MODIFY SETTING kafka_num_consumers=1"
-
-# Быстрый аудит пропусков
-clickhouse-client --query "SELECT __kafka_partition,(max(__kafka_offset)-min(__kafka_offset)+1)-countDistinct(__kafka_offset) missing FROM kafka.tbl_jti_trace_cis_history_raw GROUP BY __kafka_partition HAVING missing>0 ORDER BY missing DESC" | column -t
- 
- # Для остановки ingestion **не** удаляем Kafka-таблицу и **не** переименовываем `kafka_group_name` — только меняем `kafka_num_consumers`.
+-- Включить многопоточность (один поток на консьюмера):
+ALTER TABLE kafka.tbl_jti_trace_cis_history_kafka ON CLUSTER per_host_allnodes
+  MODIFY SETTING kafka_thread_per_consumer = 1;
 ```
 
-## 6. Пошаговый боевой сценарий (QA → PROD)
+### 6.2. Оптимизация типов данных
 
-1. **Настроить кластеры:**
-   - Убедиться, что `shardless` (1 шард × N реплик, `internal_replication=true`) уже используется и не трогать существующие боевые таблицы.
-   - Добавить `per_host_allnodes` с одним репликой на хост, `internal_replication=false`.
+```sql
+-- LowCardinality для полей с низкой кардинальностью
+ALTER TABLE kafka.tbl_jti_trace_cis_history_raw ON CLUSTER per_host_allnodes
+  MODIFY COLUMN c LowCardinality(String),
+  MODIFY COLUMN t LowCardinality(UInt8),
+  MODIFY COLUMN st LowCardinality(Nullable(UInt8)),
+  MODIFY COLUMN pt LowCardinality(Nullable(UInt8));
 
-2. **Создать DB для Kafka:**
-   - `CREATE DATABASE IF NOT EXISTS kafka ON CLUSTER per_host_allnodes;`
-   - `CREATE DATABASE IF NOT EXISTS kafka ON CLUSTER shardless;`
+-- Data skipping index
+ALTER TABLE kafka.tbl_jti_trace_cis_history_raw ON CLUSTER per_host_allnodes
+  ADD INDEX IF NOT EXISTS idx_delete (_delete) TYPE set(0) GRANULARITY 16;
+```
 
-3. **На ingestion-слое (`per_host_allnodes`):**
-   - Создать `kafka.tbl_jti_trace_cis_history_raw` (RAW + TTL + __kafka_*).
-   - Создать `kafka.tbl_jti_trace_cis_history_kafka` (ENGINE=Kafka, AvroConfluent, корректный `format_avro_schema_registry_url`, новый `kafka_group_name`).
-   - Создать `kafka.mv_tbl_jti_trace_cis_history_to_raw` (Kafka → RAW).
-   - Создать `kafka.tbl_jti_trace_cis_history_raw_all` (Distributed по `per_host_allnodes`).
+### 6.3. Принудительная дедупликация
 
-4. **На надёжном слое (`shardless`):**
-   - Создать `kafka.tbl_jti_trace_cis_history_repl` (ReplicatedReplacingMergeTree).
-   - Создать `kafka.tbl_jti_trace_cis_history_repl_all` (Distributed).
-   - Создать `kafka.mv_tbl_jti_trace_cis_history_to_repl` (из RAW_all в repl).
+```sql
+-- ВНИМАНИЕ: высокая нагрузка на диск!
+OPTIMIZE TABLE kafka.tbl_jti_trace_cis_history_repl FINAL;
+```
 
-5. **Вся аналитика и витрины читают только из:**
-   - `kafka.tbl_jti_trace_cis_history_repl_all`.
+### 6.4. Мониторинг нагрузки
 
-6. **Kafka consumer group:**
-   - Для PROD завести стабильный `kafka_group_name` вида `ch_tbl_jti_trace_cis_history_ingest_v1`.
-   - Новый релиз схемы → новый `kafka_group_name` (v2, v3), старую группу не удалять, пока не подтверждена полнота.
+```sql
+-- Активные парты
+SELECT count() AS active_parts
+FROM system.parts
+WHERE database = 'kafka' 
+  AND table = 'tbl_jti_trace_cis_history_raw' 
+  AND active;
 
-7. **Проверки здоровья:**
-   - `system.kafka_consumers` по `per_host_allnodes`: есть `is_currently_used = 1` на нужных нодах.
-   - Сверка оффсетов через `kafka-consumer-groups.sh` и `__kafka_*` поля.
-   - Отсутствие дыр и дубликатов:
-     - `SELECT __kafka_partition, countDistinct(__kafka_offset) ...`
-   - Очередь DDL:
-     - `SELECT * FROM system.distributed_ddl_queue WHERE exception_code != 0`.
+-- Размер таблиц
+SELECT
+    database,
+    table,
+    formatReadableSize(sum(bytes)) AS size,
+    sum(rows) AS rows,
+    count() AS parts
+FROM system.parts
+WHERE database = 'kafka' AND active
+GROUP BY database, table
+ORDER BY sum(bytes) DESC;
+```
 
-Этот сценарий:
-- даёт at-least-once доставку из Kafka без потерь;
-- изолирует ingestion от боевых витрин;
-- обеспечивает сохранность данных при падении одной ноды ClickHouse;
-- остаётся совместимым с ClickHouse 24.8.14.39 (TTL по DateTime, корректный AvroConfluent SR-параметр, настройки Avro input и commit оффсетов).
+---
 
-## 7. High Availability и восстановление после сбоя
+## 7. Мониторинг и алерты
 
-- Ingestion-слой (`per_host_allnodes`) работает без репликации, но устойчив к сбоям отдельных нод: Kafka автоматически перераспределяет партиции между активными консьюмерами.
-- Надёжный слой (`shardless`) реплицирован (`internal_replication=true`), обеспечивает отказоустойчивость и консистентность данных.
-- При потере ingestion-ноды:
-  - Kafka переназначает партиции другим консьюмерам в группе.
-  - После восстановления ноды ClickHouse возобновит чтение своих партиций с сохранённых оффсетов (в Kafka).
-- При временной недоступности Schema Registry ingestion-процесс автоматически приостанавливается, но не теряет оффсеты. После восстановления SR чтение продолжается с последнего коммитнутого оффсета.
-- При потере реплики слоя `shardless`:
-  - Данные восстанавливаются из других реплик по путям ZooKeeper `/clickhouse/tables/{shard}/...`.
-  - После возвращения реплики ClickHouse автоматически синхронизирует данные.
-- Для предотвращения потерь:
-  - `kafka_commit_every_batch = 1` — коммит оффсетов только после успешной записи в RAW/MV.
-  - `ReplicatedReplacingMergeTree` на надёжном слое устраняет дубликаты при повторном чтении тех же оффсетов.
-  - TTL в RAW должен превышать Kafka retention, чтобы можно было восстановить данные при задержке ETL.
+### 7.1. Критичные метрики (Prometheus/Grafana)
 
-При критических сбоях рекомендуется:
-1. Проверить system.distributed_ddl_queue на ошибки.
-2. Проверить целостность данных через аудит оффсетов (см. 3.7).
-3. Выполнить ручной replay из Kafka при необходимости: задать новый kafka_group_name и перезапустить ingestion.
+| Метрика | Запрос | Alert |
+|---------|--------|-------|
+| **Нет консьюмеров** | `SELECT count() FROM system.kafka_consumers WHERE database='kafka' AND table='tbl_jti_trace_cis_history_kafka' AND is_currently_used=1` | `== 0` |
+| **RAW не растёт** | `SELECT now() - max(__ingest_ts) FROM kafka.tbl_jti_trace_cis_history_raw` | `> 300s` |
+| **Дыры в оффсетах** | См. раздел 5.3 | `> 0` |
+| **Витрина readonly** | `SELECT count() FROM system.replicas WHERE database='kafka' AND table='tbl_jti_trace_cis_history_repl' AND is_readonly=1` | `> 0` |
+| **Lag репликации** | `SELECT max(absolute_delay) FROM system.replicas WHERE database='kafka' AND table='tbl_jti_trace_cis_history_repl'` | `> 300s` |
+| **DDL ошибки** | `SELECT count() FROM system.distributed_ddl_queue WHERE exception_code!=0` | `> 0` |
+
+### 7.2. Логи и ошибки (Loki/Promtail)
+
+Фильтровать по:
+- `AvroConfluent`
+- `schema registry`
+- `tbl_jti_trace_cis_history_kafka`
+- level: `ERROR`, `EXCEPTION`
+
+---
+
+## 8. Деплой QA → PROD
+
+### 8.1. Чек-лист перед релизом
+
+1. ✅ Зафиксировать текущий `kafka_group_name` (vN)
+2. ✅ Проверить отсутствие дыр в RAW (`missing_offsets == 0`)
+3. ✅ Снять снапшот метрик (оффсеты, throughput)
+4. ✅ Проверить активных консьюмеров
+5. ✅ Проверить ZK-доступность и пути
+6. ✅ На QA применить новую Avro-схему
+7. ✅ Запустить новую группу (vN+1) с `earliest`
+8. ✅ Сверить полноту между группами
+9. ✅ Перенести на PROD
+10. ✅ Обновить runbook (версии, SHA)
+
+### 8.2. Пошаговый сценарий
+
+```bash
+# 1. Настроить кластеры (см. раздел 2)
+# 2. Создать БД
+clickhouse-client --query "CREATE DATABASE IF NOT EXISTS kafka ON CLUSTER per_host_allnodes"
+clickhouse-client --query "CREATE DATABASE IF NOT EXISTS kafka ON CLUSTER shardless"
+
+# 3. Создать таблицы ingestion-слоя (см. раздел 4)
+# 4. Создать витрины (см. раздел 4.1.5–4.1.7)
+# 5. Проверить здоровье (см. раздел 5.2)
+# 6. Запустить мониторинг (см. раздел 7)
+```
+
+### 8.3. Rollback
+
+```sql
+-- Отключить новую группу
+ALTER TABLE kafka.tbl_jti_trace_cis_history_kafka ON CLUSTER per_host_allnodes
+  MODIFY SETTING kafka_num_consumers = 0;
+
+-- Вернуть старую группу (если ещё активна)
+-- Проверить оффсеты через kafka-consumer-groups.sh
+```
+
+---
+
+## 9. DR-сценарии
+
+### 9.1. Падение ingestion-ноды
+
+1. Проверить консьюмеров (см. 6.2)
+2. Kafka автоматически перераспределит партиции
+3. После восстановления: проверить конфиги, `system.clusters`
+4. Оффсеты не трогать руками
+
+### 9.2. Падение нескольких ingestion-нод
+
+1. Временно увеличить `kafka_num_consumers`
+2. Проверить диапазоны оффсетов
+3. После нормализации вернуть исходное значение
+
+### 9.3. Падение реплики shardless
+
+1. Проверить статус: `SELECT * FROM system.replicas WHERE database='kafka'`
+2. Должна быть хотя бы одна реплика с `is_leader=1`
+3. После восстановления данные синхронизируются автоматически
+4. ZK и таблицы руками не трогать
+
+### 9.4. Недоступен Schema Registry
+
+1. Проверить: `curl -sf http://<sr>:8081/subjects`
+2. Ingestion остановится, но оффсеты сохранятся
+3. После восстановления SR: ingestion продолжится с последнего коммита
+4. **НЕ МЕНЯТЬ** `kafka_group_name` и не удалять таблицы
+
+### 9.5. Ошибочная смена kafka_group_name
+
+1. **НЕ МЕНЯТЬ** без миграционного плана
+2. Если случайно сменили:
+   - Зафиксировать оффсеты через `kafka-consumer-groups.sh`
+   - Оценить разницу
+   - Временно дочитать пропущенное в отдельную таблицу
+
+**Правило:** Сначала снимать срезы, потом действовать!
+
+---
+
+## 10. Быстрые команды
+
+```bash
+# Состояние консьюмеров
+clickhouse-client --query "SELECT __kafka_partition, max(__kafka_offset) last FROM kafka.tbl_jti_trace_cis_history_raw GROUP BY __kafka_partition ORDER BY __kafka_partition" | column -t
+
+# Пауза ingestion
+clickhouse-client --query "ALTER TABLE kafka.tbl_jti_trace_cis_history_kafka ON CLUSTER per_host_allnodes MODIFY SETTING kafka_num_consumers=0"
+
+# Возобновление
+clickhouse-client --query "ALTER TABLE kafka.tbl_jti_trace_cis_history_kafka ON CLUSTER per_host_allnodes MODIFY SETTING kafka_num_consumers=1"
+
+# Аудит пропусков
+clickhouse-client --query "SELECT __kafka_partition,(max(__kafka_offset)-min(__kafka_offset)+1)-countDistinct(__kafka_offset) missing FROM kafka.tbl_jti_trace_cis_history_raw GROUP BY __kafka_partition HAVING missing>0 ORDER BY missing DESC" | column -t
+
+# Размер таблиц
+clickhouse-client --query "SELECT table, formatReadableSize(sum(bytes)) size, sum(rows) rows FROM system.parts WHERE database='kafka' AND active GROUP BY table"
+```
+
+---
+
+## Приложения
+
+### Приложение A: Карта кластеров и ZK-путей
+
+| Слой | Кластер | Топология | internal_replication | Макросы | ZK-пути | Движки |
+|------|---------|-----------|----------------------|---------|---------|--------|
+| Исторический | `core` | 2×2 | `true` | `{shard}`, `{replica}` | `/clickhouse/tables/{shard}/...` | ReplicatedMergeTree |
+| Аналитика | `shardless` | 1×N | `true` | `{shardless_repl}` | `/clickhouse/tables/shardless/...` | ReplicatedReplacingMergeTree |
+| Ingestion | `per_host_allnodes` | N×1 | `false` | — | — | MergeTree, Kafka |
+
+**Проверки:**
+1. `macros.xml` соответствует роли кластера
+2. `system.clusters` идентичен на всех нодах
+3. ZK-пути не пересекаются
+4. Новые таблицы создаются только в согласованных префиксах
+
+### Приложение B: Schema Registry без аутентификации
+
+**Особенности работы с SR в ClickHouse 24.8:**
+- Указывать FQDN/VIP балансировщика, не IP одной ноды
+- ClickHouse не поддерживает список SR-хостов
+- Отказоустойчивость обеспечивается на уровне LB
+- При недоступности SR: ingestion останавливается, оффсеты сохраняются
+- После восстановления SR: чтение продолжается с последнего коммита
+- Длительные простои SR могут вызвать пересоздание consumer-сессий (данные не теряются)
+
+**Операционные проверки:**
+```bash
+# Доступность SR
+curl -sf http://<sr>:8081/subjects
+
+# Активные консьюмеры
+clickhouse-client --query "SELECT * FROM system.kafka_consumers WHERE is_currently_used=1"
+
+# Ошибки в логах
+grep -i "avroconfluent\|schema registry" /var/log/clickhouse-server/clickhouse-server.err.log
+```
+
+---
+
+**Конец документа**
