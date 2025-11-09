@@ -110,7 +110,7 @@ final class WalCfFilterCache {
             return new byte[0][];
         }
         byte[][] copy = sanitized.toArray(new byte[0][]);
-        java.util.Arrays.sort(copy, Bytes.BYTES_COMPARATOR);
+        Arrays.sort(copy, Bytes.BYTES_COMPARATOR);
         return deduplicate(copy);
     }
 

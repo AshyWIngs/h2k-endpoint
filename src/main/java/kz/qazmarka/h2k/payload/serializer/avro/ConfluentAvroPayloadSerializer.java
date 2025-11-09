@@ -10,9 +10,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.LongAdder;
 
@@ -27,7 +24,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import io.confluent.kafka.schemaregistry.client.CachedSchemaRegistryClient;
-import io.confluent.kafka.schemaregistry.client.SchemaMetadata;
 import io.confluent.kafka.schemaregistry.client.SchemaRegistryClient;
 import io.confluent.kafka.schemaregistry.client.rest.exceptions.RestClientException;
 import io.confluent.kafka.serializers.AbstractKafkaAvroSerDeConfig;
@@ -42,11 +38,9 @@ import kz.qazmarka.h2k.schema.registry.avro.local.AvroSchemaRegistry;
  * Это позволяет не блокировать горячий путь репликации и повышает устойчивость при кратковременных сбоях SR.
  */
 public final class ConfluentAvroPayloadSerializer implements AutoCloseable {
-
     private static final Logger LOG = LoggerFactory.getLogger(ConfluentAvroPayloadSerializer.class);
     private static final byte MAGIC_BYTE = 0x0;
     private static final int MAGIC_HEADER_LENGTH = 5;
-    private static final String STRATEGY_TABLE = "table";
     private static final String SCHEMA_REGISTRY_BASIC_AUTH_USER_INFO = "schema.registry.basic.auth.user.info";
     /** Максимальный размер буфера, который удерживаем в ThreadLocal (байты). */
     private static final int MAX_THREADLOCAL_BUFFER = 1 << 20;
@@ -61,25 +55,20 @@ public final class ConfluentAvroPayloadSerializer implements AutoCloseable {
 
     private final AvroSchemaRegistry localRegistry;
     private final List<String> registryUrls;
-    private final SchemaRegistryClient schemaRegistryClient;
+    private final SchemaRegistryAccess schemaRegistry;
     private final Map<String, Object> schemaRegistryClientConfig;
     private final int identityMapCapacity;
     private final LongAdder schemaRegisterSuccess = new LongAdder();
     private final LongAdder schemaRegisterFailure = new LongAdder();
-    private final String subjectStrategy;
-    private final String subjectPrefix;
-    private final String subjectSuffix;
+    private final SubjectNamer subjectNamer;
 
     private final AtomicBoolean firstSuccessLogged = new AtomicBoolean();
     private final AtomicBoolean firstFailureLogged = new AtomicBoolean();
 
     private final ConcurrentHashMap<String, SchemaInfo> cache = new ConcurrentHashMap<>();
-    private final ConcurrentHashMap<String, RemoteSchemaFingerprint> remoteFingerprints = new ConcurrentHashMap<>();
     private final RetrySettings retrySettings;
-    /**
-     * Отдельный исполнитель для повторных попыток регистрации схем. Поток демонический и не блокирует остановку приложения.
-     */
-    private final ScheduledExecutorService retryExecutor;
+    private final SchemaFingerprintMonitor fingerprintMonitor;
+    private final SchemaRegistrationRetrier retrier;
 
     /**
      * @param avroSettings неизменяемые настройки Avro и Schema Registry
@@ -111,20 +100,16 @@ public final class ConfluentAvroPayloadSerializer implements AutoCloseable {
         Map<String, String> auth = avroSettings.getRegistryAuth();
         Map<String, String> avroProps = avroSettings.getProperties();
 
-        SubjectSettings subjectSettings = resolveSubjectSettings(avroProps);
-        this.subjectStrategy = subjectSettings.strategy;
-        this.subjectPrefix = subjectSettings.prefix;
-        this.subjectSuffix = subjectSettings.suffix;
         this.identityMapCapacity = resolveIdentityMapCapacity(avroProps);
         this.schemaRegistryClientConfig = buildClientConfig(auth);
-        this.schemaRegistryClient = clientOverride != null
+        SchemaRegistryClient resolvedClient = clientOverride != null
                 ? clientOverride
                 : new CachedSchemaRegistryClient(this.registryUrls, identityMapCapacity, schemaRegistryClientConfig);
-        this.retryExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
-            Thread t = new Thread(r, "h2k-schema-registry-retry");
-            t.setDaemon(true);
-            return t;
-        });
+        this.schemaRegistry = new SchemaRegistryAccess(resolvedClient);
+        this.fingerprintMonitor = new SchemaFingerprintMonitor(LOG, this.schemaRegistry, schemaRegisterSuccess);
+        this.retrier = new SchemaRegistrationRetrier(LOG, this.schemaRegistry, fingerprintMonitor, schemaRegisterSuccess, schemaRegisterFailure, this.retrySettings);
+        SubjectSettings subjectSettings = resolveSubjectSettings(avroProps);
+        this.subjectNamer = new SubjectNamer(LOG, subjectSettings.strategy, subjectSettings.prefix, subjectSettings.suffix);
     }
 
     /**
@@ -190,32 +175,46 @@ public final class ConfluentAvroPayloadSerializer implements AutoCloseable {
         String tableKey = table.getNameAsString();
         Schema schema = loadSchema(tableKey);
         long localFingerprint = SchemaNormalization.parsingFingerprint64(schema);
-        maybeLogSchemaComparison(subject, localFingerprint);
+        fingerprintMonitor.observeRemoteFingerprint(subject, localFingerprint);
         SchemaInfo cached = cache.get(subject);
         try {
-            int schemaId = schemaRegistryClient.register(subject, schema);
+            int schemaId = schemaRegistry.register(subject, schema);
             LOG.debug("Avro Confluent: схема зарегистрирована: subject={}, id={}.", subject, schemaId);
             if (firstSuccessLogged.compareAndSet(false, true)) {
                 LOG.debug("Avro Confluent: первая успешная регистрация схемы — subject={}, id={}, urls={}",
                         subject, schemaId, registryUrls);
             }
-            remoteFingerprints.put(subject, new RemoteSchemaFingerprint(schemaId, -1, localFingerprint));
+            fingerprintMonitor.recordSuccessfulRegistration(subject, localFingerprint, schemaId);
             schemaRegisterSuccess.increment();
             return new SchemaInfo(schemaId, schema);
         } catch (RestClientException | IOException ex) {
             schemaRegisterFailure.increment();
-            handleRegistrationFailure(subject, schema, localFingerprint, ex);
-            RemoteSchemaFingerprint fingerprint = remoteFingerprints.get(subject);
-            if (fingerprint != null && fingerprint.fingerprint == localFingerprint) {
-                SchemaInfo fallback = new SchemaInfo(fingerprint.schemaId, schema);
+            // Инлайн логики handleRegistrationFailure (устранение предупреждения PMD UnusedPrivateMethod)
+            if (firstFailureLogged.compareAndSet(false, true)) {
+                LOG.warn("Avro Confluent: первая ошибка регистрации схемы — subject={}, urls={}, error={}",
+                        subject, registryUrls, ex.getMessage());
+            } else if (LOG.isDebugEnabled()) {
+                LOG.debug("Avro Confluent: повторная ошибка регистрации subject={}: {}", subject, ex.getMessage());
+            }
+            if (!retrySettings.retryEnabled()) {
+                LOG.warn("Avro Confluent: повторные попытки регистрации отключены (maxAttempts={}): subject={}",
+                        retrySettings.maxAttempts, subject);
+                return null;
+            }
+            SchemaFingerprintMonitor.RemoteSchemaFingerprint knownFingerprint = fingerprintMonitor.knownFingerprint(subject);
+            if (knownFingerprint != null && knownFingerprint.fingerprint == localFingerprint) {
+                SchemaInfo fallback = new SchemaInfo(knownFingerprint.schemaId, schema);
                 cache.put(subject, fallback);
-                LOG.warn("Avro Confluent: использую локально закешированный schemaId={} для subject={} (Schema Registry недоступен)", fingerprint.schemaId, subject);
+                LOG.warn("Avro Confluent: использую локально закешированный schemaId={} для subject={} (Schema Registry недоступен)", knownFingerprint.schemaId, subject);
+                retrier.schedule(subject, schema, localFingerprint, this::handleRetrySuccess);
                 return fallback;
             }
             if (cached != null) {
                 LOG.warn("Avro Confluent: Schema Registry недоступен, использую ранее зарегистрированный id={} для subject={}, регистрация выполнится в фоне", cached.schemaId, subject);
+                retrier.schedule(subject, schema, localFingerprint, this::handleRetrySuccess);
                 return cached;
             }
+            retrier.schedule(subject, schema, localFingerprint, this::handleRetrySuccess);
             throw new IllegalStateException("Avro: не удалось зарегистрировать схему '" + subject + "' — подключение к Schema Registry недоступно", ex);
         } catch (RuntimeException ex) {
             schemaRegisterFailure.increment();
@@ -232,143 +231,16 @@ public final class ConfluentAvroPayloadSerializer implements AutoCloseable {
         }
     }
 
-    private void maybeLogSchemaComparison(String subject, long localFingerprint) {
-        try {
-            SchemaMetadata metadata = fetchLatestSchemaMetadata(subject);
-            if (metadata == null) {
-                schemaRegisterSuccess.increment();
-                return;
-            }
-            long remoteFingerprint = computeRemoteFingerprint(metadata);
-            RemoteSchemaFingerprint previous = remoteFingerprints.put(subject,
-                    new RemoteSchemaFingerprint(metadata.getId(), metadata.getVersion(), remoteFingerprint));
-            schemaRegisterSuccess.increment();
-            logFingerprintMismatch(subject, localFingerprint, remoteFingerprint, metadata.getVersion());
-            logRemoteFingerprintChange(subject, previous, remoteFingerprint, metadata);
-        } catch (RestClientException | IOException | RuntimeException ex) {
-            logComparisonFailure(subject, ex);
-        }
-    }
-
-    private SchemaMetadata fetchLatestSchemaMetadata(String subject) throws RestClientException, IOException {
-        return schemaRegistryClient.getLatestSchemaMetadata(subject);
-    }
-
-    private long computeRemoteFingerprint(SchemaMetadata metadata) {
-        Schema parsed = new Schema.Parser().parse(metadata.getSchema());
-        return SchemaNormalization.parsingFingerprint64(parsed);
-    }
-
-    private void logFingerprintMismatch(String subject,
-                                        long localFingerprint,
-                                        long remoteFingerprint,
-                                        int remoteVersion) {
-        if (remoteFingerprint == localFingerprint) {
-            return;
-        }
-        LOG.warn("Avro Confluent: локальная схема subject={} имеет fingerprint {}, тогда как удалённая {} (version={})",
-                subject, localFingerprint, remoteFingerprint, remoteVersion);
-    }
-
-    private void logRemoteFingerprintChange(String subject,
-                                            RemoteSchemaFingerprint previous,
-                                            long remoteFingerprint,
-                                            SchemaMetadata metadata) {
-        if (previous == null || previous.fingerprint == remoteFingerprint) {
-            return;
-        }
-        LOG.warn("Avro Confluent: fingerprint схемы subject={} изменился: remote={} → {} (id {} → {}, version {} → {})",
-                subject,
-                previous.fingerprint,
-                remoteFingerprint,
-                previous.schemaId,
-                metadata.getId(),
-                previous.version,
-                metadata.getVersion());
-    }
-
-    private void logComparisonFailure(String subject, Exception ex) {
-        if (LOG.isWarnEnabled()) {
-            LOG.warn("Avro Confluent: не удалось сравнить fingerprint subject={}: {}", subject, ex.getMessage());
-        }
-        if (LOG.isDebugEnabled()) {
-            LOG.debug("Трассировка ошибки сравнения fingerprint для subject={}", subject, ex);
-        }
-    }
-
-    private void handleRegistrationFailure(String subject,
-                                            Schema schema,
-                                            long localFingerprint,
-                                            Exception error) {
-        if (firstFailureLogged.compareAndSet(false, true)) {
-            LOG.warn("Avro Confluent: первая ошибка регистрации схемы — subject={}, urls={}, error={}",
-                    subject, registryUrls, error.getMessage());
-        } else if (LOG.isDebugEnabled()) {
-            LOG.debug("Avro Confluent: повторная ошибка регистрации subject={}: {}", subject, error.getMessage());
-        }
-        if (!retrySettings.retryEnabled()) {
-            LOG.warn("Avro Confluent: повторные попытки регистрации отключены (maxAttempts={}): subject={}",
-                    retrySettings.maxAttempts, subject);
-            return;
-        }
-        scheduleRetry(subject, schema, localFingerprint, 1);
-    }
-
-    private void scheduleRetry(String subject, Schema schema, long fingerprint, int attempt) {
-        long delay = retrySettings.delayMsForAttempt(attempt);
-        retryExecutor.schedule(() -> retryRegistration(subject, schema, fingerprint, attempt), delay, TimeUnit.MILLISECONDS);
-    }
-
-    private void retryRegistration(String subject, Schema schema, long fingerprint, int attempt) {
-        try {
-            int schemaId = schemaRegistryClient.register(subject, schema);
-            schemaRegisterSuccess.increment();
-            cache.compute(subject, (key, existing) -> existing != null ? existing : new SchemaInfo(schemaId, schema));
-            remoteFingerprints.put(subject, new RemoteSchemaFingerprint(schemaId, -1, fingerprint));
-            LOG.info("Avro Confluent: схема subject={} успешно зарегистрирована после {} попыток", subject, attempt);
-        } catch (RestClientException | IOException ex) {
-            schemaRegisterFailure.increment();
-            if (attempt >= retrySettings.maxAttempts) {
-                LOG.error("Avro Confluent: регистрация схемы subject={} окончательно провалилась после {} попыток: {}",
-                        subject, attempt, ex.getMessage());
-                return;
-            }
-            LOG.warn("Avro Confluent: повторная регистрация схемы subject={} не удалась (попытка {}): {}",
-                    subject, attempt, ex.getMessage());
-            scheduleRetry(subject, schema, fingerprint, attempt + 1);
-        } catch (RuntimeException ex) {
-            schemaRegisterFailure.increment();
-            LOG.error("Avro Confluent: критическая ошибка при повторной регистрации схемы subject={}", subject, ex);
-        }
+    // Удалены вспомогательные приватные методы (логика инлайнена выше) для устранения предупреждений PMD.
+    /**
+     * После успешной регистрации в фоне обновляет локальный кэш идентификаторов схем.
+     */
+    private void handleRetrySuccess(String subject, Schema schema, int schemaId) {
+        cache.compute(subject, (key, existing) -> existing != null ? existing : new SchemaInfo(schemaId, schema));
     }
 
     private String buildSubject(TableName table) {
-        String base;
-        String strategy = subjectStrategy.toLowerCase(Locale.ROOT);
-        switch (strategy) {
-            case STRATEGY_TABLE:
-                base = tableNameForSubject(table, CaseMode.ORIGINAL);
-                break;
-            case "table-upper":
-                base = tableNameForSubject(table, CaseMode.UPPER);
-                break;
-            case "table-lower":
-                base = tableNameForSubject(table, CaseMode.LOWER);
-                break;
-            default:
-                LOG.warn("Avro Confluent: неизвестная стратегия subject '{}', использую table", subjectStrategy);
-                base = tableNameForSubject(table, CaseMode.ORIGINAL);
-        }
-        return subjectPrefix + base + subjectSuffix;
-    }
-
-    private String tableNameForSubject(TableName table, CaseMode mode) {
-        String name = table.getNameWithNamespaceInclAsString();
-        switch (mode) {
-            case UPPER: return name.toUpperCase(Locale.ROOT);
-            case LOWER: return name.toLowerCase(Locale.ROOT);
-            default: return name;
-        }
+        return subjectNamer.subjectFor(table);
     }
 
     private Map<String, Object> buildClientConfig(Map<String, String> auth) {
@@ -420,7 +292,7 @@ public final class ConfluentAvroPayloadSerializer implements AutoCloseable {
     }
 
     private static SubjectSettings resolveSubjectSettings(Map<String, String> props) {
-        String strategy = prop(props, "subject.strategy", STRATEGY_TABLE);
+    String strategy = prop(props, "subject.strategy", SubjectNamer.DEFAULT_STRATEGY);
         String prefix = prop(props, "subject.prefix", "");
         String suffix = prop(props, "subject.suffix", "");
         return new SubjectSettings(strategy, prefix, suffix);
@@ -468,8 +340,6 @@ public final class ConfluentAvroPayloadSerializer implements AutoCloseable {
     List<String> registryUrlsForTest() {
         return registryUrls;
     }
-
-    private enum CaseMode { ORIGINAL, UPPER, LOWER }
 
     private static final class SubjectSettings {
         final String strategy;
@@ -549,18 +419,6 @@ public final class ConfluentAvroPayloadSerializer implements AutoCloseable {
         }
     }
 
-    private static final class RemoteSchemaFingerprint {
-        final int schemaId;
-        final int version;
-        final long fingerprint;
-
-        RemoteSchemaFingerprint(int schemaId, int version, long fingerprint) {
-            this.schemaId = schemaId;
-            this.version = version;
-            this.fingerprint = fingerprint;
-        }
-    }
-
     public static final class SchemaRegistryMetrics {
         private final long registered;
         private final long failures;
@@ -576,7 +434,7 @@ public final class ConfluentAvroPayloadSerializer implements AutoCloseable {
 
     @Override
     public void close() {
-        retryExecutor.shutdownNow();
+        retrier.close();
     }
 
     static final class RetrySettings {

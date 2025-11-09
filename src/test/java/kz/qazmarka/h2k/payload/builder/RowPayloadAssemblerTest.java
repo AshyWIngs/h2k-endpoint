@@ -121,7 +121,7 @@ class RowPayloadAssemblerTest {
         ExecutorService executor = Executors.newFixedThreadPool(workers);
         AtomicReference<String> shared = new AtomicReference<>();
         try {
-            List<Future<Void>> futures = new java.util.ArrayList<>(workers);
+            List<Future<Void>> futures = new ArrayList<>(workers);
             for (int t = 0; t < workers; t++) {
                 final int threadId = t;
                 futures.add(executor.submit(() -> {

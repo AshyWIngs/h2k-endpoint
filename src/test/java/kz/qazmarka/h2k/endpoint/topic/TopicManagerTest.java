@@ -116,7 +116,7 @@ class TopicManagerTest {
         AtomicInteger attempts = new AtomicInteger();
         TopicEnsurer failing = TopicEnsurer.testingDelegate(topic -> {
             attempts.incrementAndGet();
-            throw new RuntimeException("fail");
+            throw new IllegalStateException("fail");
         });
         TopicManager manager = new TopicManager(topicSettings(), failing);
 

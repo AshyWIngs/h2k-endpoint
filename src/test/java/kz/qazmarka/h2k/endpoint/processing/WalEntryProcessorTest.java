@@ -255,7 +255,7 @@ class WalEntryProcessorTest {
         assertHistorySize(scenario.producer, 1, "Ожидается публикация строки");
         org.apache.kafka.clients.producer.ProducerRecord<RowKeySlice, byte[]> produced = scenario.producer.history().get(0);
         assertEquals(scenario.topicManager.resolveTopic(TABLE), produced.topic());
-        assertTrue(java.util.Arrays.equals(row, produced.key().toByteArray()), "Ключ должен совпасть с rowkey");
+    assertTrue(Arrays.equals(row, produced.key().toByteArray()), "Ключ должен совпасть с rowkey");
         assertTrue(produced.value() != null && produced.value().length > 0, "Payload не должен быть пустым");
     }
 
@@ -271,8 +271,8 @@ class WalEntryProcessorTest {
 
         // Продьюсер, у которого send() всегда возвращает exceptional future
         class FailingProducer implements org.apache.kafka.clients.producer.Producer<RowKeySlice, byte[]> {
-            private java.util.concurrent.CompletableFuture<org.apache.kafka.clients.producer.RecordMetadata> failedFuture() {
-                java.util.concurrent.CompletableFuture<org.apache.kafka.clients.producer.RecordMetadata> cf = new java.util.concurrent.CompletableFuture<>();
+            private CompletableFuture<org.apache.kafka.clients.producer.RecordMetadata> failedFuture() {
+                CompletableFuture<org.apache.kafka.clients.producer.RecordMetadata> cf = new CompletableFuture<>();
                 cf.completeExceptionally(new IllegalStateException("simulated send failure"));
                 return cf;
             }

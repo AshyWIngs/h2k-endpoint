@@ -25,6 +25,11 @@ final class WalCounterService {
     private final LongAdder cellsWindow = new LongAdder();
     private final LongAdder filteredRowsWindow = new LongAdder();
     private final AtomicLong throughputWindowStart = new AtomicLong(System.nanoTime());
+    // ==== Периодические сводки (перемещено вверх для PMD) ====
+    private static final long ENSURE_SUMMARY_INTERVAL_NS = TimeUnit.SECONDS.toNanos(60);
+    private static final long SR_SUMMARY_INTERVAL_NS = TimeUnit.MINUTES.toNanos(5);
+    private final AtomicLong nextEnsureSummaryAt = new AtomicLong(System.nanoTime());
+    private final AtomicLong nextSrSummaryAt = new AtomicLong(System.nanoTime());
 
     EntryCounters newEntryCounters() {
         return new EntryCounters();
@@ -131,8 +136,7 @@ final class WalCounterService {
     }
 
     private boolean windowReady(long elapsed, long windowStart, long now) {
-        return elapsed >= THROUGHPUT_LOG_INTERVAL_NS
-                && throughputWindowStart.compareAndSet(windowStart, now);
+        return elapsed >= THROUGHPUT_LOG_INTERVAL_NS && throughputWindowStart.compareAndSet(windowStart, now);
     }
 
     private void emitThroughput(long elapsedNs,
@@ -185,19 +189,14 @@ final class WalCounterService {
     }
 
     // ==== Периодические сводки ====
-    private static final long ENSURE_SUMMARY_INTERVAL_NS = TimeUnit.SECONDS.toNanos(60);
-    private static final long SR_SUMMARY_INTERVAL_NS = TimeUnit.MINUTES.toNanos(5);
-    private final java.util.concurrent.atomic.AtomicLong nextEnsureSummaryAt = new java.util.concurrent.atomic.AtomicLong(System.nanoTime());
-    private final java.util.concurrent.atomic.AtomicLong nextSrSummaryAt = new java.util.concurrent.atomic.AtomicLong(System.nanoTime());
 
     private void emitPeriodicSummaries(java.util.Map<String, Long> extras, Logger log) {
         if (extras == null || extras.isEmpty()) return;
         long now = System.nanoTime();
         // Сводка ensure (INFO)
-        long targetEnsure = nextEnsureSummaryAt.get();
-        if (now >= targetEnsure
-                && nextEnsureSummaryAt.compareAndSet(targetEnsure, now + ENSURE_SUMMARY_INTERVAL_NS)
-                && log.isInfoEnabled()) {
+    long targetEnsure = nextEnsureSummaryAt.get();
+    boolean ensureDue = now >= targetEnsure && nextEnsureSummaryAt.compareAndSet(targetEnsure, now + ENSURE_SUMMARY_INTERVAL_NS);
+    if (ensureDue && log.isInfoEnabled()) {
             long accepted = get(extras, "ensure.вызовов.принято");
             long rejected = get(extras, "ensure.вызовов.отклонено");
             long existsYes = get(extras, "существует.да");
@@ -213,10 +212,9 @@ final class WalCounterService {
                     createdOk, createdRace, createdFail, backoffSize, queuePending);
         }
         // Сводка Schema Registry (DEBUG)
-        long targetSr = nextSrSummaryAt.get();
-        if (now >= targetSr
-                && nextSrSummaryAt.compareAndSet(targetSr, now + SR_SUMMARY_INTERVAL_NS)
-                && log.isDebugEnabled()) {
+    long targetSr = nextSrSummaryAt.get();
+    boolean srDue = now >= targetSr && nextSrSummaryAt.compareAndSet(targetSr, now + SR_SUMMARY_INTERVAL_NS);
+    if (srDue && log.isDebugEnabled()) {
             long srOk = get(extras, "sr.регистрация.успехов");
             long srFail = get(extras, "sr.регистрация.ошибок");
             log.debug("Сводка SR: регистраций ок={}, ошибок={}", srOk, srFail);

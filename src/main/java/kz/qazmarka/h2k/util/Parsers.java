@@ -122,13 +122,8 @@ public final class Parsers {
 
     private static boolean parseBoolean(String value, boolean defVal) {
         String normalized = value.trim().toLowerCase(Locale.ROOT);
-        if (TRUE_TOKENS.contains(normalized)) {
-            return true;
-        }
-        if (FALSE_TOKENS.contains(normalized)) {
-            return false;
-        }
-        return defVal;
+        // Упрощённое булево выражение во избежание предупреждения PMD (SimplifyBooleanReturns)
+        return TRUE_TOKENS.contains(normalized) || (!FALSE_TOKENS.contains(normalized) && defVal);
     }
 
     /**
