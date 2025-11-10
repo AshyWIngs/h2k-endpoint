@@ -1,9 +1,24 @@
 # ClickHouse Kafka Ingestion — Runbook
 
-_Версия документа: v1.6 (обновлено: 2025-11-09)_  
+_Версия документа: v1.8 (обновлено: 2025-11-10)_  
 _Документ протестирован на ClickHouse 24.8.14.39 (official build)_
 
-## Ключевые изменения в v1.6
+## Ключевые изменения в v1.8
+
+- ✅ Добавлены полные DDL для таблиц `TBL_DOCUMENT`, `TBL_DOCUMENTS`, `TBL_RECEIPT` (7 объектов на таблицу) на основе их Avro-схем
+- ✅ Раздел 4 пополнен ссылками на внешние файлы DDL для новых таблиц
+- ✅ Согласованы типы: epoch millis → DateTime64(3) в RAW/витрине, бинарные поля представлены как String
+- ✅ Проверен порядок и TTL: RAW 60d по `__ingest_ts`, витрина 180d по бизнес-времени с запасным `__kafka_ts`
+
+## Изменения в v1.7
+
+- ✅ Вынесены DDL всех объектов `TBL_JTI_TRACE_CIS_HISTORY` и `TBL_JTI_TRACE_DOCUMENT_ERRORS` во внешние файлы (`./ddl/...`) с удобными ссылками
+- ✅ Завершено формирование полного набора DDL для `TBL_JTI_TRACE_DOCUMENT_ERRORS` на основе Avro-схемы (конвертация epoch millis → DateTime64(3))
+- ✅ Удалены плейсхолдеры и TODO, добавлены подробные русские комментарии
+- ✅ Проверено соответствие полей Avro ↔ ClickHouse (типизация, PK, метаполя `_event_ts`, `_delete`)
+- ✅ Обновлён порядок: версия 1.7 фиксирует структуру ссылок вместо инлайна для ускорения ревью
+
+## Изменения в v1.6
 
 - ✅ **Модульная структура для множества таблиц**: раздел 4 теперь содержит подразделы для каждой таблицы
 - ✅ Добавлен шаблон для быстрого создания DDL для новых топиков Kafka
@@ -32,7 +47,9 @@ _Документ протестирован на ClickHouse 24.8.14.39 (officia
 - [4. Таблицы Kafka → ClickHouse](#4-таблицы-kafka--clickhouse)
   - [4.1. TBL_JTI_TRACE_CIS_HISTORY](#41-tbl_jti_trace_cis_history)
   - [4.2. TBL_JTI_TRACE_DOCUMENT_ERRORS](#42-tbl_jti_trace_document_errors)
-  - [4.3. [Добавить следующую таблицу]](#43-добавить-следующую-таблицу)
+    - [4.3. TBL_DOCUMENT](#43-tbl_document)
+    - [4.4. TBL_DOCUMENTS](#44-tbl_documents)
+    - [4.5. TBL_RECEIPT](#45-tbl_receipt)
 - [5. Управление ingestion](#5-управление-ingestion)
 - [6. Тюнинг производительности](#6-тюнинг-производительности)
 - [7. Мониторинг и алерты](#7-мониторинг-и-алерты)
@@ -196,6 +213,22 @@ CREATE DATABASE IF NOT EXISTS kafka ON CLUSTER shardless;
 ---
 
 ### 4.1. TBL_JTI_TRACE_CIS_HISTORY
+
+#### 4.1.0. Внешние файлы DDL
+
+Для ускорения операций и код-ревью полный набор DDL вынесен в каталог `./ddl/tbl_jti_trace_cis_history/`:
+
+| Объект | Файл |
+|--------|------|
+| RAW таблица | `./ddl/tbl_jti_trace_cis_history/tbl_jti_trace_cis_history_raw.sql` |
+| Kafka источник | `./ddl/tbl_jti_trace_cis_history/tbl_jti_trace_cis_history_kafka.sql` |
+| MV Kafka → RAW | `./ddl/tbl_jti_trace_cis_history/mv_tbl_jti_trace_cis_history_to_raw.sql` |
+| Distributed RAW | `./ddl/tbl_jti_trace_cis_history/tbl_jti_trace_cis_history_raw_all.sql` |
+| Реплицируемая витрина | `./ddl/tbl_jti_trace_cis_history/tbl_jti_trace_cis_history_repl.sql` |
+| Distributed витрина | `./ddl/tbl_jti_trace_cis_history/tbl_jti_trace_cis_history_repl_all.sql` |
+| MV RAW → витрина | `./ddl/tbl_jti_trace_cis_history/mv_tbl_jti_trace_cis_history_to_repl.sql` |
+
+Ниже остаётся инлайн только как эталон (можно сверять при изменениях). При правках в первую очередь редактировать внешние файлы.
 
 #### 4.1.1. RAW-таблица (MergeTree + TTL)
 
@@ -412,50 +445,79 @@ FROM kafka.tbl_jti_trace_cis_history_raw_all;
 
 ### 4.2. TBL_JTI_TRACE_DOCUMENT_ERRORS
 
-_Раздел для второй таблицы — добавить аналогичные DDL по шаблону из 4.1_
+Полный набор DDL вынесен в каталог `./ddl/tbl_jti_trace_document_errors/`:
 
-#### 4.2.1. RAW-таблица (MergeTree + TTL)
-```sql
--- DROP TABLE IF EXISTS kafka.tbl_jti_trace_document_errors_raw ON CLUSTER per_host_allnodes SYNC;
--- CREATE TABLE kafka.tbl_jti_trace_document_errors_raw ...
--- TODO: добавить DDL
-```
+| Объект | Файл |
+|--------|------|
+| Kafka источник | `./ddl/tbl_jti_trace_document_errors/tbl_jti_trace_document_errors_kafka.sql` |
+| RAW таблица | `./ddl/tbl_jti_trace_document_errors/tbl_jti_trace_document_errors_raw.sql` |
+| MV Kafka → RAW | `./ddl/tbl_jti_trace_document_errors/mv_tbl_jti_trace_document_errors_to_raw.sql` |
+| Distributed RAW | `./ddl/tbl_jti_trace_document_errors/tbl_jti_trace_document_errors_raw_all.sql` |
+| Реплицируемая витрина | `./ddl/tbl_jti_trace_document_errors/tbl_jti_trace_document_errors_repl.sql` |
+| Distributed витрина | `./ddl/tbl_jti_trace_document_errors/tbl_jti_trace_document_errors_repl_all.sql` |
+| MV RAW → витрина | `./ddl/tbl_jti_trace_document_errors/mv_tbl_jti_trace_document_errors_to_repl.sql` |
 
-#### 4.2.2. Kafka-источник
-```sql
--- TODO: добавить DDL
-```
+**Сопоставление типов Avro → ClickHouse:**
+- `string` → `String`
+- `long` (TIMESTAMP, epoch millis) → `DateTime64(3,'UTC')` в целевых таблицах (хранится как `Int64` только в Kafka-источнике для дешёвого парсинга)
+- `boolean` → `UInt8` (для унификации с существующей моделью `_delete`)
+- `union ["null", T]` → `Nullable(T)`
 
-#### 4.2.3. Materialized View (Kafka → RAW)
-```sql
--- TODO: добавить DDL
-```
+**PK и сортировка:** первичный ключ Phoenix `(id)` дополнен метаданными Kafka при сортировке для удобного аудита оффсетов.
 
-#### 4.2.4. Distributed для объединения RAW
-```sql
--- TODO: добавить DDL
-```
+**TTL:** RAW — 60 дней по моменту приёма `__ingest_ts`; витрина — 180 дней по бизнес-времени `dt` с запасным `__kafka_ts`.
 
-#### 4.2.5. Реплицированная витрина
-```sql
--- TODO: добавить DDL
-```
-
-#### 4.2.6. Distributed для аналитики
-```sql
--- TODO: добавить DDL
-```
-
-#### 4.2.7. Materialized View (RAW → витрина)
-```sql
--- TODO: добавить DDL
-```
+При обновлении схемы Avro: сначала править внешние `.sql`, затем (опционально) обновлять справочную часть ранбука.
 
 ---
 
-### 4.3. [Добавить следующую таблицу]
+### 4.3. DOCUMENT
 
-_Используйте раздел 4.1 как шаблон для новых таблиц_
+Полный набор актуальных DDL расположен в каталоге `./ddl/document/`:
+
+| Объект | Файл |
+|--------|------|
+| Kafka источник | `./ddl/document/document_kafka.sql` |
+| RAW таблица | `./ddl/document/document_raw.sql` |
+| MV Kafka → RAW | `./ddl/document/mv_document_to_raw.sql` |
+| Distributed RAW | `./ddl/document/document_raw_all.sql` |
+| Реплицируемая витрина | `./ddl/document/document_repl.sql` |
+| Distributed витрина | `./ddl/document/document_repl_all.sql` |
+| MV RAW → витрина | `./ddl/document/mv_document_to_repl.sql` |
+
+PK `(did)`, бинарные/варбинари поля (`pgm`) представлены как `String`; все временные поля конвертируются в `DateTime64(3,'UTC')` в MV.
+
+### 4.4. DOCUMENTS
+
+Актуальные DDL находятся в `./ddl/documents/`:
+
+| Объект | Файл |
+|--------|------|
+| Kafka источник | `./ddl/documents/documents_kafka.sql` |
+| RAW таблица | `./ddl/documents/documents_raw.sql` |
+| MV Kafka → RAW | `./ddl/documents/mv_documents_to_raw.sql` |
+| Distributed RAW | `./ddl/documents/documents_raw_all.sql` |
+| Реплицируемая витрина | `./ddl/documents/documents_repl.sql` |
+| Distributed витрина | `./ddl/documents/documents_repl_all.sql` |
+| MV RAW → витрина | `./ddl/documents/mv_documents_to_repl.sql` |
+
+Составной PK `(OWNER_ID, DIRECTION, DOCUMENT_ID)`; возможная оптимизация в витрине — переход некоторых `String` на `FixedString(16)` после подтверждения кардинальности.
+
+### 4.5. RECEIPT
+
+Актуальные DDL в каталоге `./ddl/receipt/`:
+
+| Объект | Файл |
+|--------|------|
+| Kafka источник | `./ddl/receipt/receipt_kafka.sql` |
+| RAW таблица | `./ddl/receipt/receipt_raw.sql` |
+| MV Kafka → RAW | `./ddl/receipt/mv_receipt_to_raw.sql` |
+| Distributed RAW | `./ddl/receipt/receipt_raw_all.sql` |
+| Реплицируемая витрина | `./ddl/receipt/receipt_repl.sql` |
+| Distributed витрина | `./ddl/receipt/receipt_repl_all.sql` |
+| MV RAW → витрина | `./ddl/receipt/mv_receipt_to_repl.sql` |
+
+PK `(did)`; временные поля переводятся в `DateTime64(3,'UTC')` по тем же правилам, что и в `DOCUMENT`.
 
 ---
 
