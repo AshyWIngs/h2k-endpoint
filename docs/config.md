@@ -137,7 +137,7 @@ PhoenixTableMetadataProvider provider = PhoenixTableMetadataProvider.builder()
 | **`h2k.admin.client.id`** | ClientId для админ‑клиента | Строка | `h2k-admin` |
 | **`h2k.ensure.unknown.backoff.ms`** | Бэкофф при «неизвестной теме» | `int` (ms) | `5000` |
 
-При `h2k.ensure.topics=true` создаётся связка `EnsureCoordinator` + `TopicEnsureExecutor`: горячий путь лишь ставит темы в очередь, а отдельный поток проверяет `describeTopics()` и отвечает за создание. Цепочка поднимается лениво при первом ensure‑вызове, поэтому старт Endpoint не тратит время на создание `AdminClient`. Флаг `h2k.ensure.increase.partitions` разрешает плановый апгрейд числа партиций, `h2k.ensure.diff.configs` — применение отличающихся конфигураций (например, `retention.ms`, `cleanup.policy`). Ключи `h2k.topic.config.*` проксируются в AdminClient как map `config → value`; используйте их для точечной настройки (`retention.ms`, `compression.type`, `min.insync.replicas`). Параметр `h2k.ensure.unknown.backoff.ms` задаёт базовый бэкофф при временных ошибках (таймаут, ACL, сеть) — значения уменьшаются джиттером в `TopicBackoffManager`.
+При `h2k.ensure.topics=true` создаётся связка `EnsureCoordinator` + `TopicEnsureExecutor`: горячий путь лишь ставит темы в очередь, а отдельный поток проверяет `describeTopics()` и отвечает за создание. Цепочка поднимается лениво при первом ensure‑вызове, поэтому старт Endpoint не тратит время на создание `AdminClient`. Флаг `h2k.ensure.increase.partitions` разрешает плановый апгрейд числа партиций, `h2k.ensure.diff.configs` — применение отличающихся конфигураций (например, `retention.ms`, `cleanup.policy`). Ключи `h2k.topic.config.*` проксируются в AdminClient как map `config → value`; используйте их для точечной настройки (`retention.ms`, `cleanup.policy`, `min.insync.replicas`). Параметр `h2k.ensure.unknown.backoff.ms` задаёт базовый бэкофф при временных ошибках (таймаут, ACL, сеть) — значения уменьшаются джиттером в `TopicBackoffManager`.
 
 Метрики ensure попадают в `TopicEnsurer#getMetrics()` и дальше в `TopicManager.getMetrics()`. Снимок содержит счётчики `ensure.*`, `существует.*`, `создание.*`, а также размер кеша `ensure.подтверждено.тем` и очередь задач `ensure.очередь.ожидает` (см. `TopicEnsurer#toString()`). Для диагностики включите DEBUG для `kz.qazmarka.h2k.kafka.ensure` — внутри пишутся решения об ensure, бэкоффе и апгрейдах конфигов.
 
@@ -145,7 +145,7 @@ PhoenixTableMetadataProvider provider = PhoenixTableMetadataProvider.builder()
 
 ## Kafka Producer: pass-through и спец-ключи
 
-**Pass‑through:** все ключи с префиксом **`h2k.producer.`** копируются в конфигурацию Kafka Producer **без изменений имени** (например, `h2k.producer.acks`, `h2k.producer.linger.ms`, `h2k.producer.compression.type`, и т.д.).
+**Pass‑through:** все ключи с префиксом **`h2k.producer.`** копируются в конфигурацию Kafka Producer **без изменений имени** (например, `h2k.producer.acks`, `h2k.producer.linger.ms` и т.д.). Компрессия продьюсера всегда зафиксирована на `lz4` и не переопределяется.
 
 **Спец‑ключи проекта:**
 

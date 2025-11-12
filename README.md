@@ -76,10 +76,7 @@ bin/hbase shell conf/add_peer_shell_balanced.txt
 
 1. После сборки Maven появится два артефакта в `target/`: `h2k-endpoint-<version>.jar` (тонкий) и `h2k-endpoint-<version>-shaded.jar`. Для RegionServer используйте shaded-вариант (можно переименовать в `h2k-endpoint.jar` или загрузить как есть).
    Скопируйте `h2k-endpoint-<version>-shaded.jar` в `/opt/hbase-default-current/lib/`.  
-2. Убедитесь, что на RS есть базовые клиентские библиотеки из кластера:
-   - `kafka-clients-2.3.1.jar`
-   - `lz4-java-1.6.0+.jar`
-     *(если измените `compression.type` на `snappy`, добавьте `snappy-java-1.1.x+.jar`)*
+2. Дополнительные Kafka‑клиенты и LZ4 на RS не требуются: `kafka-clients` 3.3.2 и `lz4-java` 1.8.0 уже включены в `h2k-endpoint-*-shaded.jar`.
    > Avro/Jackson и Confluent Schema Registry 5.3.8 шейдятся внутрь `h2k-endpoint-*.jar`, поэтому дополнительные Confluent JAR не нужны.
 3. Перезапустите RegionServer.
 
@@ -97,8 +94,7 @@ bin/hbase shell conf/add_peer_shell_balanced.txt
   - io.confluent:common-config:5.3.8
   - io.confluent:common-utils:5.3.8
   - com.101tec:zkclient:0.10
-  - (если на RS отсутствуют) org.apache.kafka:kafka-clients:2.3.1, org.lz4:lz4-java:1.6.0,
-    а при использовании компрессии: org.xerial.snappy:snappy-java:1.1.7+ или com.github.luben:zstd-jni (для zstd)
+  - (если на RS отсутствуют) org.apache.kafka:kafka-clients:3.3.2 и org.lz4:lz4-java:1.8.0
 
 - Быстрая выгрузка зависимостей через Maven:
   ```bash
@@ -113,7 +109,7 @@ bin/hbase shell conf/add_peer_shell_balanced.txt
 
 Быстрая проверка:
 ```bash
-hbase classpath | tr ':' '\n' | egrep -i 'kafka-clients|lz4|snappy'
+hbase classpath | tr ':' '\n' | egrep -i 'kafka-clients|lz4'
 ```
 
 ---
@@ -172,10 +168,9 @@ h2k.topic.pattern=${table}
 | `h2k.producer.max.in.flight` | запросов | `1` | `5` |
 | `h2k.producer.linger.ms` | миллисекунды | `50` | `100` |
 | `h2k.producer.batch.size` | байты | `65536` | `524288` |
-| `h2k.producer.compression.type` | алгоритм | `lz4` | `lz4` |
 | `h2k.producer.delivery.timeout.ms` | миллисекунды | `180000` | `300000` |
 
-> BALANCED — основной профиль, объединяющий скорость и устойчивость. Если требуется изменить компрессию или поведение, редактируйте `conf/add_peer_shell_balanced.txt` и обновляйте документацию.
+> BALANCED — основной профиль, объединяющий скорость и устойчивость. Алгоритм сжатия Kafka Producer жёстко фиксирован на `lz4` и не переопределяется.
 
 ---
 
@@ -292,7 +287,7 @@ Endpoint публикует события в формате Avro (Confluent Sch
 ## FAQ
 
 **Нужно ли класть Confluent JAR на RegionServer?**  
-Нет. Текущая версия шейдит внутрь `io.confluent:kafka-avro-serializer` и `kafka-schema-registry-client` 5.3.8 вместе с зависимостями. Достаточно базовых библиотек кластера (`kafka-clients`, `lz4`, `snappy`).
+Нет. Текущая версия шейдит внутрь `kafka-clients` 3.3.2, `lz4-java` 1.8.0 и `io.confluent:kafka-avro-serializer`/`kafka-schema-registry-client` 5.3.8 — дополнительных JAR на RS не требуется.
 
 **Что делать при ошибке 409 от Schema Registry?**  
 По умолчанию мы используем `subject.strategy=table`, т.е. `namespace:table` (для `default` остаётся просто имя таблицы). Если ранее использовались сабджекты вида `qualifier`, проверьте `h2k.avro.subject.*`: можно вернуть старую стратегию, либо добавить префикс/суффикс. При конфликте удалите неверную версию в SR и перезапустите peer.

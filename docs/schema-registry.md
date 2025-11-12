@@ -1,6 +1,6 @@
 # Confluent Schema Registry (`confluent`)
 
-1. **Версии** — SR 5.3.8 (совместимый с Kafka clients 2.3.1, Java 8). Wire-format:
+1. **Версии** — SR 5.3.8 (совместим с Kafka clients 3.3.2/Java 8). Wire-format:
    `MAGIC_BYTE (0x0)` + `int32 schemaId` + `avroBinary`.
 
 2. **Конфигурация** (минимальный пример):
@@ -44,7 +44,7 @@ h2k.avro.subject.suffix=-value
 
 **Ссылки:**
    - Исходники: https://github.com/confluentinc/schema-registry
-   - Релиз под Kafka 2.3.1: https://github.com/confluentinc/schema-registry/tree/v5.3.8
+   - Релиз под Kafka 2.3.1+: https://github.com/confluentinc/schema-registry/tree/v5.3.8
    - README по сборке/запуску: `README.md` в теге `v5.3.8`
    - Скачивать отсюда: https://packages.confluent.io/archive/5.3/
 > Мы разворачиваем **3 инстанса** на нодах `10.254.3.111`, `10.254.3.112`, `10.254.3.113`. Все конфиги идентичные. Балансировка — клиентская (в клиентах указываем все URL SR).
@@ -56,7 +56,7 @@ h2k.avro.subject.suffix=-value
    - На RegionServer достаточно разместить JAR `h2k-endpoint`: он уже содержит Avro/Jackson/Schema Registry-зависимости.
 
 1. **Архитектура**
-   - Версия строго 5.3.8 (совместима с Kafka 2.3.1, Java 8).
+   - Версия строго 5.3.8 (совместима с Kafka 2.3.1+, Java 8).
    - Схемы хранятся в Kafka-топике `_schemas` с `cleanup.policy=compact`, `replication.factor=3`.
    - Рекомендуется 3 инстанса SR (HA). Каждый инстанс без состояния (state-less), при старте дочитывает `_schemas`.
 

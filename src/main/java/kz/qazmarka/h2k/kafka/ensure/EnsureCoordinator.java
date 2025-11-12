@@ -24,7 +24,6 @@ final class EnsureCoordinator implements AutoCloseable {
 
     static final String CFG_RETENTION_MS = "retention.ms";
     static final String CFG_CLEANUP_POLICY = "cleanup.policy";
-    static final String CFG_COMPRESSION_TYPE = "compression.type";
     static final String CFG_MIN_INSYNC_REPLICAS = "min.insync.replicas";
 
     private final KafkaTopicAdmin admin;

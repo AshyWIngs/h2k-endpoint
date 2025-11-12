@@ -8,7 +8,7 @@
 
 - HBase **1.4.13** (ветка 1.4.x).
 - ZK и RegionServers — штатная конфигурация HBase.
-- Kafka clients **2.3.1** (на стороне эндпоинта), без SASL/SSL (по проектной договорённости).
+- Kafka clients **3.3.2** внутри `h2k-endpoint-*.jar`, без SASL/SSL (по проектной договорённости).
 - Файлы примеров для удобства:
   - `conf/add_peer_shell_balanced.txt`
 

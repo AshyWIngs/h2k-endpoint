@@ -40,8 +40,8 @@ WHITELIST = {
     'adminclient', 'executor', 'retry', 'cache', 'key', 'value', 'partition', 'namespace',
     'qualifier', 'table', 'record', 'genericrecord',
     # имена конфигов/свойств
-    'client.id', 'linger.ms', 'batch.size', 'compression.type', 'retention.ms', 'min.insync.replicas',
-    'lz4', 'snappy', 'zstd', 'subject.strategy', 'subject.suffix', 'subject.prefix',
+    'client.id', 'linger.ms', 'batch.size', 'retention.ms', 'min.insync.replicas',
+    'lz4', 'subject.strategy', 'subject.suffix', 'subject.prefix',
     # наши ключи
     'h2k', 'ensure', 'ensuretopics', 'unknown', 'schemaid',
 }

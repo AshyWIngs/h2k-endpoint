@@ -459,12 +459,14 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
          */
         private static final String BYTE_ARRAY_SERIALIZER = "org.apache.kafka.common.serialization.ByteArraySerializer";
         private static final String ROW_KEY_SERIALIZER = RowKeySliceSerializer.class.getName();
+        private static final String FORCED_COMPRESSION = "lz4";
         private static final Set<String> H2K_INTERNAL_KEYS = new HashSet<>(
                 Arrays.asList(
                         "await.every",
                         "await.timeout.ms",
                         "batch.counters.enabled",
-                        "batch.debug.on.failure"
+                        "batch.debug.on.failure",
+                        ProducerConfig.COMPRESSION_TYPE_CONFIG
                 )
         );
 
@@ -491,7 +493,7 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
             props.put(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, cfg.get("h2k.producer.delivery.timeout.ms", "180000"));
             props.put(ProducerConfig.LINGER_MS_CONFIG, cfg.get("h2k.producer.linger.ms", "50"));
             props.put(ProducerConfig.BATCH_SIZE_CONFIG, cfg.get("h2k.producer.batch.size", "65536"));
-            props.put(ProducerConfig.COMPRESSION_TYPE_CONFIG, cfg.get("h2k.producer.compression.type", "lz4"));
+            props.put(ProducerConfig.COMPRESSION_TYPE_CONFIG, FORCED_COMPRESSION);
             props.put(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION,
                     cfg.get("h2k.producer.max.in.flight", "1"));
         }

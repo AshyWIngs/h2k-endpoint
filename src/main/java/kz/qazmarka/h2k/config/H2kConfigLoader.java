@@ -3,6 +3,8 @@ package kz.qazmarka.h2k.config;
 import java.util.Map;
 
 import org.apache.hadoop.conf.Configuration;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import kz.qazmarka.h2k.schema.registry.PhoenixTableMetadataProvider;
 import kz.qazmarka.h2k.util.Parsers;
@@ -11,6 +13,7 @@ import kz.qazmarka.h2k.util.Parsers;
  * Загружает {@link H2kConfig} из HBase {@link Configuration}, инкапсулируя логику парсинга.
  */
 final class H2kConfigLoader {
+    private static final Logger LOG = LoggerFactory.getLogger(H2kConfigLoader.class);
 
     /** Загружает конфигурацию h2k без табличного провайдера (используется NOOP). */
     H2kConfig load(Configuration cfg, String bootstrap) {
@@ -121,6 +124,9 @@ final class H2kConfigLoader {
             EnsureSection ensure = EnsureSection.from(cfg);
             ProducerBatchSection batch = ProducerBatchSection.from(cfg);
             Map<String, String> topicConfigs = Parsers.readWithPrefix(cfg, H2kConfig.Keys.TOPIC_CONFIG_PREFIX);
+            if (topicConfigs.remove("compression.type") != null) {
+                LOG.warn("Игнорируем h2k.topic.config.compression.type — endpoint всегда использует lz4");
+            }
             boolean observersEnabled = Parsers.readBoolean(
                     cfg,
                     H2kConfig.Keys.OBSERVERS_ENABLED,

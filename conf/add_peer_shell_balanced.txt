@@ -66,7 +66,6 @@ add_peer 'h2k_balanced',
       # Батчинг/сжатие
       'h2k.producer.linger.ms'              => '100',   # чуть быстрее: больше батчинг без потери данных (acks=all + idempotence)
       'h2k.producer.batch.size'             => '524288',   # 512 KiB батч — выше пропускная способность
-      'h2k.producer.compression.type'       => 'lz4',
 
       # Буферы/размеры (выравниваем с fast-профилем по умолчанию)
       'h2k.producer.buffer.memory'          => '268435456',
@@ -93,7 +92,7 @@ show_peer_tableCFs 'h2k_balanced'  # опционально: покажет фи
 # --- Быстрые подсказки по тюнингу (balanced) ---
 # Пики задержек:
 #  - Увеличьте 'h2k.producer.linger.ms' (до 150–200) и/или 'h2k.producer.batch.size' (до 524288) для лучшей утилизации сети/CPU (если хватает памяти).
-#  - 'h2k.producer.compression.type': 'lz4' — максимум throughput; 'snappy' — экономнее по CPU; 'zstd' — лучшее сжатие при большей задержке.
+#  - Компрессия фиксирована на 'lz4' для всех профилей (оптимально по скорости/сжатию).
 #
 # Ошибки брокера (NOT_LEADER_FOR_PARTITION / UNKNOWN_TOPIC_OR_PARTITION / TIMEOUT):
 #  - Проверьте, что топик создан и распределён по брокерам; выровняйте лидеров разделов.

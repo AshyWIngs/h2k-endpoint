@@ -141,15 +141,13 @@ final class TopicCreationSupport {
         Map<String, String> configs = ctx.topicConfigs();
         String retention = configs.get(EnsureCoordinator.CFG_RETENTION_MS);
         String cleanup   = configs.get(EnsureCoordinator.CFG_CLEANUP_POLICY);
-        String comp      = configs.get(EnsureCoordinator.CFG_COMPRESSION_TYPE);
         String minIsr    = configs.get(EnsureCoordinator.CFG_MIN_INSYNC_REPLICAS);
         StringBuilder sb = new StringBuilder(128);
         boolean first = true;
         first = append(sb, EnsureCoordinator.CFG_RETENTION_MS, retention, first);
         first = append(sb, EnsureCoordinator.CFG_CLEANUP_POLICY, cleanup, first);
-        first = append(sb, EnsureCoordinator.CFG_COMPRESSION_TYPE, comp, first);
         first = append(sb, EnsureCoordinator.CFG_MIN_INSYNC_REPLICAS, minIsr, first);
-        int others = configs.size() - countNonNull(retention, cleanup, comp, minIsr);
+        int others = configs.size() - countNonNull(retention, cleanup, minIsr);
         if (others > 0) {
             if (!first) sb.append(", ");
             sb.append("+").append(others).append(" др.");
