@@ -30,7 +30,7 @@ public final class KafkaTopicAdminClient implements KafkaTopicAdmin {
 
     @Override
     public Map<String, KafkaFuture<TopicDescription>> describeTopics(java.util.Set<String> names) {
-        return delegate.describeTopics(names).values();
+        return delegate.describeTopics(names).topicNameValues();
     }
 
     @Override

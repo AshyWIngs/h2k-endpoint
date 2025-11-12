@@ -1,4 +1,4 @@
-## HBase 1.4.13 → Kafka 2.3.1 ReplicationEndpoint (Avro Confluent only)
+## HBase 1.4.13 → Kafka 2.3.1 (клиент 3.3.2) ReplicationEndpoint (Avro Confluent only)
 
 **Пакет:** `kz.qazmarka.h2k.endpoint`  
 **Endpoint‑класс:** `kz.qazmarka.h2k.endpoint.KafkaReplicationEndpoint`
@@ -26,7 +26,7 @@
 
 ## Быстрый старт
 
-0) **Требования окружения.** Java 8 на RegionServer, Kafka 2.3.1+, Schema Registry 5.3.8 (при использовании Confluent), доступ к ZK/Kafka без TLS/SASL.
+0) **Требования окружения.** Java 8 на RegionServer, брокеры Kafka 2.3.1+ (клиент `kafka-clients` 3.3.2), Schema Registry 5.3.8 при использовании Confluent, доступ к ZK/Kafka без TLS/SASL.
 
 1) **Соберите и разложите JAR** на все RegionServer (JAR уже содержит Avro/Jackson/Confluent 5.3.8):
 ```bash
@@ -64,7 +64,7 @@ bin/hbase shell conf/add_peer_shell_balanced.txt
 
 - **Java:** 8 (target 1.8)
 - **HBase:** 1.4.13 (совместимо с 1.4.x)
-- **Kafka (клиенты):** 2.3.1
+- **Kafka (клиенты):** 3.3.2 (поддерживает брокеры 2.3.1+)
 - **Phoenix:** 4.14/4.15 (совместимо; используется Avro Phoenix registry)
 - **Schema Registry:** Confluent 5.3.8 (совместимо с 5.x)
 
@@ -299,6 +299,37 @@ Endpoint публикует события в формате Avro (Confluent Sch
 
 **Поддерживается ли SASL/SSL?**  
 Нет. Endpoint рассчитан на доверенную сеть без TLS. Для защиты используйте внешний TLS proxy или переезд на защищённый кластер Kafka; настройки безопасности внутрь endpoint не добавляются.
+
+## E2E-проверка совместимости с Kafka 2.3.1
+
+1. Установите Docker Desktop / Podman и убедитесь, что демон запущен.
+2. Экспортируйте переменную среды, чтобы активировать тест:
+
+   ```bash
+   export H2K_E2E_KAFKA=true
+   ```
+
+3. Запустите набор e2e-тестов (каждый тест стартует тот же брокер Kafka 2.3.1):
+
+   ```bash
+   export H2K_E2E_KAFKA=true
+   mvn -Pe2e -Dtest=kz.qazmarka.h2k.kafka.compat.Kafka233CompatibilityE2ETest test
+   ```
+
+В тестовом наборе:
+
+- **producerAndAdminAreCompatibleWithKafka23** — базовый happy‑path: ensure → send → consume.
+- **adminCanDescribeAndIncreasePartitions** — AdminClient умеет читать конфиги и увеличивать число партиций.
+- **producerDeliversBatchInOrder** — батч из 10 сообщений сохраняет порядок и не дублируется.
+- **creatingExistingTopicFailsWithTopicExists** — негативный сценарий: повторный create выдаёт `TopicExistsException`.
+- **consumerGroupRebalanceDistributesPartitions** — два consumer'а в одной группе корректно делят партиции (rebalance).
+- **producerWorksWithRowKeySliceOffset** — посылаем RowKeySlice с неполным массивом (offset/length) и убеждаемся, что десериализация цела.
+- **producerFailsWithInvalidBootstrap** — негативный тест: неверный bootstrap приводит к ожидаемому `ExecutionException`.
+- **producerRecoversAfterBrokerRestart** — останавливаем Kafka 2.3.1, убеждаемся, что отправка падает, затем брокер перезапускается и приём сообщений восстанавливается.
+
+Запускается фиксированный образ `confluentinc/cp-kafka:5.3.8` (amd64); на Apple Silicon тесты идут через QEMU-эмуляцию, поэтому выполняются медленнее, но дополнительных настроек не требуется.
+
+Команда подтверждает, что клиент `kafka-clients` 3.3.2 корректно работает с брокером Kafka 2.3.1 в позитивных и негативных сценариях.
 
 **Как обновить локальные Avro-схемы?**  
 Положите новую `.avsc` в `conf/avro/<table>.avsc`, убедитесь, что она обратимо совместима, и перезапустите peer. Endpoint перечитает схему при первом попадании таблицы в cache.

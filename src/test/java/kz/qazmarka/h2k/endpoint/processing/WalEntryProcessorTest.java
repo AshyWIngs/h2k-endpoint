@@ -22,12 +22,8 @@ import org.apache.hadoop.hbase.wal.WAL.Entry;
 import org.apache.hadoop.hbase.wal.WALKey;
 import org.apache.kafka.clients.producer.Callback;
 import org.apache.kafka.clients.producer.MockProducer;
-import org.apache.kafka.clients.producer.Producer;
 import org.apache.kafka.clients.producer.ProducerRecord;
 import org.apache.kafka.clients.producer.RecordMetadata;
-import org.apache.kafka.common.Metric;
-import org.apache.kafka.common.MetricName;
-import org.apache.kafka.common.PartitionInfo;
 import org.apache.kafka.common.serialization.ByteArraySerializer;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -269,25 +265,32 @@ class WalEntryProcessorTest {
         PayloadBuilder payloadBuilder = newPayloadBuilder(h2kConfig);
         TopicManager topicManager = newTopicManager(h2kConfig);
 
-        // Продьюсер, у которого send() всегда возвращает exceptional future
-        class FailingProducer implements org.apache.kafka.clients.producer.Producer<RowKeySlice, byte[]> {
-            private CompletableFuture<org.apache.kafka.clients.producer.RecordMetadata> failedFuture() {
-                CompletableFuture<org.apache.kafka.clients.producer.RecordMetadata> cf = new CompletableFuture<>();
-                cf.completeExceptionally(new IllegalStateException("simulated send failure"));
-                return cf;
+        class FailingProducer extends MockProducer<RowKeySlice, byte[]> {
+            private final IllegalStateException failure = new IllegalStateException("simulated send failure");
+
+            FailingProducer() {
+                super(true, new RowKeySliceSerializer(), new ByteArraySerializer());
             }
-            @Override public java.util.concurrent.Future<org.apache.kafka.clients.producer.RecordMetadata> send(org.apache.kafka.clients.producer.ProducerRecord<RowKeySlice, byte[]> rec) { return failedFuture(); }
-            @Override public java.util.concurrent.Future<org.apache.kafka.clients.producer.RecordMetadata> send(org.apache.kafka.clients.producer.ProducerRecord<RowKeySlice, byte[]> rec, org.apache.kafka.clients.producer.Callback cb) { return failedFuture(); }
-            @Override public void flush() { /* no-op for test */ }
-            @Override public List<org.apache.kafka.common.PartitionInfo> partitionsFor(String topic) { return Collections.emptyList(); }
-            @Override public Map<org.apache.kafka.common.MetricName, ? extends org.apache.kafka.common.Metric> metrics() { return Collections.emptyMap(); }
-            @Override public void close() { /* no-op for test */ }
-            @Override public void close(java.time.Duration timeout) { /* no-op for test */ }
-            @Override public void initTransactions() { throw new UnsupportedOperationException("not used in test"); }
-            @Override public void beginTransaction() { throw new UnsupportedOperationException("not used in test"); }
-            @Override public void commitTransaction() { throw new UnsupportedOperationException("not used in test"); }
-            @Override public void abortTransaction() { throw new UnsupportedOperationException("not used in test"); }
-            @Override public void sendOffsetsToTransaction(Map<org.apache.kafka.common.TopicPartition, org.apache.kafka.clients.consumer.OffsetAndMetadata> offsets, String consumerGroupId) { throw new UnsupportedOperationException("not used in test"); }
+
+            private CompletableFuture<RecordMetadata> failedFuture() {
+                CompletableFuture<RecordMetadata> future = new CompletableFuture<>();
+                future.completeExceptionally(failure);
+                return future;
+            }
+
+            @Override
+            public java.util.concurrent.Future<RecordMetadata> send(ProducerRecord<RowKeySlice, byte[]> producerRecord) {
+                return failedFuture();
+            }
+
+            @Override
+            public java.util.concurrent.Future<RecordMetadata> send(ProducerRecord<RowKeySlice, byte[]> producerRecord,
+                                                                    Callback callback) {
+                if (callback != null) {
+                    callback.onCompletion(null, failure);
+                }
+                return failedFuture();
+            }
         }
         org.apache.kafka.clients.producer.Producer<RowKeySlice, byte[]> failingProducer = new FailingProducer();
 
@@ -341,8 +344,12 @@ class WalEntryProcessorTest {
         assertEquals(expected, producer.history().size(), message);
     }
 
-    private static final class CapturingProducer implements Producer<RowKeySlice, byte[]> {
+    private static final class CapturingProducer extends MockProducer<RowKeySlice, byte[]> {
         final List<String> keys = new java.util.ArrayList<>();
+
+        CapturingProducer() {
+            super(true, new RowKeySliceSerializer(), new ByteArraySerializer());
+        }
 
         @Override
         public java.util.concurrent.Future<RecordMetadata> send(ProducerRecord<RowKeySlice, byte[]> producerRecord) {
@@ -368,16 +375,6 @@ class WalEntryProcessorTest {
             }
         }
 
-        @Override public void flush() { /* no-op for test */ }
-        @Override public List<PartitionInfo> partitionsFor(String topic) { return Collections.emptyList(); }
-        @Override public Map<MetricName, ? extends Metric> metrics() { return Collections.emptyMap(); }
-        @Override public void close() { /* no-op for test */ }
-        @Override public void close(java.time.Duration timeout) { /* no-op for test */ }
-        @Override public void initTransactions() { throw new UnsupportedOperationException("not used in test"); }
-        @Override public void beginTransaction() { throw new UnsupportedOperationException("not used in test"); }
-        @Override public void commitTransaction() { throw new UnsupportedOperationException("not used in test"); }
-        @Override public void abortTransaction() { throw new UnsupportedOperationException("not used in test"); }
-        @Override public void sendOffsetsToTransaction(Map<org.apache.kafka.common.TopicPartition, org.apache.kafka.clients.consumer.OffsetAndMetadata> offsets, String consumerGroupId) { throw new UnsupportedOperationException("not used in test"); }
     }
 
     private static WalScenario createScenario(String[] cfFamilies) {
