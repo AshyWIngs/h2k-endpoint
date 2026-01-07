@@ -439,14 +439,35 @@ public final class ConfluentAvroPayloadSerializer implements AutoCloseable {
 
     private static final class RecordWriter {
         private final Schema schema;
-        private final ThreadLocal<HeaderByteArrayOutputStream> localBaos =
-                ThreadLocal.withInitial(() -> new HeaderByteArrayOutputStream(512 + MAGIC_HEADER_LENGTH));
+        /**
+         * Переиспользуемый buffer для Confluent Avro заголовка+данных.
+         * ThreadLocal избегает синхронизации и распределения буфера между потоками репликации.
+         */
+        private final ThreadLocal<HeaderByteArrayOutputStream> localBaos;
+        /**
+         * Переиспользуемый BinaryEncoder; null до первого использования в потоке.
+         */
         private final ThreadLocal<BinaryEncoder> localEncoder = new ThreadLocal<>();
+        /**
+         * Переиспользуемый DatumWriter для одного потока репликации.
+         */
         private final ThreadLocal<ByteOptimizedDatumWriter> localWriter;
 
         RecordWriter(Schema schema) {
-            this.schema = schema;
-            this.localWriter = ThreadLocal.withInitial(() -> new ByteOptimizedDatumWriter(schema));
+            this.schema = Objects.requireNonNull(schema, "schema");
+            // Инициализируем ThreadLocal в конструкторе чтобы избежать лямбда-объектов в методе write()
+            this.localBaos = new ThreadLocal<HeaderByteArrayOutputStream>() {
+                @Override
+                protected HeaderByteArrayOutputStream initialValue() {
+                    return new HeaderByteArrayOutputStream(512 + MAGIC_HEADER_LENGTH);
+                }
+            };
+            this.localWriter = new ThreadLocal<ByteOptimizedDatumWriter>() {
+                @Override
+                protected ByteOptimizedDatumWriter initialValue() {
+                    return new ByteOptimizedDatumWriter(schema);
+                }
+            };
         }
 
         byte[] write(GenericData.Record avroRecord, int schemaId) {

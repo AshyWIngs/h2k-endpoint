@@ -211,7 +211,10 @@ public final class AvroValueCoercer {
         }
         Map<?, ?> input = (Map<?, ?>) v;
         Map<String, Object> normalized = new HashMap<>(input.size());
-        input.forEach((key, value) -> normalized.put(String.valueOf(key), value));
+        // Без лямбды: простой for-loop для избежания ненужных объектов на горячем пути
+        for (Map.Entry<?, ?> entry : input.entrySet()) {
+            normalized.put(String.valueOf(entry.getKey()), entry.getValue());
+        }
         return normalized;
     }
 
