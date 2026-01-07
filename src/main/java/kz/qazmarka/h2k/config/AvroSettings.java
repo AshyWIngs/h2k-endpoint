@@ -18,19 +18,29 @@ public final class AvroSettings {
     private final Map<String, String> registryAuth;
     private final Map<String, String> properties;
     private final int fallbackSchemaId;
+    private final int maxPendingRetries;
 
     AvroSettings(String schemaDir,
                  List<String> registryUrls,
                  Map<String, String> registryAuth,
                  Map<String, String> properties) {
-        this(schemaDir, registryUrls, registryAuth, properties, -2);
+        this(schemaDir, registryUrls, registryAuth, properties, -2, 100);
     }
 
     AvroSettings(String schemaDir,
                  List<String> registryUrls,
                  Map<String, String> registryAuth,
                  Map<String, String> properties,
-                 int fallbackSchemaId) {
+                 int maxPendingRetries) {
+        this(schemaDir, registryUrls, registryAuth, properties, -2, maxPendingRetries);
+    }
+
+    AvroSettings(String schemaDir,
+                 List<String> registryUrls,
+                 Map<String, String> registryAuth,
+                 Map<String, String> properties,
+                 int fallbackSchemaId,
+                 int maxPendingRetries) {
         this.schemaDir = Objects.requireNonNull(schemaDir, "Каталог Avro-схем не может быть null");
         List<String> urls = Objects.requireNonNull(registryUrls, "Список URL Schema Registry не может быть null");
         Map<String, String> auth = Objects.requireNonNull(registryAuth, "Авторизационные параметры Schema Registry не могут быть null");
@@ -39,6 +49,10 @@ public final class AvroSettings {
         this.registryAuth = Collections.unmodifiableMap(new HashMap<>(auth));
         this.properties = Collections.unmodifiableMap(new HashMap<>(props));
         this.fallbackSchemaId = fallbackSchemaId;
+        if (maxPendingRetries <= 0) {
+            throw new IllegalArgumentException("maxPendingRetries должен быть > 0");
+        }
+        this.maxPendingRetries = maxPendingRetries;
     }
 
     public String getSchemaDir() {
@@ -64,5 +78,14 @@ public final class AvroSettings {
      */
     public int getFallbackSchemaId() {
         return fallbackSchemaId;
+    }
+
+    /**
+     * Возвращает максимум одновременно ожидающих повторных попыток регистрации схемы в Schema Registry.
+     * Ограничение размера очереди предотвращает накопление задач при long-term offline SR.
+     * По умолчанию: 100.
+     */
+    public int getMaxPendingRetries() {
+        return maxPendingRetries;
     }
 }

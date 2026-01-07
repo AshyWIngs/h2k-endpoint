@@ -47,6 +47,7 @@ class H2kConfigBuilderTest {
                 .schemaRegistryUrls(urls)
                 .schemaRegistryAuth(auth)
                 .properties(props)
+                .maxPendingRetries(50)
                 .done();
 
         builder.ensure()
@@ -85,6 +86,7 @@ class H2kConfigBuilderTest {
         assertEquals("avro", config.getAvroSettings().getProperties().get("mode"));
         assertTrue(config.isObserversEnabled());
         assertFalse(config.isJmxEnabled());
+        assertEquals(50, config.getAvroSettings().getMaxPendingRetries());
 
         Map<String, String> configsView = config.getTopicSettings().getTopicConfigs();
         UnsupportedOperationException topicConfigsError = assertThrows(
@@ -160,5 +162,6 @@ class H2kConfigBuilderTest {
         assertSame(PhoenixTableMetadataProvider.NOOP, config.getTableMetadataProvider());
         assertFalse(config.isObserversEnabled());
         assertTrue(config.isJmxEnabled());
-    }
+                assertEquals(100, config.getAvroSettings().getMaxPendingRetries());
+        }
 }

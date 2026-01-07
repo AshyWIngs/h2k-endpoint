@@ -252,6 +252,7 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
         registerMetric("wal.строк.отфильтровано", walProcessor::rowsFilteredTotal);
         registerMetric("sr.регистрация.успехов", payload::schemaRegistryRegisteredCount);
         registerMetric("sr.регистрация.ошибок", payload::schemaRegistryFailedCount);
+        registerMetric("sr.повторные.попытки.очередь", payload::pendingSchemaRetriesCount);
         registerMetric("wal.rowbuffer.расширения", walProcessor::rowBufferUpsizeCount);
         registerMetric("wal.rowbuffer.сжатия", walProcessor::rowBufferTrimCount);
         registerMetric("ensure.пропуски.из-за.паузы", topicManager::ensureSkippedCount);

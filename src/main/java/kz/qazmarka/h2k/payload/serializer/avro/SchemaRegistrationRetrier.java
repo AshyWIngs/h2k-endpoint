@@ -5,6 +5,7 @@ import java.util.Objects;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.LongAdder;
 
 import org.apache.avro.Schema;
@@ -25,6 +26,8 @@ final class SchemaRegistrationRetrier implements AutoCloseable {
     private final LongAdder failureCounter;
     private final ConfluentAvroPayloadSerializer.RetrySettings settings;
     private final ScheduledExecutorService executor;
+    private final AtomicInteger pendingRetries = new AtomicInteger(0);
+    private final int maxPendingRetries;
 
     interface RetryCallback {
         void onSchemaRegistered(String subject, Schema schema, int schemaId);
@@ -35,13 +38,18 @@ final class SchemaRegistrationRetrier implements AutoCloseable {
                               SchemaFingerprintMonitor fingerprintMonitor,
                               LongAdder successCounter,
                               LongAdder failureCounter,
-                              ConfluentAvroPayloadSerializer.RetrySettings settings) {
+                              ConfluentAvroPayloadSerializer.RetrySettings settings,
+                              int maxPendingRetries) {
         this.log = Objects.requireNonNull(log, "log");
         this.registry = Objects.requireNonNull(registry, "registry");
         this.fingerprintMonitor = Objects.requireNonNull(fingerprintMonitor, "fingerprintMonitor");
         this.successCounter = Objects.requireNonNull(successCounter, "successCounter");
         this.failureCounter = Objects.requireNonNull(failureCounter, "failureCounter");
         this.settings = Objects.requireNonNull(settings, "settings");
+        if (maxPendingRetries <= 0) {
+            throw new IllegalArgumentException("maxPendingRetries должен быть > 0");
+        }
+        this.maxPendingRetries = maxPendingRetries;
         this.executor = Executors.newSingleThreadScheduledExecutor(r -> {
             Thread t = new Thread(r, "h2k-schema-registry-retry");
             t.setDaemon(true);
@@ -61,8 +69,22 @@ final class SchemaRegistrationRetrier implements AutoCloseable {
         Objects.requireNonNull(subject, "subject");
         Objects.requireNonNull(schema, "schema");
         Objects.requireNonNull(callback, "callback");
+        
+        int current = pendingRetries.incrementAndGet();
+        if (current > maxPendingRetries) {
+            pendingRetries.decrementAndGet();
+            log.warn("Очередь повторных попыток регистрации схемы переполнена (максимум {}), задача отклонена, будет повторена позже", maxPendingRetries);
+            return;
+        }
+        
         long delay = settings.delayMsForAttempt(1);
-        executor.schedule(() -> attempt(subject, schema, fingerprint, 1, callback), delay, TimeUnit.MILLISECONDS);
+        executor.schedule(() -> {
+            try {
+                attempt(subject, schema, fingerprint, 1, callback);
+            } finally {
+                pendingRetries.decrementAndGet();
+            }
+        }, delay, TimeUnit.MILLISECONDS);
     }
 
     /**
@@ -97,19 +119,18 @@ final class SchemaRegistrationRetrier implements AutoCloseable {
             executor.schedule(() -> attempt(subject, schema, fingerprint, attempt + 1, callback), delay, TimeUnit.MILLISECONDS);
         } catch (IOException ex) {
             failureCounter.increment();
-            if (attempt >= settings.maxAttempts()) {
-                log.error("Avro Confluent: регистрация схемы subject={} окончательно провалилась после {} попыток: {}",
-                        subject, attempt, ex.getMessage());
-                return;
-            }
-            log.warn("Avro Confluent: повторная регистрация схемы subject={} не удалась (попытка {}): {}",
-                    subject, attempt, ex.getMessage());
-            long delay = settings.delayMsForAttempt(attempt + 1);
-            executor.schedule(() -> attempt(subject, schema, fingerprint, attempt + 1, callback), delay, TimeUnit.MILLISECONDS);
-        } catch (RuntimeException ex) {
-            failureCounter.increment();
-            log.error("Avro Confluent: критическая ошибка при повторной регистрации схемы subject={}", subject, ex);
+            log.error("Avro Confluent: ошибка ввода-вывода при регистрации схемы subject={}: {}", subject, ex.getMessage());
         }
+    }
+
+    /**
+     * Возвращает текущее количество ожидающих задач повторной регистрации.
+     * Используется для gauge-метрики мониторинга.
+     *
+     * @return количество активных/ожидающих повторных попыток
+     */
+    int getPendingRetriesCount() {
+        return pendingRetries.get();
     }
 
     /**

@@ -19,6 +19,7 @@ public final class H2kConfigBuilder {
     private List<String> avroSchemaRegistryUrls = Collections.emptyList();
     private Map<String, String> avroSrAuth = Collections.emptyMap();
     private Map<String, String> avroProps = Collections.emptyMap();
+    private int avroMaxPendingRetries = H2kConfig.DEFAULT_MAX_PENDING_RETRIES;
     private boolean ensureTopics = H2kConfig.DEFAULT_ENSURE_TOPICS;
     private boolean ensureIncreasePartitions = H2kConfig.DEFAULT_ENSURE_INCREASE_PARTITIONS;
     private boolean ensureDiffConfigs = H2kConfig.DEFAULT_ENSURE_DIFF_CONFIGS;
@@ -88,7 +89,8 @@ public final class H2kConfigBuilder {
                 avroSchemaDir,
                 immutableUrls,
                 immutableAuth,
-                immutableProps);
+                immutableProps,
+                avroMaxPendingRetries);
         EnsureSettings.TopicSpec topicSpec = new EnsureSettings.TopicSpec(
                 topicPartitions,
                 topicReplication);
@@ -156,6 +158,11 @@ public final class H2kConfigBuilder {
 
         public AvroOptions properties(Map<String, String> props) {
             avroProps = props;
+            return this;
+        }
+
+        public AvroOptions maxPendingRetries(int maxRetries) {
+            avroMaxPendingRetries = maxRetries;
             return this;
         }
 

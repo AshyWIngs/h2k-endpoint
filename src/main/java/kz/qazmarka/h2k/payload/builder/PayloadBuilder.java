@@ -119,6 +119,16 @@ public final class PayloadBuilder implements AutoCloseable {
     }
 
     /**
+     * Возвращает текущее количество ожидающих задач повторной регистрации схемы.
+     * Используется для gauge-метрики мониторинга.
+     *
+     * @return количество ожидающих повторных попыток
+     */
+    public long pendingSchemaRetriesCount() {
+        return serializer.getPendingSchemaRetriesCount();
+    }
+
+    /**
      * Завершает работу сериализатора Avro/Schema Registry и освобождает связанные фоновые ресурсы.
      * Безопасно вызывать несколько раз.
      */

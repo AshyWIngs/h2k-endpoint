@@ -111,7 +111,7 @@ public final class ConfluentAvroPayloadSerializer implements AutoCloseable {
                 : new CachedSchemaRegistryClient(this.registryUrls, identityMapCapacity, schemaRegistryClientConfig);
         this.schemaRegistry = new SchemaRegistryAccess(resolvedClient);
         this.fingerprintMonitor = new SchemaFingerprintMonitor(LOG, this.schemaRegistry, schemaRegisterSuccess);
-        this.retrier = new SchemaRegistrationRetrier(LOG, this.schemaRegistry, fingerprintMonitor, schemaRegisterSuccess, schemaRegisterFailure, this.retrySettings);
+        this.retrier = new SchemaRegistrationRetrier(LOG, this.schemaRegistry, fingerprintMonitor, schemaRegisterSuccess, schemaRegisterFailure, this.retrySettings, avroSettings.getMaxPendingRetries());
         SubjectSettings subjectSettings = resolveSubjectSettings(avroProps);
         this.subjectNamer = new SubjectNamer(LOG, subjectSettings.strategy, subjectSettings.prefix, subjectSettings.suffix);
     }
@@ -156,6 +156,22 @@ public final class ConfluentAvroPayloadSerializer implements AutoCloseable {
      */
     public int lastSchemaId() {
         return lastSchemaId;
+    }
+
+    /**
+     * Возвращает последний успешно зарегистрированный fingerprint локальной схемы.
+     * Используется для мониторинга и отладки версирования схем.
+     */
+    public long lastRecordedFingerprint() {
+        return fingerprintMonitor.lastRecordedFingerprint();
+    }
+
+    /**
+     * Возвращает текущий размер кэша схем.
+     * Используется для мониторинга состояния кэша через JMX.
+     */
+    public int schemaCacheSize() {
+        return cache.size();
     }
 
     /**
@@ -579,6 +595,16 @@ public final class ConfluentAvroPayloadSerializer implements AutoCloseable {
 
         public long registeredSchemas() { return registered; }
         public long registrationFailures() { return failures; }
+    }
+
+    /**
+     * Возвращает текущее количество ожидающих задач повторной регистрации схемы.
+     * Используется для gauge-метрики мониторинга состояния Schema Registry.
+     *
+     * @return количество активных/ожидающих повторных попыток регистрации
+     */
+    public long getPendingSchemaRetriesCount() {
+        return retrier.getPendingRetriesCount();
     }
 
     @Override

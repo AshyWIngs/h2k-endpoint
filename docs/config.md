@@ -77,6 +77,7 @@
 | **`h2k.avro.sr.auth.basic.username/password`** | Basic-auth к Schema Registry | Строки | Значения маскируются в логах |
 | **`h2k.avro.subject.strategy`** | Стратегия subject | `table` (дефолт) \| `table-lower` \| `table-upper` \| `qualifier` | `table` → `namespace:table` (если namespace ≠ `default`) |
 | **`h2k.avro.subject.prefix` / `h2k.avro.subject.suffix`** | Префикс/суффикс subject | Строки (дефолт: пусто) | Удобно для разделения окружений (`dev-`, `-value` и т.п.) |
+| **`h2k.avro.max.pending.retries`** | Максимум ожидающих повторных попыток регистрации | Положительное целое (дефолт: `100`) | Предотвращает накопление задач при long-term offline SR |
 | **`h2k.avro.client.cache.capacity`** | Размер identity-map `CachedSchemaRegistryClient` | Положительное целое (дефолт: `1000`) | Управляет количеством закэшированных схем |
 | **`h2k.avro.compatibility` / `h2k.avro.binary`** | Доп. флаги Avro | Строки/boolean | Передаются в `getAvroProps()` без интерпретации на стороне endpoint |
 | **`h2k.avro.*`** | Любые прочие свойства Avro | Ключи, не перечисленные выше | Сохраняются в `H2kConfig#getAvroProps()` для пользовательских фабрик |

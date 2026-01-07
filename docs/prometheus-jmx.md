@@ -46,6 +46,7 @@
 - ensure.пропуски.из-за.паузы → ensure.cooldown.skipped → ensure_cooldown_skipped
 - sr.регистрация.успехов → schema.registry.register.success → schema_registry_register_success
 - sr.регистрация.ошибок → schema.registry.register.failures → schema_registry_register_failures
+- sr.повторные.попытки.очередь → schema.registry.pending.retries → schema_registry_pending_retries
 - репликация.ошибок.всего → replicate.failures.total → replicate_failures_total
 - репликация.последняя.ошибка.epoch.ms → replicate.last.failure.epoch.ms → replicate_last_failure_epoch_ms
 
@@ -209,6 +210,13 @@ scrape_configs:
 Метрики Schema Registry:
 - sr.регистрация.успехов — успешные регистрации схем
 - sr.регистрация.ошибок — ошибки регистрации схем
+- sr.повторные.попытки.очередь — текущее число ожидающих повторных попыток регистрации (gauge)
+
+**Про метрику `sr.повторные.попытки.очередь`:**
+Отслеживает количество задач повторной регистрации схем, ожидающих в очереди. При стабильной работе значение должно быть 0.
+Если регулярно превышает, например, 50 из максимума 100, это указывает на длительный offline Schema Registry.
+Максимум можно отрегулировать параметром `h2k.avro.max.pending.retries` (см. `docs/config.md`).
+Когда очередь переполнена, новые попытки отклоняются логированием `Очередь переполнена`, но основная репликация продолжается.
 
 Новые метрики отказов репликации:
 - репликация.ошибок.всего — суммарное число отказов `replicate()`

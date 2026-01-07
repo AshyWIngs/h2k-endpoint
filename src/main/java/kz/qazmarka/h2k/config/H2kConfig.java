@@ -78,6 +78,8 @@ public final class H2kConfig implements TableMetadataView {
     static final String K_ADMIN_CLIENT_ID = "h2k.admin.client.id";
     /** Базовый backoff (мс) между повторами AdminClient при «неуверенных» ошибках. */
     static final String K_ENSURE_UNKNOWN_BACKOFF_MS = "h2k.ensure.unknown.backoff.ms";
+    /** Максимум одновременно ожидающих повторных попыток регистрации схемы в Schema Registry. */
+    static final String K_MAX_PENDING_RETRIES = "h2k.avro.max.pending.retries";
     /** Каждые N отправок ожидать подтверждение (ограничение памяти/pressure). */
     static final String K_PRODUCER_AWAIT_EVERY = "h2k.producer.await.every";
     /** Таймаут ожидания подтверждения батча (мс). */
@@ -111,6 +113,8 @@ public final class H2kConfig implements TableMetadataView {
     static final boolean DEFAULT_OBSERVERS_ENABLED = false;
     /** По умолчанию JMX-метрики включены. */
     static final boolean DEFAULT_JMX_ENABLED = true;
+    /** Максимум одновременно ожидающих повторных попыток регистрации схемы по умолчанию. */
+    static final int DEFAULT_MAX_PENDING_RETRIES = 100;
 
     // ==== Базовые ====
     private final String bootstrap;

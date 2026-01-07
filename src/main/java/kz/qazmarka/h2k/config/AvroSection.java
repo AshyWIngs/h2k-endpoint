@@ -13,15 +13,18 @@ public final class AvroSection {
     final List<String> schemaRegistryUrls;
     final Map<String, String> auth;
     final Map<String, String> props;
+    final int maxPendingRetries;
 
     private AvroSection(String schemaDir,
                         List<String> schemaRegistryUrls,
                         Map<String, String> auth,
-                        Map<String, String> props) {
+                        Map<String, String> props,
+                        int maxPendingRetries) {
         this.schemaDir = schemaDir;
         this.schemaRegistryUrls = schemaRegistryUrls;
         this.auth = auth;
         this.props = props;
+        this.maxPendingRetries = maxPendingRetries;
     }
 
     /**
@@ -43,7 +46,9 @@ public final class AvroSection {
         props.remove("sr.urls");
         props.remove("schema.registry");
         props.remove("schema.registry.url");
+        props.remove("max.pending.retries");
         props.keySet().removeIf(k -> k.startsWith("sr.auth."));
-        return new AvroSection(schemaDir, srUrls, auth, props);
+        int maxPendingRetries = Parsers.readIntMin(cfg, H2kConfig.K_MAX_PENDING_RETRIES, H2kConfig.DEFAULT_MAX_PENDING_RETRIES, 1);
+        return new AvroSection(schemaDir, srUrls, auth, props, maxPendingRetries);
     }
 }

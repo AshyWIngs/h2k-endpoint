@@ -73,6 +73,7 @@ final class H2kConfigLoader {
                 .schemaRegistryUrls(avro.schemaRegistryUrls)
                 .schemaRegistryAuth(avro.auth)
                 .properties(avro.props)
+                .maxPendingRetries(avro.maxPendingRetries)
                 .done();
     }
 

@@ -84,6 +84,7 @@ public final class H2kMetricsJmx implements DynamicMBean {
         // Schema Registry
         a.put("sr.регистрация.успехов", "schema.registry.register.success");
         a.put("sr.регистрация.ошибок", "schema.registry.register.failures");
+        a.put("sr.повторные.попытки.очередь", "schema.registry.pending.retries");
         // Ошибки репликации
         a.put("репликация.ошибок.всего", "replicate.failures.total");
         a.put("репликация.последняя.ошибка.epoch.ms", "replicate.last.failure.epoch.ms");

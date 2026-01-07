@@ -3,6 +3,7 @@ package kz.qazmarka.h2k.payload.serializer.avro;
 import java.io.IOException;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
 
 import org.apache.avro.Schema;
@@ -24,6 +25,7 @@ final class SchemaFingerprintMonitor {
     private final SchemaRegistryAccess registry;
     private final LongAdder successCounter;
     private final ConcurrentHashMap<String, RemoteSchemaFingerprint> fingerprints = new ConcurrentHashMap<>();
+    private final AtomicLong lastRecordedFingerprint = new AtomicLong(0);
 
     SchemaFingerprintMonitor(Logger log,
                              SchemaRegistryAccess registry,
@@ -77,16 +79,25 @@ final class SchemaFingerprintMonitor {
      * Сохраняет fingerprint, полученный при успешной регистрации схемы.
      */
     void recordSuccessfulRegistration(String subject, long localFingerprint, int schemaId) {
-    Objects.requireNonNull(subject, SUBJECT_PARAM);
+        Objects.requireNonNull(subject, SUBJECT_PARAM);
         fingerprints.put(subject, new RemoteSchemaFingerprint(schemaId, -1, localFingerprint));
+        this.lastRecordedFingerprint.set(localFingerprint);
     }
 
     /**
      * Возвращает сведения о ранее известном fingerprint для subject.
      */
     RemoteSchemaFingerprint knownFingerprint(String subject) {
-    Objects.requireNonNull(subject, SUBJECT_PARAM);
+        Objects.requireNonNull(subject, SUBJECT_PARAM);
         return fingerprints.get(subject);
+    }
+
+    /**
+     * Возвращает последний успешно зарегистрированный fingerprint.
+     * Используется для экспонирования метрик через JMX.
+     */
+    long lastRecordedFingerprint() {
+        return lastRecordedFingerprint.get();
     }
 
     private long computeRemoteFingerprint(SchemaMetadata metadata) {
