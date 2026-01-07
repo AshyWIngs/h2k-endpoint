@@ -87,6 +87,13 @@ public final class PayloadBuilder implements AutoCloseable {
     }
 
     /**
+     * Возвращает последний schemaId, использованный при сериализации, или -1 если данных пока нет.
+     */
+    public int lastSchemaId() {
+        return serializer.lastSchemaId();
+    }
+
+    /**
      * Предварительно загружает локальные Avro-схемы, чтобы избежать I/O при первой репликации.
      *
      * @return число новых схем, прочитанных с диска и добавленных в кэш

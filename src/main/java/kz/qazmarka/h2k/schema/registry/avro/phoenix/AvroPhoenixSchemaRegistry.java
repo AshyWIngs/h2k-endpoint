@@ -68,7 +68,7 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
     }
 
     @Override
-    /** Возвращает подсказку ёмкости JSON, считанную из Avro-схемы. */
+    /** Возвращает подсказку ёмкости payload, считанную из Avro-схемы. */
     public Integer capacityHint(TableName table) {
         return metadataFor(table).capacityHint();
     }
@@ -153,13 +153,13 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
             this.table = table;
             this.schema = schema;
             this.schemaPath = schemaPath;
-            this.pk = SchemaRegistry.EMPTY;
-            this.cfFamilies = SchemaRegistry.EMPTY;
+            this.pk = EMPTY;
+            this.cfFamilies = EMPTY;
             this.log = log;
         }
 
         SchemaDebugInfo withPk(String[] pk) {
-            this.pk = pk == null ? SchemaRegistry.EMPTY : pk;
+            this.pk = pk == null ? EMPTY : pk;
             return this;
         }
 
@@ -174,7 +174,7 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
         }
 
         SchemaDebugInfo withCfFamilies(String[] cfFamilies) {
-            this.cfFamilies = (cfFamilies == null) ? SchemaRegistry.EMPTY : cfFamilies;
+            this.cfFamilies = (cfFamilies == null) ? EMPTY : cfFamilies;
             return this;
         }
     }
@@ -202,14 +202,14 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
     private String[] readColumnFamilies(Schema schema, TableName table) {
         Object raw = firstNonNull(schema.getObjectProp(PROP_CF_LIST), schema.getProp(PROP_CF_LIST));
         if (raw == null) {
-            return SchemaRegistry.EMPTY;
+            return EMPTY;
         }
         if (!(raw instanceof CharSequence)) {
             Logger log = logger();
             log.warn("Avro-схема {}: h2k.cf.list имеет неподдерживаемый тип — фильтр будет отключён",
                     table.getNameAsString());
             log.debug("h2k.cf.list: неподдерживаемый тип: {}", raw.getClass().getName());
-            return SchemaRegistry.EMPTY;
+            return EMPTY;
         }
         return sanitizeCfCsv(raw.toString(), table);
     }
@@ -221,11 +221,11 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
      */
     private String[] sanitizeCfCsv(String raw, TableName table) {
         if (raw == null) {
-            return SchemaRegistry.EMPTY;
+            return EMPTY;
         }
         String text = raw.trim();
         if (text.isEmpty()) {
-            return SchemaRegistry.EMPTY;
+            return EMPTY;
         }
         String[] parts = text.split(",");
         java.util.List<String> values = new java.util.ArrayList<>(parts.length);
@@ -237,7 +237,7 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
         }
         if (values.isEmpty()) {
             logger().warn(WARN_CF_FILTER_DISABLED, table.getNameAsString());
-            return SchemaRegistry.EMPTY;
+            return EMPTY;
         }
         return deduplicate(values);
     }
@@ -252,7 +252,7 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
 
     private static String[] deduplicate(java.util.List<String> values) {
         if (values.isEmpty()) {
-            return SchemaRegistry.EMPTY;
+            return EMPTY;
         }
         java.util.LinkedHashSet<String> unique = new java.util.LinkedHashSet<>(values);
         return unique.toArray(new String[0]);
@@ -319,7 +319,7 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
         }
         if (raw instanceof CharSequence) {
             String text = raw.toString().trim();
-            return text.isEmpty() ? SchemaRegistry.EMPTY : readPkFromString(text);
+            return text.isEmpty() ? EMPTY : readPkFromString(text);
         }
         Logger log = logger();
         log.warn("Avro-схема {}: h2k.pk имеет неподдерживаемый тип — значение будет проигнорировано", schema.getFullName());
@@ -328,15 +328,15 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
         } else if (log.isDebugEnabled()) {
             log.debug("h2k.pk: неподдерживаемый тип: null");
         }
-        return SchemaRegistry.EMPTY;
+        return EMPTY;
     }
 
     private static String[] readPkFromSchemaProperty(String property) {
         if (property == null) {
-            return SchemaRegistry.EMPTY;
+            return EMPTY;
         }
         String text = property.trim();
-        return text.isEmpty() ? SchemaRegistry.EMPTY : readPkFromString(text);
+        return text.isEmpty() ? EMPTY : readPkFromString(text);
     }
 
     private static String normalizePkEntry(String raw) {
@@ -349,7 +349,7 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
 
     private static String[] readPkFromJsonNode(JsonNode node) {
         if (!node.isArray()) {
-            return SchemaRegistry.EMPTY;
+            return EMPTY;
         }
         String[] pk = new String[node.size()];
         int idx = 0;
@@ -364,7 +364,7 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
 
     private static String[] copyPkFromList(java.util.List<?> list) {
         if (list.isEmpty()) {
-            return SchemaRegistry.EMPTY;
+            return EMPTY;
         }
         String[] pk = new String[list.size()];
         int idx = 0;
@@ -383,16 +383,16 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
             return readPkFromJsonNode(node);
         } catch (java.io.IOException e) {
             Logger log = logger();
-            // Короткое предупреждение без длинного содержимого JSON; подробности уходим в DEBUG.
+            // Короткое предупреждение без длинного содержимого строки; подробности уходим в DEBUG.
             log.warn("Не удалось распарсить h2k.pk из Avro-схемы — значение будет проигнорировано: {}", e.getMessage());
             log.debug("Трассировка парсинга h2k.pk, исходное значение='{}'", json, e);
-            return SchemaRegistry.EMPTY;
+            return EMPTY;
         }
     }
 
     private static String[] trimPkArray(String[] pk, int size) {
         if (size == 0) {
-            return SchemaRegistry.EMPTY;
+            return EMPTY;
         }
         if (size == pk.length) {
             return pk;
@@ -450,7 +450,7 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
             this.saltBytes = saltBytes;
             this.capacityHint = capacityHint;
             this.cfFamilies = (cfFamilies == null || cfFamilies.length == 0)
-                    ? SchemaRegistry.EMPTY
+                    ? EMPTY
                     : cfFamilies.clone();
         }
 
@@ -465,12 +465,12 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
             if (pk.length > 0) {
                 return pk.clone();
             }
-            return SchemaRegistry.EMPTY;
+            return EMPTY;
         }
 
         private static String[] normalizePk(String[] pk) {
             if (pk == null || pk.length == 0) {
-                return SchemaRegistry.EMPTY;
+                return EMPTY;
             }
             String[] normalized = new String[pk.length];
             int size = 0;
@@ -480,7 +480,7 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
                     normalized[size++] = trimmed;
                 }
             }
-            return size == 0 ? SchemaRegistry.EMPTY : shrink(normalized, size);
+            return size == 0 ? EMPTY : shrink(normalized, size);
         }
 
         private static String trimEntry(String value) {
@@ -514,7 +514,7 @@ public final class AvroPhoenixSchemaRegistry implements SchemaRegistry, PhoenixT
                 System.arraycopy(cfFamilies, 0, copy, 0, cfFamilies.length);
                 return copy;
             }
-            return SchemaRegistry.EMPTY;
+            return EMPTY;
         }
     }
 }

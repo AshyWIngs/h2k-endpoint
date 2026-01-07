@@ -23,7 +23,7 @@ public final class BackoffPolicy {
      * Рассчитывает задержку вокруг {@code baseNanos} с учётом джиттера и граничных значений типа.
      */
     public long nextDelayNanos(long baseNanos) {
-        long jitter = Math.max(1L, (baseNanos * jitterPercent) / 100L);
+        long jitter = Math.max(1L, baseNanos * jitterPercent / 100L);
         long lower = safeSubtract(baseNanos, jitter);
         long upper = safeAdd(baseNanos, jitter);
 

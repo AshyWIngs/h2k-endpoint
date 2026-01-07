@@ -3,6 +3,7 @@ package kz.qazmarka.h2k.endpoint;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -14,6 +15,7 @@ import org.apache.hadoop.hbase.util.Bytes;
 import org.apache.hadoop.hbase.wal.WAL.Entry;
 import org.apache.kafka.clients.producer.MockProducer;
 import org.apache.kafka.clients.producer.ProducerRecord;
+import org.apache.kafka.common.serialization.ByteArraySerializer;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -26,6 +28,7 @@ import kz.qazmarka.h2k.config.H2kConfig;
 import kz.qazmarka.h2k.endpoint.processing.WalEntryProcessor;
 import kz.qazmarka.h2k.endpoint.topic.TopicManager;
 import kz.qazmarka.h2k.kafka.producer.batch.BatchSender;
+import kz.qazmarka.h2k.kafka.serializer.RowKeySliceSerializer;
 import kz.qazmarka.h2k.payload.builder.PayloadBuilder;
 import kz.qazmarka.h2k.util.RowKeySlice;
 
@@ -142,5 +145,30 @@ class KafkaReplicationEndpointIntegrationTest extends BaseKafkaReplicationEndpoi
         assertTrue(failure instanceof IllegalStateException, "Тип исключения ensureTopic должен оставаться IllegalStateException");
         assertTrue(failure.getMessage().contains("Симуляция сбоя ensure топика"),
                 "Сообщение исключения должно помогать диагностировать проблему ensure");
+    }
+
+    @Test
+    @DisplayName("Таймаут Kafka send пробрасывается как TimeoutException")
+    void kafkaSendTimeoutPropagates() throws Exception {
+        H2kConfig config = builder().buildConfig();
+        MockSchemaRegistryClient mockClient = builder().buildMockSchemaRegistryClient();
+        PayloadBuilder payloadBuilder = builder().buildPayloadBuilder(config, mockClient);
+        MockProducer<RowKeySlice, byte[]> producer =
+                new MockProducer<>(false, new RowKeySliceSerializer(), new ByteArraySerializer());
+        TopicManager topicManager = builder().buildTopicManager(config);
+        WalEntryProcessor processor = builder().buildWalEntryProcessor(payloadBuilder, topicManager, producer, config);
+
+        byte[] row = Bytes.toBytes("rk-timeout");
+        long ts = 123L;
+        List<Cell> cells = new java.util.ArrayList<>();
+        cells.add(new org.apache.hadoop.hbase.KeyValue(row, Bytes.toBytes("d"), Bytes.toBytes("value_long"), ts, Bytes.toBytes(1L)));
+        Entry entry = builder().buildWalEntry(TableName.valueOf("INT_TEST_TABLE"), row, cells);
+
+        TimeoutException ex = assertThrows(TimeoutException.class, () -> {
+            try (BatchSender sender = new BatchSender(1, 1)) {
+                processor.process(entry, sender);
+            }
+        });
+        assertNotNull(ex);
     }
 }

@@ -19,7 +19,9 @@ import org.apache.hadoop.hbase.util.Bytes;
  * что сокращает allocations при повторных вызовах build() с одинаковыми CF.
  */
 final class WalCfFilterCache {
-    static final WalCfFilterCache EMPTY = new WalCfFilterCache(null, true, new int[0], new byte[0][][]);
+    static final WalCfFilterCache EMPTY = new WalCfFilterCache(null, true, null, new int[0], new byte[0][][]);
+
+    private static final int SMALL_FAMILY_LIMIT = 3;
     
     /**
      * Интернированные CF byte[] массивы для переиспользования.
@@ -29,15 +31,18 @@ final class WalCfFilterCache {
 
     private final byte[][] sourceRef;
     private final boolean noFamilies;
+    private final byte[][] flatFamilies;
     private final int[] hashBuckets;
     private final byte[][][] familiesByHash;
 
     private WalCfFilterCache(byte[][] sourceRef,
                              boolean empty,
+                             byte[][] flatFamilies,
                              int[] hashBuckets,
                              byte[][][] familiesByHash) {
         this.sourceRef = sourceRef;
         this.noFamilies = empty;
+        this.flatFamilies = flatFamilies;
         this.hashBuckets = hashBuckets;
         this.familiesByHash = familiesByHash;
     }
@@ -58,6 +63,9 @@ final class WalCfFilterCache {
         if (cells.isEmpty()) {
             return false;
         }
+        if (flatFamilies != null) {
+            return containsAnyFamilySmall(cells, flatFamilies);
+        }
         if (hashBuckets.length == 1 && familiesByHash[0].length == 1) {
             return containsFamily(cells, familiesByHash[0][0]);
         }
@@ -74,6 +82,8 @@ final class WalCfFilterCache {
         }
         LinkedHashMap<Integer, List<byte[]>> grouped = groupByHash(unique);
         int size = grouped.size();
+        byte[][] flatFamilies = shouldUseFlat(unique.length) ? new byte[unique.length][] : null;
+        int flatIndex = 0;
         int[] hashes = new int[size];
         byte[][][] familiesByHash = new byte[size][][];
         int idx = 0;
@@ -91,12 +101,15 @@ final class WalCfFilterCache {
                     return copy;
                 });
                 bucket[j] = interned;
+                if (flatFamilies != null) {
+                    flatFamilies[flatIndex++] = interned;
+                }
             }
             familiesByHash[idx] = bucket;
             idx++;
         }
         sortBuckets(hashes, familiesByHash);
-        return new WalCfFilterCache(source, false, hashes, familiesByHash);
+        return new WalCfFilterCache(source, false, flatFamilies, hashes, familiesByHash);
     }
 
     private static byte[][] sanitizeFamilies(byte[][] source) {
@@ -150,6 +163,17 @@ final class WalCfFilterCache {
         return false;
     }
 
+    private static boolean containsAnyFamilySmall(List<Cell> cells, byte[][] families) {
+        for (Cell cell : cells) {
+            for (byte[] family : families) {
+                if (CellUtil.matchingFamily(cell, family)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     private static boolean containsAnyFamily(List<Cell> cells,
                                              int[] hashBuckets,
                                              byte[][][] familiesByHash) {
@@ -183,6 +207,10 @@ final class WalCfFilterCache {
             hashes[j + 1] = key;
             familiesByHash[j + 1] = bucket;
         }
+    }
+
+    private static boolean shouldUseFlat(int familyCount) {
+        return familyCount > 1 && familyCount <= SMALL_FAMILY_LIMIT;
     }
 
     /**

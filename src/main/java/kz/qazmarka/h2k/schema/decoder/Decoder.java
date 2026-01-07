@@ -132,7 +132,7 @@ public interface Decoder {
         Objects.requireNonNull(table, MSG_TABLE_REQUIRED);
         Objects.requireNonNull(qual, MSG_QUALIFIER_REQUIRED);
         int qLen = qual.length;
-        int vLen = (value == null ? 0 : value.length);
+        int vLen = value == null ? 0 : value.length;
         return decode(table, qual, 0, qLen, value, 0, vLen);
     }
 
@@ -270,13 +270,13 @@ public interface Decoder {
                                   Slice qual,
                                   Slice value,
                                   T defaultValue) {
-            final byte[] qa = (qual == null ? null : qual.a);
-            final int    qo = (qual == null ? 0    : qual.off);
-            final int    ql = (qual == null ? 0    : qual.len);
+            final byte[] qa = qual == null ? null : qual.a;
+            final int    qo = qual == null ? 0    : qual.off;
+            final int    ql = qual == null ? 0    : qual.len;
 
-            final byte[] va = (value == null ? null : value.a);
-            final int    vo = (value == null ? 0    : value.off);
-            final int    vl = (value == null ? 0    : value.len);
+            final byte[] va = value == null ? null : value.a;
+            final int    vo = value == null ? 0    : value.off;
+            final int    vl = value == null ? 0    : value.len;
 
             T v = decode(table, qa, qo, ql, va, vo, vl);
             return (v != null) ? v : defaultValue;

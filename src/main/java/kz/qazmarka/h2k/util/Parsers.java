@@ -175,9 +175,6 @@ public final class Parsers {
     /**
      * Универсальное чтение перечисления (enum) из {@link Configuration} по ключу.
      * Сопоставление значения выполняется без учёта регистра и с предварительным {@code trim()}.
-     * Пример использования:
-     * {@code PayloadFormat fmt = Parsers.readEnum(cfg, "h2k.payload.format", H2kConfig.PayloadFormat.class, H2kConfig.PayloadFormat.JSON_EACH_ROW);}
-     *
      * @param cfg      конфигурация Hadoop
      * @param key      ключ конфигурации
      * @param enumType класс перечисления

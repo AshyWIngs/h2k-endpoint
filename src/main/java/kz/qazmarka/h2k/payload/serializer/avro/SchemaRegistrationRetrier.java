@@ -18,10 +18,6 @@ import io.confluent.kafka.schemaregistry.client.rest.exceptions.RestClientExcept
  */
 final class SchemaRegistrationRetrier implements AutoCloseable {
 
-    interface RetryCallback {
-        void onSchemaRegistered(String subject, Schema schema, int schemaId);
-    }
-
     private final Logger log;
     private final SchemaRegistryAccess registry;
     private final SchemaFingerprintMonitor fingerprintMonitor;
@@ -29,6 +25,10 @@ final class SchemaRegistrationRetrier implements AutoCloseable {
     private final LongAdder failureCounter;
     private final ConfluentAvroPayloadSerializer.RetrySettings settings;
     private final ScheduledExecutorService executor;
+
+    interface RetryCallback {
+        void onSchemaRegistered(String subject, Schema schema, int schemaId);
+    }
 
     SchemaRegistrationRetrier(Logger log,
                               SchemaRegistryAccess registry,
@@ -79,7 +79,23 @@ final class SchemaRegistrationRetrier implements AutoCloseable {
             callback.onSchemaRegistered(subject, schema, schemaId);
             fingerprintMonitor.recordSuccessfulRegistration(subject, fingerprint, schemaId);
             log.info("Avro Confluent: схема subject={} успешно зарегистрирована после {} попыток", subject, attempt);
-        } catch (RestClientException | IOException ex) {
+        } catch (RestClientException ex) {
+            failureCounter.increment();
+            if (!SchemaRegistryErrors.isRetryable(ex)) {
+                log.error("Avro Confluent: повторная регистрация схемы subject={} прекращена: {}",
+                        subject, SchemaRegistryErrors.summary(ex));
+                return;
+            }
+            if (attempt >= settings.maxAttempts()) {
+                log.error("Avro Confluent: регистрация схемы subject={} окончательно провалилась после {} попыток: {}",
+                        subject, attempt, SchemaRegistryErrors.summary(ex));
+                return;
+            }
+            log.warn("Avro Confluent: повторная регистрация схемы subject={} не удалась (попытка {}): {}",
+                    subject, attempt, SchemaRegistryErrors.summary(ex));
+            long delay = settings.delayMsForAttempt(attempt + 1);
+            executor.schedule(() -> attempt(subject, schema, fingerprint, attempt + 1, callback), delay, TimeUnit.MILLISECONDS);
+        } catch (IOException ex) {
             failureCounter.increment();
             if (attempt >= settings.maxAttempts()) {
                 log.error("Avro Confluent: регистрация схемы subject={} окончательно провалилась после {} попыток: {}",

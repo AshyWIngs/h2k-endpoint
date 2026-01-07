@@ -78,8 +78,7 @@ final class ReplicationResources implements AutoCloseable {
         }
         try {
             closeable.close();
-        } catch (Exception ignore) {
-            // без логирования: вызывающая сторона решает, где фиксировать ошибки остановки
+        } catch (Exception ignore) { // NOPMD - вызывающая сторона решает, где фиксировать ошибки остановки
         }
     }
 

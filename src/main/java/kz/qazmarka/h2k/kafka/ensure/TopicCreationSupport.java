@@ -181,8 +181,8 @@ final class TopicCreationSupport {
         recordCreateFailure(topic, cause == null ? ee : cause);
         ctx.log().warn("Не удалось создать Kafka-топик '{}': {}: {}",
                 topic,
-                (cause == null ? ee.getClass().getSimpleName() : cause.getClass().getSimpleName()),
-                (cause == null ? ee.getMessage() : cause.getMessage()));
+                cause == null ? ee.getClass().getSimpleName() : cause.getClass().getSimpleName(),
+                cause == null ? ee.getMessage() : cause.getMessage());
     }
 
     private void onCreateInterrupted(String topic, InterruptedException ie) {
@@ -206,8 +206,8 @@ final class TopicCreationSupport {
         recordCreateFailure(topic, cause == null ? e : cause);
         ctx.log().warn("Не удалось создать Kafka-топик '{}': {}: {}",
                 topic,
-                (cause == null ? e.getClass().getSimpleName() : cause.getClass().getSimpleName()),
-                (cause == null ? e.getMessage() : cause.getMessage()));
+                cause == null ? e.getClass().getSimpleName() : cause.getClass().getSimpleName(),
+                cause == null ? e.getMessage() : cause.getMessage());
         if (ctx.log().isDebugEnabled()) {
             ctx.log().debug("Трассировка ошибки создания темы '{}'", topic, e);
         }

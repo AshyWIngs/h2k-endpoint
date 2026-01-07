@@ -31,7 +31,7 @@ public final class PhoenixPkParser {
             Collections.newSetFromMap(new ConcurrentHashMap<>());
 
     /**
-     * @param registry реестр колонок/PK (Avro, JSON и т.п.)
+     * @param registry реестр колонок/PK (Avro .avsc и т.п.)
      * @param types    реестр типов Phoenix с нормализацией
      */
     public PhoenixPkParser(SchemaRegistry registry, PhoenixColumnTypeRegistry types) {
@@ -101,7 +101,7 @@ public final class PhoenixPkParser {
                 return added;
             }
             PhoenixType type = types.resolve(ctx.table, column);
-            boolean isLast = (i == pk.length - 1);
+            boolean isLast = i == pk.length - 1;
             int before = out.size();
             int newPos = applyPkSegment(ctx, column, type, cursor, isLast, out);
             if (newPos == Integer.MIN_VALUE) {

@@ -16,7 +16,7 @@
 ## Схемы, payload и интеграции
 - [`docs/avro.md`](avro.md) — работа с Avro (локальные `.avsc`, Confluent Schema Registry), прогрев схем, оптимизация сборки.
 - [`docs/schema-registry.md`](schema-registry.md) — практические сценарии работы с Confluent Schema Registry.
-- [`docs/capacity.md`](capacity.md) — подсказки ёмкости JSON и рекомендации по `h2k.capacity.hints`.
+- [`docs/capacity.md`](capacity.md) — подсказки ёмкости payload и рекомендации по `h2k.capacityHint`.
 - [`docs/phoenix.md`](phoenix.md) — особенности Phoenix (PK, salt).
 
 ## Дополнительно

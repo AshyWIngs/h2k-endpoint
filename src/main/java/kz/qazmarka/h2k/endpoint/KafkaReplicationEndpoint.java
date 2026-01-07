@@ -1,15 +1,9 @@
 package kz.qazmarka.h2k.endpoint;
 
 import java.io.IOException;
-import java.net.InetAddress;
-import java.net.UnknownHostException;
 import java.nio.file.Paths;
-import java.util.Arrays;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
 import java.util.Properties;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeoutException;
@@ -27,6 +21,8 @@ import org.apache.kafka.clients.producer.ProducerConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import kz.qazmarka.h2k.endpoint.EndpointLog.LogContext;
+
 import kz.qazmarka.h2k.config.EnsureSettings;
 import kz.qazmarka.h2k.config.H2kConfig;
 import kz.qazmarka.h2k.config.H2kConfig.Keys;
@@ -36,7 +32,6 @@ import kz.qazmarka.h2k.endpoint.metrics.H2kMetricsJmx;
 import kz.qazmarka.h2k.endpoint.processing.WalEntryProcessor;
 import kz.qazmarka.h2k.endpoint.topic.TopicManager;
 import kz.qazmarka.h2k.kafka.producer.batch.BatchSender;
-import kz.qazmarka.h2k.kafka.serializer.RowKeySliceSerializer;
 import kz.qazmarka.h2k.payload.builder.PayloadBuilder;
 import kz.qazmarka.h2k.schema.decoder.Decoder;
 import kz.qazmarka.h2k.schema.decoder.ValueCodecPhoenix;
@@ -72,10 +67,32 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
 
     /** Логгер класса. Все сообщения — на русском языке. */
     private static final Logger LOG = LoggerFactory.getLogger(KafkaReplicationEndpoint.class);
+    private static final String LOG_UNKNOWN = "-";
+    private static final String EVENT_INIT_JMX = "инициализация.jmx";
+    private static final String EVENT_INIT_PAYLOAD = "инициализация.payload";
+    private static final String EVENT_INIT_SCHEMAS = "инициализация.schemas";
+    private static final String EVENT_REPLICATION = "репликация";
 
     // ядро
     /** Kafka Producer для отправки событий; ключ сериализуется через RowKeySliceSerializer, значение — как byte[]. */
     private Producer<RowKeySlice, byte[]> producer;
+    private String peerId = LOG_UNKNOWN;
+    private volatile long lastAckOffset = -1L;
+    private volatile int lastAckPartition = -1;
+    private PayloadBuilder payloadBuilder;
+    private final BatchSender.AckObserver ackObserver = metadata -> {
+        if (metadata == null) {
+            return;
+        }
+        lastAckPartition = metadata.partition();
+        lastAckOffset = metadata.offset();
+    };
+    private final EndpointLog endpointLog = new EndpointLog(
+            LOG,
+            () -> peerId,
+            () -> lastAckOffset,
+            () -> lastAckPartition,
+            () -> payloadBuilder);
 
     // вынесенная конфигурация и сервисы
     /** Плоские DTO-выкладки конфигурации для быстрого доступа без повторных геттеров. */
@@ -106,6 +123,8 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
     @Override
     public void init(ReplicationEndpoint.Context context) throws IOException {
         super.init(context);
+        String contextPeerId = context.getPeerId();
+        this.peerId = (contextPeerId == null || contextPeerId.isEmpty()) ? LOG_UNKNOWN : contextPeerId;
         final Configuration cfg = context.getConfiguration();
 
         // обязательный параметр
@@ -124,31 +143,43 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
         this.ensureSettings = runtimeConfig.getEnsureSettings();
         this.producerSettings = runtimeConfig.getProducerSettings();
         final PayloadBuilder payload = resources.payloadBuilder();
+        this.payloadBuilder = payload;
         this.topicManager = resources.topicManager();
         this.walEntryProcessor = resources.walEntryProcessor();
         warmupPayloadSchemas(payload, runtimeConfig);
         registerMetrics(payload, walEntryProcessor);
-        if (runtimeConfig.isJmxEnabled()) {
-            // JMX экспорт метрик через DynamicMBean: безопасно пытаемся зарегистрировать
-            try {
-                javax.management.ObjectName name = H2kMetricsJmx.register(this.topicManager);
-                this.h2kJmxName = name;
-                if (name != null && LOG.isInfoEnabled()) {
-                    LOG.info("JMX-метрики H2K зарегистрированы: {}", name);
-                } else if (name == null) {
-                    LOG.warn("JMX-метрики H2K не были зарегистрированы (см. DEBUG для деталей)");
-                }
-            } catch (RuntimeException ex) {
-                LOG.warn("Не удалось зарегистрировать JMX-метрики H2K: {}", ex.getMessage());
-                if (LOG.isDebugEnabled()) {
-                    LOG.debug("Трассировка ошибки регистрации JMX-метрик H2K", ex);
-                }
-            }
-        } else if (LOG.isDebugEnabled()) {
-            LOG.debug("JMX-метрики H2K отключены (h2k.jmx.enabled=false)");
-        }
+        registerJmx(runtimeConfig);
         logPayloadSerializer(payload);
         logInitSummary();
+    }
+
+    private void registerJmx(H2kConfig runtimeConfig) {
+        if (!runtimeConfig.isJmxEnabled()) {
+            if (LOG.isDebugEnabled()) {
+                endpointLog.debug(EVENT_INIT_JMX, endpointLog.contextEmpty(),
+                        "JMX-метрики H2K отключены (h2k.jmx.enabled=false)");
+            }
+            return;
+        }
+        // JMX экспорт метрик через DynamicMBean: безопасно пытаемся зарегистрировать
+        try {
+            javax.management.ObjectName name = H2kMetricsJmx.register(this.topicManager);
+            this.h2kJmxName = name;
+            LogContext logContext = endpointLog.contextEmpty();
+            if (name != null && LOG.isInfoEnabled()) {
+                endpointLog.info(EVENT_INIT_JMX, logContext, "JMX-метрики H2K зарегистрированы: {}", name);
+            } else if (name == null) {
+                endpointLog.warn(EVENT_INIT_JMX, logContext, "JMX-метрики H2K не были зарегистрированы (см. DEBUG для деталей)");
+            }
+        } catch (RuntimeException ex) {
+            LogContext logContext = endpointLog.contextEmpty();
+            endpointLog.warn(EVENT_INIT_JMX, logContext, "Не удалось зарегистрировать JMX-метрики H2K: {}",
+                    EndpointLog.safeExceptionMessage(ex));
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("{} msg=Трассировка ошибки регистрации JMX-метрик H2K",
+                        endpointLog.prefix(EVENT_INIT_JMX, logContext), ex);
+            }
+        }
     }
 
     /**
@@ -164,7 +195,8 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
         } else {
             cfSource = "per-table";
         }
-        LOG.debug("Инициализация завершена: шаблон_топика={}, cf_источник={}, ensure_topics={}",
+        endpointLog.debug("инициализация", endpointLog.contextEmpty(),
+                "Инициализация завершена: шаблон_топика={}, cf_источник={}, ensure_topics={}",
                 topicSettings.getPattern(),
                 cfSource,
                 ensureSettings.isEnsureTopics());
@@ -174,16 +206,18 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
      * Выводит в INFO активные параметры Avro/Schema Registry.
      * Видно даже при стандартном уровне логирования.
      */
-    private static void logPayloadSerializer(PayloadBuilder payload) {
+    private void logPayloadSerializer(PayloadBuilder payload) {
         if (!LOG.isInfoEnabled()) {
             return;
         }
+        LogContext logContext = endpointLog.contextEmpty();
         try {
-            LOG.info("Параметры payload: {}", payload.describeSerializer());
+            endpointLog.info(EVENT_INIT_PAYLOAD, logContext, "Параметры payload: {}", payload.describeSerializer());
         } catch (RuntimeException ex) {
-            LOG.warn("Не удалось определить активный сериализатор payload: {}", ex.getMessage());
+            endpointLog.warn(EVENT_INIT_PAYLOAD, logContext,
+                    "Не удалось определить активный сериализатор payload: {}", EndpointLog.safeExceptionMessage(ex));
             if (LOG.isDebugEnabled()) {
-                LOG.debug("Трассировка ошибки сериализатора", ex);
+                LOG.debug("{} msg=Трассировка ошибки сериализатора", endpointLog.prefix(EVENT_INIT_PAYLOAD, logContext), ex);
             }
         }
     }
@@ -192,16 +226,21 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
         try {
             int loaded = payload.preloadLocalSchemas();
             if (loaded > 0) {
-                if (LOG.isInfoEnabled()) {
-                    LOG.info("Предварительно загружено {} Avro-схем из каталога {}", loaded, config.getAvroSettings().getSchemaDir());
-                }
+                endpointLog.info(EVENT_INIT_SCHEMAS, endpointLog.contextEmpty(),
+                        "Предварительно загружено {} Avro-схем из каталога {}",
+                        loaded, config.getAvroSettings().getSchemaDir());
             } else if (LOG.isDebugEnabled()) {
-                LOG.debug("Каталог Avro-схем уже прогрет или пуст: {}", config.getAvroSettings().getSchemaDir());
+                endpointLog.debug(EVENT_INIT_SCHEMAS, endpointLog.contextEmpty(),
+                        "Каталог Avro-схем уже прогрет или пуст: {}",
+                        config.getAvroSettings().getSchemaDir());
             }
         } catch (RuntimeException ex) {
-            LOG.warn("Не удалось предварительно загрузить Avro-схемы: {}", ex.getMessage());
+            LogContext logContext = endpointLog.contextEmpty();
+            endpointLog.warn(EVENT_INIT_SCHEMAS, logContext,
+                    "Не удалось предварительно загрузить Avro-схемы: {}", EndpointLog.safeExceptionMessage(ex));
             if (LOG.isDebugEnabled()) {
-                LOG.debug("Трассировка ошибки прогрева Avro-схем", ex);
+                LOG.debug("{} msg=Трассировка ошибки прогрева Avro-схем",
+                        endpointLog.prefix(EVENT_INIT_SCHEMAS, logContext), ex);
             }
         }
     }
@@ -225,9 +264,12 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
         try {
             topicManager.registerMetric(name, supplier);
         } catch (RuntimeException ex) {
-            LOG.warn("Не удалось зарегистрировать метрику '{}': {}", name, ex.getMessage());
+            LogContext logContext = endpointLog.contextEmpty();
+            endpointLog.warn("инициализация.metrics", logContext,
+                    "Не удалось зарегистрировать метрику '{}': {}", name, EndpointLog.safeExceptionMessage(ex));
             if (LOG.isDebugEnabled()) {
-                LOG.debug("Трассировка ошибки при регистрации метрики '{}'", name, ex);
+                LOG.debug("{} msg=Трассировка ошибки при регистрации метрики '{}'",
+                        endpointLog.prefix("инициализация.metrics", logContext), name, ex);
             }
         }
     }
@@ -258,7 +300,8 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
             AvroSchemaRegistry avro = new AvroSchemaRegistry(Paths.get(schemaDir));
             AvroPhoenixSchemaRegistry registry = new AvroPhoenixSchemaRegistry(avro);
             tableMetadataProvider = registry;
-            LOG.debug("Режим декодирования: phoenix-avro, каталог={}", schemaDir);
+            endpointLog.debug("инициализация.decoder", endpointLog.contextEmpty(),
+                    "Режим декодирования: phoenix-avro, каталог={}", schemaDir);
             return new ValueCodecPhoenix(registry);
         } catch (RuntimeException e) {
             throw new IllegalStateException(
@@ -279,7 +322,8 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
         Properties props = ProducerPropsFactory.build(cfg, bootstrap);
 
         if (LOG.isDebugEnabled()) {
-            LOG.debug("Kafka‑producer: client.id={}, брокеры={}, acks={}, компрессия={}, linger.ms={}, batch.size={}, идемпотентность={}",
+            endpointLog.debug("инициализация.producer", endpointLog.contextEmpty(),
+                    "Kafka‑producer: client.id={}, брокеры={}, acks={}, компрессия={}, linger.ms={}, batch.size={}, идемпотентность={}",
                     props.get(ProducerConfig.CLIENT_ID_CONFIG),
                     props.get(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG),
                     props.get(ProducerConfig.ACKS_CONFIG),
@@ -293,7 +337,7 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
     }
 
     /**
-     * Основной цикл обработки партии WAL‑записей: группировка по rowkey, сборка JSON и асинхронная отправка сообщений в Kafka
+     * Основной цикл обработки партии WAL‑записей: группировка по rowkey, сборка Avro и асинхронная отправка сообщений в Kafka
      * с последующим ожиданием подтверждений.
      *
      * @param ctx контекст с WAL‑записями
@@ -302,14 +346,18 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
      */
     @Override
     public boolean replicate(ReplicationEndpoint.ReplicateContext ctx) {
-        return new ReplicationExecutor(ctx.getEntries()).execute();
+        return new ReplicationExecutor(ctx.getEntries(), ctx.getWalGroupId()).execute();
     }
 
     private final class ReplicationExecutor {
         private final List<WAL.Entry> entries;
+        private final String walGroupId;
+        private final LogContext logContext;
 
-        ReplicationExecutor(List<WAL.Entry> entries) {
+        ReplicationExecutor(List<WAL.Entry> entries, String walGroupId) {
             this.entries = entries;
+            this.walGroupId = walGroupId;
+            this.logContext = endpointLog.contextForEntries(entries, walGroupId);
         }
 
         boolean execute() {
@@ -317,22 +365,22 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
                 return true;
             }
             try {
-                new ReplicationBatch(entries).process();
+                new ReplicationBatch(entries, walGroupId).process();
                 return true;
             } catch (InterruptedException ie) {
                 return handleInterrupted(ie);
             } catch (ExecutionException | TimeoutException ex) {
-                return handleFailure("Репликация: ошибка при ожидании подтверждений Kafka", ex, false);
+                return handleFailure("Ошибка при ожидании подтверждений Kafka", ex, false);
             } catch (org.apache.kafka.common.KafkaException ex) {
-                return handleFailure("Репликация: ошибка продьюсера Kafka", ex, false);
+                return handleFailure("Ошибка продьюсера Kafka", ex, false);
             } catch (RuntimeException ex) {
-                return handleFailure("Репликация: непредвиденная ошибка", ex, false);
+                return handleFailure("Непредвиденная ошибка", ex, false);
             }
         }
 
         private boolean handleInterrupted(InterruptedException ie) {
             Thread.currentThread().interrupt();
-            return handleFailure("Репликация: поток прерван; запросим повтор партии", ie, true);
+            return handleFailure("Поток прерван; запросим повтор партии", ie, true);
         }
 
         private boolean handleFailure(String prefix, Throwable ex, boolean warn) {
@@ -346,12 +394,12 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
          */
         private void failReplicate(String prefix, Throwable ex, boolean warn) {
             if (warn) {
-                LOG.warn("{}: {}", prefix, ex.getMessage());
+                endpointLog.warn(EVENT_REPLICATION, logContext, "{}: {}", prefix, EndpointLog.safeExceptionMessage(ex));
             } else {
-                LOG.error("{}: {}", prefix, ex.getMessage());
+                endpointLog.error(EVENT_REPLICATION, logContext, "{}: {}", prefix, EndpointLog.safeExceptionMessage(ex));
             }
             if (LOG.isDebugEnabled()) {
-                LOG.debug("Трассировка ошибки в replicate()", ex);
+                LOG.debug("{} msg=Трассировка ошибки в replicate()", endpointLog.prefix(EVENT_REPLICATION, logContext), ex);
             }
             KafkaReplicationEndpoint.this.replicateFailures.increment();
             KafkaReplicationEndpoint.this.lastReplicateFailureAt.set(System.currentTimeMillis());
@@ -360,9 +408,11 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
 
     private final class ReplicationBatch {
         private final List<WAL.Entry> entries;
+        private final String walGroupId;
 
-        ReplicationBatch(List<WAL.Entry> entries) {
+        ReplicationBatch(List<WAL.Entry> entries, String walGroupId) {
             this.entries = entries;
+            this.walGroupId = walGroupId;
         }
 
         void process() throws InterruptedException, ExecutionException, TimeoutException {
@@ -377,10 +427,11 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
             int awaitEvery = producerSettings.getAwaitEvery();
             int awaitTimeoutMs = producerSettings.getAwaitTimeoutMs();
             if (LOG.isDebugEnabled()) {
-                LOG.debug("Репликация: записей={}, awaitEvery={}, awaitTimeoutMs={}",
+                endpointLog.debug("репликация.batch", endpointLog.contextForEntries(entries, walGroupId),
+                        "Записей={}, awaitEvery={}, awaitTimeoutMs={}",
                         entryCount, awaitEvery, awaitTimeoutMs);
             }
-            return new BatchSender(awaitEvery, awaitTimeoutMs);
+            return new BatchSender(awaitEvery, awaitTimeoutMs, ackObserver);
         }
     }
 
@@ -409,7 +460,8 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
         } catch (Exception e) {
             // При завершении работы проглатываем исключение, но выводим debug для диагностики
             if (LOG.isDebugEnabled()) {
-                LOG.debug("doStop(): ошибка при закрытии Kafka producer (игнорируется при завершении работы)", e);
+                LOG.debug("{} msg=Ошибка при закрытии Kafka producer (игнорируется при завершении работы)",
+                        endpointLog.prefix("остановка", endpointLog.contextEmpty()), e);
             }
         }
         // Снятие регистрации JMX-метрик (если были зарегистрированы)
@@ -420,7 +472,8 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
             }
         } catch (RuntimeException ex) {
             if (LOG.isDebugEnabled()) {
-                LOG.debug("doStop(): ошибка при снятии регистрации JMX-метрик H2K (игнорируется при завершении)", ex);
+                LOG.debug("{} msg=Ошибка при снятии регистрации JMX-метрик H2K (игнорируется при завершении)",
+                        endpointLog.prefix("остановка", endpointLog.contextEmpty()), ex);
             }
         }
         notifyStopped();
@@ -437,102 +490,8 @@ public final class KafkaReplicationEndpoint extends BaseReplicationEndpoint {
             this.resources = null;
             this.walEntryProcessor = null;
             this.topicManager = null;
+            this.payloadBuilder = null;
         }
     }
-    /**
-     * Построитель настроек {@link KafkaProducer}. Выполняется один раз при старте; не участвует в горячем пути.
-     * Собирает безопасные дефолты и применяет переопределения из префикса {@code h2k.producer.*}
-     * без перезаписи уже заданных ключей.
-     */
-    private static final class ProducerPropsFactory {
 
-        /**
-         * Формирует {@link Properties} для {@link KafkaProducer}:
-         *  - базовые обязательные параметры (bootstrap, сериализаторы);
-         *  - безопасные дефолты (acks=all, enable.idempotence=true, retries и т.д.);
-         *  - pass-through: только валидные {@code h2k.producer.*} прокидываются как «родные» ключи продьюсера, если не заданы выше;
-         *  - {@code client.id}: по умолчанию префикс + hostname + короткий случайный суффикс, фолбэк — UUID.
-         *
-         * @param cfg       HBase-конфигурация
-         * @param bootstrap список брокеров Kafka (host:port[,host2:port2])
-         * @return заполненный набор свойств для конструктора продьюсера
-         */
-        private static final String BYTE_ARRAY_SERIALIZER = "org.apache.kafka.common.serialization.ByteArraySerializer";
-        private static final String ROW_KEY_SERIALIZER = RowKeySliceSerializer.class.getName();
-        private static final String FORCED_COMPRESSION = "lz4";
-        private static final Set<String> H2K_INTERNAL_KEYS = new HashSet<>(
-                Arrays.asList(
-                        "await.every",
-                        "await.timeout.ms",
-                        "batch.counters.enabled",
-                        "batch.debug.on.failure",
-                        ProducerConfig.COMPRESSION_TYPE_CONFIG
-                )
-        );
-
-        static Properties build(Configuration cfg, String bootstrap) {
-            Properties props = createBaseProperties(bootstrap);
-            applyDefaultProducerSettings(props, cfg);
-            props.put(ProducerConfig.CLIENT_ID_CONFIG, computeClientId(cfg));
-            applyPassThroughSettings(props, cfg);
-            return props;
-        }
-
-        private static Properties createBaseProperties(String bootstrap) {
-            Properties props = new Properties();
-            props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap);
-            props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, ROW_KEY_SERIALIZER);
-            props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, BYTE_ARRAY_SERIALIZER);
-            return props;
-        }
-
-        private static void applyDefaultProducerSettings(Properties props, Configuration cfg) {
-            props.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, cfg.get("h2k.producer.enable.idempotence", "true"));
-            props.put(ProducerConfig.ACKS_CONFIG, cfg.get("h2k.producer.acks", "all"));
-            props.put(ProducerConfig.RETRIES_CONFIG, cfg.get("h2k.producer.retries", String.valueOf(Integer.MAX_VALUE)));
-            props.put(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, cfg.get("h2k.producer.delivery.timeout.ms", "180000"));
-            props.put(ProducerConfig.LINGER_MS_CONFIG, cfg.get("h2k.producer.linger.ms", "50"));
-            props.put(ProducerConfig.BATCH_SIZE_CONFIG, cfg.get("h2k.producer.batch.size", "65536"));
-            props.put(ProducerConfig.COMPRESSION_TYPE_CONFIG, FORCED_COMPRESSION);
-            props.put(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION,
-                    cfg.get("h2k.producer.max.in.flight", "1"));
-        }
-
-        private static String computeClientId(Configuration cfg) {
-            String defaultClientId = buildDefaultClientId();
-            String configuredClientId = cfg.get("h2k.producer.client.id", defaultClientId);
-            if (!configuredClientId.equals(defaultClientId)) {
-                return configuredClientId;
-            }
-            String randomSuffix = UUID.randomUUID().toString().substring(0, 8);
-            return configuredClientId + '-' + randomSuffix;
-        }
-
-        private static String buildDefaultClientId() {
-            try {
-                String host = InetAddress.getLocalHost().getHostName();
-                if (host == null || host.isEmpty()) {
-                    return H2kConfig.DEFAULT_ADMIN_CLIENT_ID + '-' + UUID.randomUUID();
-                }
-                return H2kConfig.DEFAULT_ADMIN_CLIENT_ID + '-' + host;
-            } catch (UnknownHostException ignore) {
-                return H2kConfig.DEFAULT_ADMIN_CLIENT_ID + '-' + UUID.randomUUID();
-            }
-        }
-
-        private static void applyPassThroughSettings(Properties props, Configuration cfg) {
-            Set<String> kafkaKeys = ProducerConfig.configNames();
-            String prefix = Keys.PRODUCER_PREFIX;
-            int prefixLen = prefix.length();
-            for (Map.Entry<String, String> entry : cfg) {
-                String key = entry.getKey();
-                if (key.startsWith(prefix) && !"h2k.producer.max.in.flight".equals(key)) {
-                    String realKey = key.substring(prefixLen);
-                    if (!H2K_INTERNAL_KEYS.contains(realKey) && kafkaKeys.contains(realKey)) {
-                        props.putIfAbsent(realKey, entry.getValue());
-                    }
-                }
-            }
-        }
-    }
 }

@@ -74,7 +74,7 @@ class H2kConfigBuilderTest {
         topicConfigs.put("retention.ms", "1000");
         urls.add("http://sr2:8081");
         auth.put("basic.password", "secret");
-        props.put("mode", "json");
+        props.put("mode", "binary");
 
         assertEquals("compact", config.getTopicSettings().getTopicConfigs().get("cleanup.policy"));
         assertEquals(1, config.getTopicSettings().getTopicConfigs().size());

@@ -32,9 +32,6 @@ add_peer 'h2k_balanced',
       # client.id не задаём — Endpoint сам сгенерирует уникальный id per-host (hostname/UUID)
       'h2k.topic.pattern'                   => '${table}',              # ${table}|${namespace}|${qualifier}
 #      'h2k.topic.max.length'               => '249',                  # опционально: жёсткий лимит длины имени
-      'h2k.payload.include.meta'            => 'false',
-      'h2k.payload.include.meta.wal'        => 'false',
-      'h2k.payload.include.rowkey'          => 'false',
 # Фильтрация CF задаётся в conf/avro/*.avsc через свойство h2k.cf.list (CSV без пробелов)
       # Confluent Schema Registry:
       'h2k.avro.sr.urls'                    => 'http://10.254.3.111:8081,http://10.254.3.112:8081,http://10.254.3.113:8081',

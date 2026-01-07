@@ -38,7 +38,7 @@ final class WalRowProcessor {
         int cellsInRow = rowCells.size();
         counters.cellsSeen += cellsInRow;
 
-        if (!context.cfFilter.isEmpty() && !context.cfFilter.allows(rowCells)) {
+        if (context.filterActive && !context.cfFilter.allows(rowCells)) {
             counters.rowsFiltered++;
             return;
         }
@@ -58,22 +58,35 @@ final class WalRowProcessor {
         final BatchSender sender;
         final TableOptionsSnapshot tableOptions;
         final WalCfFilterCache cfFilter;
+        final boolean filterActive;
         final WalCounterService.EntryCounters counters;
 
+        @SuppressWarnings("java:S107")
         RowContext(String topic,
                    TableName table,
                    WalMeta walMeta,
                    BatchSender sender,
                    TableOptionsSnapshot tableOptions,
-                   WalCfFilterCache cfFilter,
+                   FilterState filterState,
                    WalCounterService.EntryCounters counters) {
             this.topic = topic;
             this.table = table;
             this.walMeta = walMeta;
             this.sender = sender;
             this.tableOptions = tableOptions;
-            this.cfFilter = cfFilter;
+            this.cfFilter = filterState.cfFilter;
+            this.filterActive = filterState.filterActive;
             this.counters = counters;
+        }
+    }
+
+    static final class FilterState {
+        final WalCfFilterCache cfFilter;
+        final boolean filterActive;
+
+        FilterState(WalCfFilterCache cfFilter, boolean filterActive) {
+            this.cfFilter = cfFilter;
+            this.filterActive = filterActive;
         }
     }
 }

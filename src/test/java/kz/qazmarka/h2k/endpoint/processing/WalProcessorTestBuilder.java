@@ -155,13 +155,15 @@ class WalProcessorTestBuilder {
             H2kConfig config,
             BatchSender sender,
             WalCounterService.EntryCounters counters) {
+        boolean filterActive = cfFilter != null && !cfFilter.isEmpty();
+        WalRowProcessor.FilterState filterState = new WalRowProcessor.FilterState(cfFilter, filterActive);
         return new WalRowProcessor.RowContext(
                 topic,
                 tableName,
                 walMeta,
                 sender,
                 config.describeTableOptions(tableName),
-                cfFilter,
+                filterState,
                 counters);
     }
     

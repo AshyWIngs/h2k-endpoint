@@ -365,7 +365,7 @@ public final class H2kConfig implements TableMetadataView {
      * Возвращает подсказку ёмкости для заданной таблицы (если задана).
      * Поиск выполняется по полному имени (ns:qualifier), затем по одному qualifier.
      * @param table имя таблицы HBase
-     * @return ожидаемое число полей в корневом JSON (0 — если подсказка не задана)
+     * @return ожидаемое число полей в корневом payload (0 — если подсказка не задана)
      */
     @Override
     public int getCapacityHintFor(TableName table) {
@@ -484,8 +484,8 @@ public final class H2kConfig implements TableMetadataView {
         String[] parts = s.split(",", 2);
         String first = parts[0];
         int colon = first.indexOf(':');
-        String host = (colon >= 0 ? first.substring(0, colon) : first);
-        String suffix = (parts.length > 1 ? ",..." : "");
+        String host = colon >= 0 ? first.substring(0, colon) : first;
+        String suffix = parts.length > 1 ? ",..." : "";
         return host + suffix;
     }
 

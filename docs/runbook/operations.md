@@ -113,6 +113,19 @@ Ensure: ok (create retries=0)
 
 > Админам: при анализе инцидентов фиксируйте DEBUG‑лог `"Репликация: записей=..., awaitEvery=..., awaitTimeoutMs=..."` и текущее значение `репликация.ошибок.всего` — это ускоряет поиск узкого места.
 
+### 4.3 Локальный микробенч сериализации
+
+Для быстрой оценки производительности сериализатора Avro Confluent используйте скрипт:
+
+```bash
+scripts/run_avro_microbench.sh 20000 200000
+```
+
+- Требуется JDK 1.8 (скрипт проверяет `JAVA_HOME` и версию).
+- Используются тестовые схемы из `src/test/resources/avro`.
+- В логах возможны WARN про fingerprint — это ожидаемо для mock SR.
+- Результат: одна строка с `iterations`, `time.s`, `ops/s`, `mb`.
+
 ## 5. Мониторинг
 
 - `status 'replication'` — `SizeOfLogQueue`, `AgeOfLastShippedOp`.

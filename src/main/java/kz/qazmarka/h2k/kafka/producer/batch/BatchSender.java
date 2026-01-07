@@ -28,9 +28,14 @@ public final class BatchSender implements AutoCloseable {
     private final int batchSize;
     private final int timeoutMs;
     private final ArrayList<Future<RecordMetadata>> pending;
+    private final AckObserver observer;
     private int peakSize = 0;
 
     public BatchSender(int batchSize, int timeoutMs) {
+        this(batchSize, timeoutMs, null);
+    }
+
+    public BatchSender(int batchSize, int timeoutMs, AckObserver observer) {
         if (batchSize <= 0) {
             throw new IllegalArgumentException("batchSize должен быть > 0");
         }
@@ -40,6 +45,7 @@ public final class BatchSender implements AutoCloseable {
         this.batchSize = batchSize;
         this.timeoutMs = timeoutMs;
         this.pending = new ArrayList<>(batchSize);
+        this.observer = observer;
     }
 
     /**
@@ -117,7 +123,7 @@ public final class BatchSender implements AutoCloseable {
         return timeoutMs;
     }
 
-    private static void waitAll(List<Future<RecordMetadata>> futures, int timeoutMs)
+    private void waitAll(List<Future<RecordMetadata>> futures, int timeoutMs)
             throws InterruptedException, ExecutionException, TimeoutException {
         final long deadlineNs = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs);
         for (Future<RecordMetadata> future : futures) {
@@ -127,17 +133,27 @@ public final class BatchSender implements AutoCloseable {
         }
     }
 
-    private static void awaitOne(Future<RecordMetadata> future, long deadlineNs)
+    private void awaitOne(Future<RecordMetadata> future, long deadlineNs)
             throws InterruptedException, ExecutionException, TimeoutException {
         long remaining = deadlineNs - System.nanoTime();
         if (remaining <= 0L) {
             throw new TimeoutException("Таймаут ожидания подтверждений от Kafka");
         }
-        future.get(remaining, TimeUnit.NANOSECONDS);
+        RecordMetadata metadata = future.get(remaining, TimeUnit.NANOSECONDS);
+        if (observer != null && metadata != null) {
+            observer.onAck(metadata);
+        }
     }
 
     @Override
     public void close() throws InterruptedException, ExecutionException, TimeoutException {
         flush();
+    }
+
+    /**
+     * Слушатель подтверждений Kafka. Используется для сбора сведений без влияния на горячий путь.
+     */
+    public interface AckObserver {
+        void onAck(RecordMetadata metadata);
     }
 }

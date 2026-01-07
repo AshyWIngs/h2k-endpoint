@@ -8,8 +8,10 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicReference;
 
 import org.apache.kafka.clients.producer.RecordMetadata;
+import org.apache.kafka.common.TopicPartition;
 import org.junit.jupiter.api.AfterAll;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -170,6 +172,30 @@ final class BatchSenderTest {
     void constructorRejectsInvalidTimeout() {
         IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () -> new BatchSender(1, 0));
         assertEquals("timeoutMs должен быть > 0", ex.getMessage());
+    }
+
+    @Test
+    @DisplayName("AckObserver получает RecordMetadata при подтверждении")
+    void observerReceivesMetadata() throws Exception {
+        TopicPartition tp = new TopicPartition("topic", 2);
+        RecordMetadata metadata = new RecordMetadata(tp, 10L, 0, 0L, 0, 0);
+        AtomicReference<RecordMetadata> seen = new AtomicReference<>();
+        try (BatchSender sender = new BatchSender(1, 200, seen::set)) {
+            sender.add(CompletableFuture.completedFuture(metadata));
+        }
+        assertEquals(metadata, seen.get());
+        assertEquals(2, seen.get().partition());
+        assertEquals(10L, seen.get().offset());
+    }
+
+    @Test
+    @DisplayName("AckObserver игнорирует null RecordMetadata")
+    void observerSkipsNullMetadata() throws Exception {
+        AtomicReference<RecordMetadata> seen = new AtomicReference<>();
+        try (BatchSender sender = new BatchSender(1, 200, seen::set)) {
+            sender.add(CompletableFuture.completedFuture(null));
+        }
+        assertNull(seen.get());
     }
 
     private static CompletableFuture<RecordMetadata> ok() {

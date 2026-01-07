@@ -28,7 +28,7 @@ WHERE TABLE_SCHEM IS NULL            -- или = '<namespace>'
 
 ## 2. Приоритеты источников
 
-1. **Avro** (режим `h2k.payload.format=avro-*`) — единственный источник.
+1. **Avro** (Confluent Schema Registry) — единственный источник.
 2. При отсутствии описания таблицы → WARN в логах и пропуск данных.
 
 ## 3. Обновление схемы
@@ -50,7 +50,7 @@ WHERE TABLE_SCHEM IS NULL            -- или = '<namespace>'
 
 - Храните `.avsc` в git, синхронно с изменениями Phoenix.
 - Проверяйте соответствие типов: fixed-size (например, `UNSIGNED_INT`) должны иметь корректную длину, иначе `ValueCodecPhoenix` выбросит `IllegalStateException`.
-- PK автоматически добавляются в JSON/Avro payload; не нужно повторно перечислять их в `"h2k.cf.list"`.
+- PK автоматически добавляются в Avro payload; не нужно повторно перечислять их в `"h2k.cf.list"`.
 - При отладке включайте DEBUG для `kz.qazmarka.h2k.schema` (см. runbook).
 
 ## 6. Связанные документы

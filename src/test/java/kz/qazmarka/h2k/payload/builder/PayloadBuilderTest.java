@@ -12,6 +12,7 @@ import org.apache.hadoop.hbase.KeyValue;
 import org.apache.hadoop.hbase.TableName;
 import org.apache.hadoop.hbase.util.Bytes;
 import static org.junit.jupiter.api.Assertions.assertAll;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -80,6 +81,24 @@ class PayloadBuilderTest {
         cells.clear();
 
         assertEquals("value", String.valueOf(avroRecord.get("value")));
+        }
+    }
+
+    @Test
+    @DisplayName("Одинаковый вход даёт одинаковые Avro bytes")
+    void buildRowPayloadBytesDeterministic() {
+        try (PayloadBuilder builder = new PayloadBuilder(new StubDecoder(), configWithSr(), new MockSchemaRegistryClient())) {
+            List<Cell> cells = new ArrayList<>();
+            byte[] row = Bytes.toBytes("rk-3");
+            cells.add(new KeyValue(row, Bytes.toBytes("d"), Bytes.toBytes("value"),
+                    "VAL".getBytes(StandardCharsets.UTF_8)));
+
+            byte[] first = builder.buildRowPayloadBytes(
+                    TableName.valueOf("T_AVRO"), cells, RowKeySlice.whole(row), 7L, 9L);
+            byte[] second = builder.buildRowPayloadBytes(
+                    TableName.valueOf("T_AVRO"), cells, RowKeySlice.whole(row), 7L, 9L);
+
+            assertArrayEquals(first, second, "Avro bytes должны быть детерминированы");
         }
     }
 

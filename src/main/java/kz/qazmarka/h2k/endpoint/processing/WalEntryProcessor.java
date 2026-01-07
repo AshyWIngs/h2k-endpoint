@@ -155,6 +155,7 @@ public final class WalEntryProcessor implements AutoCloseable {
         WalCounterService.EntryCounters counters = counterService.newEntryCounters();
         WalCfFilterCache cfCache = prepareCfCache(filterConfigured ? cfSnapshot.families() : null);
         boolean filterActive = filterConfigured && !cfCache.isEmpty();
+        WalRowProcessor.FilterState filterState = new WalRowProcessor.FilterState(cfCache, filterActive);
 
         WalRowProcessor.RowContext rowContext = new WalRowProcessor.RowContext(
                 topic,
@@ -162,7 +163,7 @@ public final class WalEntryProcessor implements AutoCloseable {
                 walMeta,
                 sender,
                 tableOptions,
-                cfCache,
+                filterState,
                 counters);
 
         return new EntryContext(
@@ -448,8 +449,7 @@ public final class WalEntryProcessor implements AutoCloseable {
         long walSeq = -1L;
         try {
             walSeq = entry.getKey().getSequenceId();
-        } catch (IOException e) {
-            // допускаем отсутствие sequenceId без логирования
+        } catch (IOException ignore) { // NOPMD - допускаем отсутствие sequenceId без логирования
         }
         final long walWriteTime = entry.getKey().getWriteTime();
         return new WalMeta(walSeq, walWriteTime);

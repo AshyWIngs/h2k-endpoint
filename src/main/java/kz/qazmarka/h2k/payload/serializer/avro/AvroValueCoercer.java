@@ -2,8 +2,10 @@ package kz.qazmarka.h2k.payload.serializer.avro;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.EnumMap;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -143,9 +145,12 @@ public final class AvroValueCoercer {
         }
         Map<String, Object> in = toStringObjectMap(v, path);
         Schema vt = fieldSchema.getValueType();
-        Map<String, Object> mapOut = new HashMap<>(in.size());
-        for (Map.Entry<String, Object> e : in.entrySet()) {
-            mapOut.put(e.getKey(), coerceValue(vt, e.getValue(), path + "." + e.getKey()));
+        List<String> keys = new ArrayList<>(in.keySet());
+        Collections.sort(keys);
+        Map<String, Object> mapOut = new LinkedHashMap<>(in.size());
+        for (int i = 0; i < keys.size(); i++) {
+            String key = keys.get(i);
+            mapOut.put(key, coerceValue(vt, in.get(key), path + "." + key));
         }
         return mapOut;
     }

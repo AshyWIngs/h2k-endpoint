@@ -1,10 +1,8 @@
 package kz.qazmarka.h2k.payload.builder;
 
-import java.nio.charset.StandardCharsets;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
-import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -15,7 +13,6 @@ import org.apache.avro.generic.GenericData;
 import org.apache.hadoop.hbase.Cell;
 import org.apache.hadoop.hbase.CellUtil;
 import org.apache.hadoop.hbase.TableName;
-import org.apache.hadoop.hbase.util.Bytes;
 
 import kz.qazmarka.h2k.config.CfFilterSnapshot;
 import kz.qazmarka.h2k.config.H2kConfig;
@@ -44,6 +41,7 @@ final class RowPayloadAssembler implements AutoCloseable {
     private final Set<String> tableOptionsLogged = ConcurrentHashMap.newKeySet();
     private final TableSchemaCache schemaCache;
     private final LinkedHashMap<String, Object> pkBuffer = new LinkedHashMap<>(8);
+    private final RowProcessingState rowState = new RowProcessingState();
 
     RowPayloadAssembler(Decoder decoder, H2kConfig cfg, AvroSchemaRegistry schemaRegistry) {
         this.decoder = Objects.requireNonNull(decoder, "decoder");
@@ -65,8 +63,10 @@ final class RowPayloadAssembler implements AutoCloseable {
         GenericData.Record avroRecord = schema.newRecord();
 
         decodePrimaryKey(table, schema, rowKey, avroRecord);
-        RowProcessingState state = fillRecordWithCells(table, schema, avroRecord, cells);
-        applyFlags(schema, avroRecord, state, walSeq, walWriteTime);
+        RowProcessingState state = rowState;
+        state.reset();
+        fillRecordWithCells(table, schema, avroRecord, cells, state);
+        applyFlags(schema, avroRecord, state.maxTimestamp, state.hasDelete, walSeq, walWriteTime);
         schema.verifyPrimaryKey(table, avroRecord);
         return avroRecord;
     }
@@ -92,28 +92,26 @@ final class RowPayloadAssembler implements AutoCloseable {
         schema.applyPrimaryKey(table, avroRecord, pkBuffer);
     }
 
-    private RowProcessingState fillRecordWithCells(TableName table,
-                                                   TableSchema schema,
-                                                   GenericData.Record avroRecord,
-                                                   java.util.List<Cell> cells) {
-        long maxTimestamp = Long.MIN_VALUE;
-        boolean hasDelete = false;
+    private void fillRecordWithCells(TableName table,
+                                     TableSchema schema,
+                                     GenericData.Record avroRecord,
+                                     java.util.List<Cell> cells,
+                                     RowProcessingState state) {
         if (cells != null) {
             for (Cell cell : cells) {
                 if (cell != null) {
                     long ts = cell.getTimestamp();
-                    if (ts > maxTimestamp) {
-                        maxTimestamp = ts;
+                    if (ts > state.maxTimestamp) {
+                        state.maxTimestamp = ts;
                     }
                     if (CellUtil.isDelete(cell)) {
-                        hasDelete = true;
+                        state.hasDelete = true;
                     } else {
                         writeCellValue(table, schema, avroRecord, cell);
                     }
                 }
             }
         }
-        return new RowProcessingState(maxTimestamp, hasDelete);
     }
 
     // Вынос обработки ячейки в отдельный метод удерживает цикл простым и понятным.
@@ -125,7 +123,7 @@ final class RowPayloadAssembler implements AutoCloseable {
                 cell.getQualifierArray(),
                 cell.getQualifierOffset(),
                 cell.getQualifierLength());
-        FieldSpec field = schema.field(qualifier);
+        FieldSpec field = schema.fieldNormalized(qualifier);
         if (field == null || field.skip()) {
             return;
         }
@@ -154,25 +152,26 @@ final class RowPayloadAssembler implements AutoCloseable {
 
     private void applyFlags(TableSchema schema,
                             GenericData.Record avroRecord,
-                            RowProcessingState state,
+                            long maxTimestamp,
+                            boolean hasDelete,
                             long walSeq,
                             long walWriteTime) {
-        if (schema.eventTimestampIndex() >= 0 && state.maxTimestamp != Long.MIN_VALUE) {
-            avroRecord.put(schema.eventTimestampIndex(), state.maxTimestamp);
+        if (schema.eventTimestampIndex() >= 0 && maxTimestamp != Long.MIN_VALUE) {
+            avroRecord.put(schema.eventTimestampIndex(), maxTimestamp);
         }
-        if (schema.deleteFlagIndex() >= 0 && state.hasDelete) {
+        if (schema.deleteFlagIndex() >= 0 && hasDelete) {
             avroRecord.put(schema.deleteFlagIndex(), Boolean.TRUE);
         }
         schema.applyWalMetadata(avroRecord, walSeq, walWriteTime);
     }
 
     private static final class RowProcessingState {
-        final long maxTimestamp;
-        final boolean hasDelete;
+        long maxTimestamp;
+        boolean hasDelete;
 
-        RowProcessingState(long maxTimestamp, boolean hasDelete) {
-            this.maxTimestamp = maxTimestamp;
-            this.hasDelete = hasDelete;
+        void reset() {
+            maxTimestamp = Long.MIN_VALUE;
+            hasDelete = false;
         }
     }
 
@@ -266,7 +265,7 @@ final class RowPayloadAssembler implements AutoCloseable {
         }
 
         private void register(Map<String, FieldSpec> fields, String name, FieldSpec spec) {
-            fields.put(normalizeFieldKey(name), spec);
+            fields.put(QualifierCache.normalizeFieldKey(name), spec);
         }
 
         private boolean parseSkip(TableName table, Schema.Field field) {
@@ -352,7 +351,7 @@ final class RowPayloadAssembler implements AutoCloseable {
             if (name == null) {
                 return null;
             }
-            return fields.get(normalizeFieldKey(name));
+            return fields.get(QualifierCache.normalizeFieldKey(name));
         }
 
         private int indexOf(Schema schema, String name) {
@@ -409,7 +408,14 @@ final class RowPayloadAssembler implements AutoCloseable {
             if (qualifier == null) {
                 return null;
             }
-            return fields.get(normalizeFieldKey(qualifier));
+            return fields.get(QualifierCache.normalizeFieldKey(qualifier));
+        }
+
+        FieldSpec fieldNormalized(String qualifier) {
+            if (qualifier == null) {
+                return null;
+            }
+            return fields.get(qualifier);
         }
 
         int saltBytes() {
@@ -492,102 +498,6 @@ final class RowPayloadAssembler implements AutoCloseable {
             }
             Object coerced = AvroValueCoercer.coerceValue(field.schema(), value, field.name());
             avroRecord.put(index, coerced);
-        }
-    }
-
-    private static String normalizeFieldKey(String name) {
-        if (name == null) {
-            return "";
-        }
-        return name.trim().toUpperCase(Locale.ROOT);
-    }
-
-    /** Минимальный потокобезопасный кэш qualifier → String без глобальной синхронизации. */
-    private static final class QualifierCache {
-        private final ConcurrentHashMap<AbstractKey, String> cache = new ConcurrentHashMap<>(64);
-        private final ThreadLocal<LookupKey> lookup = ThreadLocal.withInitial(LookupKey::new);
-
-        String intern(byte[] array, int offset, int length) {
-            if (length == 0) {
-                return "";
-            }
-            LookupKey key = lookup.get();
-            key.set(array, offset, length);
-            try {
-                String cached = cache.get(key);
-                if (cached != null) {
-                    return cached;
-                }
-                String created = new String(array, offset, length, StandardCharsets.UTF_8);
-                OwnedKey stored = key.toOwned();
-                String race = cache.putIfAbsent(stored, created);
-                return race != null ? race : created;
-            } finally {
-                key.clear();
-            }
-        }
-
-        void cleanupThreadLocal() {
-            lookup.remove();
-        }
-
-        private abstract static class AbstractKey {
-            byte[] bytes;
-            int offset;
-            int length;
-            int hash;
-
-            final void reset(byte[] array, int off, int len) {
-                this.bytes = array;
-                this.offset = off;
-                this.length = len;
-                this.hash = Bytes.hashCode(array, off, len);
-            }
-
-            final void clear() {
-                this.bytes = null;
-                this.offset = 0;
-                this.length = 0;
-                this.hash = 0;
-            }
-
-            @Override
-            public final int hashCode() {
-                return hash;
-            }
-
-            @Override
-            public final boolean equals(Object other) {
-                if (this == other) {
-                    return true;
-                }
-                if (!(other instanceof AbstractKey)) {
-                    return false;
-                }
-                AbstractKey that = (AbstractKey) other;
-                return this.length == that.length
-                        && Bytes.equals(
-                        this.bytes, this.offset, this.length,
-                        that.bytes, that.offset, that.length);
-            }
-        }
-
-        private static final class LookupKey extends AbstractKey {
-            void set(byte[] array, int off, int len) {
-                reset(array, off, len);
-            }
-
-            OwnedKey toOwned() {
-                byte[] copy = new byte[length];
-                System.arraycopy(bytes, offset, copy, 0, length);
-                return new OwnedKey(copy);
-            }
-        }
-
-        private static final class OwnedKey extends AbstractKey {
-            OwnedKey(byte[] copy) {
-                reset(copy, 0, copy.length);
-            }
         }
     }
 

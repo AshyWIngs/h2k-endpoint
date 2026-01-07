@@ -22,8 +22,7 @@ h2k.avro.subject.strategy=table-upper
 h2k.avro.subject.suffix=-value
 ```
 
-   > В режиме `confluent` поддерживается только `h2k.payload.format=avro-binary`.
-   > Итог: в Kafka идёт payload вида 0x00 + int32(schemaId) + avroBinary, где schemaId берётся из SR при первой регистрации. Повторные публикации используют кэшированный id.
+   > Формат всегда Avro Confluent: в Kafka идёт payload вида 0x00 + int32(schemaId) + avroBinary, где schemaId берётся из SR при первой регистрации. Повторные публикации используют кэшированный id.
 
 3. **Subject strategy** — по умолчанию используется `table`, что формирует `namespace:table` (для namespace `default` остаётся просто qualifier). Для совместимости со старыми раскладками доступны варианты `qualifier`, `table-lower`, `table-upper`, а также префикс/суффикс.
 

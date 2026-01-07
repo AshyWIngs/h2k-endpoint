@@ -12,7 +12,7 @@ import org.apache.hadoop.hbase.TableName;
  *  - по паре (имя таблицы, имя колонки/qualifier) возвращает строковое имя *phoenix‑типа*
  *    из официального набора (например: "VARCHAR", "CHAR", "DECIMAL", "TIMESTAMP",
  *    "UNSIGNED_TINYINT", "BINARY" и т.д.);
- *  - скрывает источник данных (JSON‑файл, SYSTEM.CATALOG и т.п.) и политику нормализации.
+ *  - скрывает источник данных (локальные .avsc, SYSTEM.CATALOG и т.п.) и политику нормализации.
  *
  * Контракт
  *  - Возвращает {@code null}, если тип неизвестен для данной колонки.
@@ -40,7 +40,7 @@ public interface SchemaRegistry {
 
     /**
      * Возвращает имя phoenix‑типа колонки либо {@code null}, если тип неизвестен.
-     * Реализация сама выбирает источник (JSON, SYSTEM.CATALOG и т.д.) и политику нормализации.
+     * Реализация сама выбирает источник (локальные .avsc, SYSTEM.CATALOG и т.д.) и политику нормализации.
      *
      * @param table     имя таблицы ({@link TableName} с namespace), не {@code null}
      * @param qualifier имя колонки (Phoenix qualifier), не {@code null}
@@ -176,7 +176,7 @@ public interface SchemaRegistry {
 
     /**
      * Явный хук на обновление/перечтение источника схем (по умолчанию — no‑op).
-     * Реализации на JSON или SYSTEM.CATALOG могут переопределить и выполнить загрузку.
+     * Реализации на .avsc или SYSTEM.CATALOG могут переопределить и выполнить загрузку.
      * @implSpec По умолчанию метод — no‑op; переопределите в реализациях, читающих внешние источники.
      */
     default void refresh() {

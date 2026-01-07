@@ -39,7 +39,7 @@ public interface PhoenixTableMetadataProvider {
 
     /**
      * @param table таблица Phoenix/HBase
-     * @return подсказка ёмкости корневого JSON (ожидаемое число полей) или {@code null}, если значение неизвестно
+     * @return подсказка ёмкости корневого payload (ожидаемое число полей) или {@code null}, если значение неизвестно
      */
     Integer capacityHint(TableName table);
 
