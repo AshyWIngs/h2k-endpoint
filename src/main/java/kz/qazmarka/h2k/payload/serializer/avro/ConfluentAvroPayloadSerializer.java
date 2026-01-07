@@ -1,6 +1,5 @@
 package kz.qazmarka.h2k.payload.serializer.avro;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -16,9 +15,6 @@ import java.util.concurrent.atomic.LongAdder;
 import org.apache.avro.Schema;
 import org.apache.avro.SchemaNormalization;
 import org.apache.avro.generic.GenericData;
-import org.apache.avro.io.BinaryEncoder;
-import org.apache.avro.io.Encoder;
-import org.apache.avro.io.EncoderFactory;
 import org.apache.hadoop.hbase.TableName;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -498,89 +494,12 @@ public final class ConfluentAvroPayloadSerializer implements AutoCloseable {
     private static final class SchemaInfo {
         final int schemaId;
         final Schema schema;
-        final RecordWriter writer;
+        final ConfluentRecordWriter writer;
 
         SchemaInfo(int schemaId, Schema schema) {
             this.schemaId = schemaId;
             this.schema = schema;
-            this.writer = new RecordWriter(schema);
-        }
-    }
-
-    private static final class RecordWriter {
-        private final Schema schema;
-        private final ThreadLocal<HeaderByteArrayOutputStream> localBaos =
-                ThreadLocal.withInitial(() -> new HeaderByteArrayOutputStream(512 + MAGIC_HEADER_LENGTH));
-        private final ThreadLocal<BinaryEncoder> localEncoder = new ThreadLocal<>();
-        private final ThreadLocal<ByteOptimizedDatumWriter> localWriter;
-
-        RecordWriter(Schema schema) {
-            this.schema = schema;
-            this.localWriter = ThreadLocal.withInitial(() -> new ByteOptimizedDatumWriter(schema));
-        }
-
-        byte[] write(GenericData.Record avroRecord, int schemaId) {
-            HeaderByteArrayOutputStream baos = localBaos.get();
-            baos.resetWithHeader(MAGIC_HEADER_LENGTH);
-            byte[] buffer = baos.buffer();
-            buffer[0] = MAGIC_BYTE;
-            buffer[1] = (byte) ((schemaId >>> 24) & 0xFF);
-            buffer[2] = (byte) ((schemaId >>> 16) & 0xFF);
-            buffer[3] = (byte) ((schemaId >>> 8) & 0xFF);
-            buffer[4] = (byte) (schemaId & 0xFF);
-            BinaryEncoder encoder = EncoderFactory.get().directBinaryEncoder(baos, localEncoder.get());
-            localEncoder.set(encoder);
-            ByteOptimizedDatumWriter writer = localWriter.get();
-            writer.setSchema(schema);
-            try {
-                writer.write(avroRecord, encoder);
-                encoder.flush();
-            } catch (IOException | RuntimeException ex) {
-                localEncoder.remove();
-                localWriter.remove();
-                localBaos.remove();
-                throw new IllegalStateException("Avro: ошибка сериализации записи: " + ex.getMessage(), ex);
-            }
-            byte[] result = baos.toByteArray();
-            if (result.length > MAX_THREADLOCAL_BUFFER) {
-                localBaos.set(new HeaderByteArrayOutputStream(512 + MAGIC_HEADER_LENGTH));
-                localEncoder.remove();
-            }
-            return result;
-        }
-    }
-
-    private static final class HeaderByteArrayOutputStream extends ByteArrayOutputStream {
-        HeaderByteArrayOutputStream(int size) {
-            super(size);
-        }
-
-        void resetWithHeader(int headerLength) {
-            if (buf.length < headerLength) {
-                buf = new byte[headerLength];
-            }
-            count = headerLength;
-        }
-
-        byte[] buffer() {
-            return buf;
-        }
-    }
-
-    private static final class ByteOptimizedDatumWriter extends org.apache.avro.generic.GenericDatumWriter<GenericData.Record> {
-        ByteOptimizedDatumWriter(Schema schema) {
-            super(schema);
-        }
-
-        @Override
-        protected void writeBytes(Object datum, Encoder out) throws IOException {
-            if (datum instanceof kz.qazmarka.h2k.payload.builder.BinarySlice) {
-                kz.qazmarka.h2k.payload.builder.BinarySlice slice =
-                        (kz.qazmarka.h2k.payload.builder.BinarySlice) datum;
-                out.writeBytes(slice.array(), slice.offset(), slice.length());
-                return;
-            }
-            super.writeBytes(datum, out);
+            this.writer = new ConfluentRecordWriter(schema, MAGIC_BYTE, MAGIC_HEADER_LENGTH, MAX_THREADLOCAL_BUFFER);
         }
     }
 
