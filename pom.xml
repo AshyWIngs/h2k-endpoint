@@ -12,7 +12,7 @@
   <description>Толстый JAR ReplicationEndpoint для HBase 1.4.13 → Kafka 2.3.1 (клиент 3.3.2)</description>
 
   <properties>
-    <hadoop.version>2.7.4</hadoop.version>
+    <hadoop.version>3.4.0</hadoop.version>
     <hbase.version>1.4.13</hbase.version>
     <phoenix.version>4.14.2-HBase-1.4</phoenix.version>
     <kafka.version>3.3.2</kafka.version>
