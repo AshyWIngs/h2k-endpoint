@@ -10,7 +10,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
 
@@ -390,14 +389,10 @@ public final class ConfluentAvroPayloadSerializer implements AutoCloseable {
      * Проверяет совместимость двух Avro схем (вместо строгого == сравнения).
      */
     private static boolean isSchemaParsesCompatible(Schema recordSchema, Schema serializerSchema) {
-        if (recordSchema == null || serializerSchema == null) {
-            return recordSchema == serializerSchema;
-        }
-        if (recordSchema == serializerSchema) {
-            return true;
-        }
-        return recordSchema.getFullName().equals(serializerSchema.getFullName()) &&
-               recordSchema.getNamespace().equals(serializerSchema.getNamespace());
+        return recordSchema == serializerSchema ||
+               (recordSchema != null && serializerSchema != null &&
+                recordSchema.getFullName().equals(serializerSchema.getFullName()) &&
+                recordSchema.getNamespace().equals(serializerSchema.getNamespace()));
     }
 
     /**
@@ -415,6 +410,14 @@ public final class ConfluentAvroPayloadSerializer implements AutoCloseable {
         if (recordFields.size() != serializerFields.size()) {
             return "количество полей: " + recordFields.size() + " vs " + serializerFields.size();
         }
+        String fieldDiff = compareFields(recordFields, serializerFields);
+        return fieldDiff != null ? fieldDiff : "несовместимые типы полей";
+    }
+
+    /**
+     * Сравнивает списки полей двух схем; возвращает описание расхождений или null если поля идентичны.
+     */
+    private static String compareFields(List<Schema.Field> recordFields, List<Schema.Field> serializerFields) {
         StringBuilder diff = new StringBuilder();
         for (int i = 0; i < recordFields.size(); i++) {
             Schema.Field rf = recordFields.get(i);
@@ -424,7 +427,7 @@ public final class ConfluentAvroPayloadSerializer implements AutoCloseable {
                 diff.append("[").append(i).append("]='").append(rf.name()).append("' vs '").append(sf.name()).append("'");
             }
         }
-        return diff.length() > 0 ? "поля отличаются: " + diff.toString() : "несовместимые типы полей";
+        return diff.length() > 0 ? "поля отличаются: " + diff.toString() : null;
     }
 
     private static String prop(Map<String, String> props, String key, String def) {
