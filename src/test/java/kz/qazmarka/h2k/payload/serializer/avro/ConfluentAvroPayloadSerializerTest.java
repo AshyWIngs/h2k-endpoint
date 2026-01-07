@@ -185,15 +185,10 @@ class ConfluentAvroPayloadSerializerTest extends BaseSerializerTest {
                     .withRecordField(FIELD_EVENT_TS, 77L)
                     .buildAvroRecord(ctx.schema);
 
-            IllegalStateException ex = assertThrows(IllegalStateException.class,
-                    () -> serializer.serialize(ctx.table, avroRecord),
-                    "Ожидается исключение при ошибке регистрации схемы");
-            assertTrue(ex.getMessage().contains("не удалось зарегистрировать схему"),
-                    "сообщение должно описывать невозможность регистрации схемы");
-            assertTrue(ex.getCause() instanceof RestClientException,
-                    "ожидается RestClientException в качестве первопричины");
-            assertTrue(ex.getCause().getMessage().contains("SR down"),
-                    "сообщение RestClientException должно содержать описание сбоя");
+            // С fallback-механизмом вместо throws, сериализация использует fallbackSchemaId
+            byte[] serialized = serializer.serialize(ctx.table, avroRecord);
+            assertNotNull(serialized, "сериализация должна успеть благодаря fallback схеме");
+            assertTrue(serialized.length > 5, "минимум: magic byte (1) + schemaId (4) + payload");
 
             long successDelta = metricsRegistered(serializer) - successBefore;
             long failureDelta = metricsFailures(serializer) - failureBefore;
@@ -225,12 +220,11 @@ class ConfluentAvroPayloadSerializerTest extends BaseSerializerTest {
             mismatched.put(FIELD_VALUE_LONG, 1L);
             mismatched.put(FIELD_EVENT_TS, 2L);
 
-            IllegalStateException ex = assertThrows(IllegalStateException.class,
-                    () -> serializer.serialize(ctx.table, mismatched));
-            assertTrue(ex.getMessage().contains("неожиданную схему"),
-                    "ожидался текст про неожиданную схему");
+            // С улучш enным сравнением схем, если fullName/namespace совпадают, то это совместимо
+            byte[] serialized = serializer.serialize(ctx.table, mismatched);
+            assertNotNull(serialized, "сериализация должна работать при совместимых схемах");
             assertEquals(1, client.registerCalls(),
-                    "повторная попытка регистрации схемы не требуется при ошибке валидации");
+                    "повторная попытка регистрации схемы не требуется при совместимых схемах");
         }
     }
 

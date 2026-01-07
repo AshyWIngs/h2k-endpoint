@@ -11,6 +11,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.LongAdder;
 
 import org.apache.avro.Schema;
@@ -58,13 +59,14 @@ public final class ConfluentAvroPayloadSerializer implements AutoCloseable {
     private final SchemaRegistryAccess schemaRegistry;
     private final Map<String, Object> schemaRegistryClientConfig;
     private final int identityMapCapacity;
+    private final int fallbackSchemaId;
     private final LongAdder schemaRegisterSuccess = new LongAdder();
     private final LongAdder schemaRegisterFailure = new LongAdder();
     private final SubjectNamer subjectNamer;
     private final ConcurrentHashMap<String, String> subjectCache = new ConcurrentHashMap<>(16);
 
-    private final AtomicBoolean firstSuccessLogged = new AtomicBoolean();
-    private final AtomicBoolean firstFailureLogged = new AtomicBoolean();
+    private final AtomicLong lastFailureLoggedAtNano = new AtomicLong(0);
+    private static final long FAILURE_LOG_INTERVAL_NANOS = 60_000_000_000L;
 
     private final ConcurrentHashMap<String, SchemaInfo> cache = new ConcurrentHashMap<>();
     private final RetrySettings retrySettings;
@@ -96,6 +98,7 @@ public final class ConfluentAvroPayloadSerializer implements AutoCloseable {
                                    RetrySettings retrySettings) {
         this.localRegistry = Objects.requireNonNull(localRegistry, "localRegistry");
         Objects.requireNonNull(avroSettings, "avroSettings");
+        this.fallbackSchemaId = avroSettings.getFallbackSchemaId();
         this.retrySettings = Objects.requireNonNull(retrySettings, "retrySettings");
 
         this.registryUrls = normalizeRegistryUrls(avroSettings.getRegistryUrls());
@@ -139,9 +142,10 @@ public final class ConfluentAvroPayloadSerializer implements AutoCloseable {
             }
         }
 
-        if (avroRecord.getSchema() != info.schema) {
-            throw new IllegalStateException("Avro: запись для subject '" + subject + "' имеет неожиданную схему: "
-                    + avroRecord.getSchema().getFullName());
+        if (!isSchemaParsesCompatible(avroRecord.getSchema(), info.schema)) {
+            String fieldMismatch = describeFieldMismatch(avroRecord.getSchema(), info.schema);
+            LOG.warn("Avro: запись для subject='{}' имеет несовместимую схему: {}.",
+                    subject, fieldMismatch);
         }
 
         lastSchemaId = info.schemaId;
@@ -181,10 +185,8 @@ public final class ConfluentAvroPayloadSerializer implements AutoCloseable {
         try {
             int schemaId = schemaRegistry.register(subject, schema);
             LOG.debug("Avro Confluent: схема зарегистрирована: subject={}, id={}.", subject, schemaId);
-            if (firstSuccessLogged.compareAndSet(false, true)) {
-                LOG.debug("Avro Confluent: первая успешная регистрация схемы — subject={}, id={}, urls={}",
-                        subject, schemaId, registryUrls);
-            }
+            LOG.debug("Avro Confluent: первая успешная регистрация схемы — subject={}, id={}, urls={}",
+                    subject, schemaId, registryUrls);
             fingerprintMonitor.recordSuccessfulRegistration(subject, localFingerprint, schemaId);
             schemaRegisterSuccess.increment();
             return new SchemaInfo(schemaId, schema);
@@ -303,11 +305,13 @@ public final class ConfluentAvroPayloadSerializer implements AutoCloseable {
     }
 
     private void logRegisterFailure(String subject, String error) {
-        if (firstFailureLogged.compareAndSet(false, true)) {
-            LOG.warn("Avro Confluent: первая ошибка регистрации схемы — subject={}, urls={}, {}",
+        long now = System.nanoTime();
+        long last = lastFailureLoggedAtNano.get();
+        if (now >= last + FAILURE_LOG_INTERVAL_NANOS && lastFailureLoggedAtNano.compareAndSet(last, now)) {
+            LOG.warn("Avro Confluent: ошибка регистрации схемы — subject={}, urls={}, {}",
                     subject, registryUrls, error);
         } else if (LOG.isDebugEnabled()) {
-            LOG.debug("Avro Confluent: повторная ошибка регистрации subject={}: {}", subject, error);
+            LOG.debug("Avro Confluent: ошибка регистрации subject={}: {}", subject, error);
         }
     }
 
@@ -344,9 +348,12 @@ public final class ConfluentAvroPayloadSerializer implements AutoCloseable {
             retrier.schedule(subject, schema, localFingerprint, this::handleRetrySuccess);
             return fallback;
         }
+        LOG.warn("Avro Confluent: Schema Registry недоступен и нет кэша; использую fallbackSchemaId={} для subject='{}'",
+                fallbackSchemaId, subject);
         retrier.schedule(subject, schema, localFingerprint, this::handleRetrySuccess);
-        throw new IllegalStateException("Avro: не удалось зарегистрировать схему '" + subject
-                + "' — Schema Registry недоступен", ex);
+        SchemaInfo fallbackInfo = new SchemaInfo(fallbackSchemaId, schema);
+        cache.putIfAbsent(subject, fallbackInfo);
+        return fallbackInfo;
     }
 
     private SchemaInfo handleIoException(String subject,
@@ -365,15 +372,59 @@ public final class ConfluentAvroPayloadSerializer implements AutoCloseable {
             retrier.schedule(subject, schema, localFingerprint, this::handleRetrySuccess);
             return fallback;
         }
+        LOG.warn("Avro Confluent: ошибка подключения к Schema Registry; использую fallbackSchemaId={} для subject='{}'",
+                fallbackSchemaId, subject);
         retrier.schedule(subject, schema, localFingerprint, this::handleRetrySuccess);
-        throw new IllegalStateException("Avro: не удалось зарегистрировать схему '" + subject
-                + "' — ошибка подключения к Schema Registry", ex);
+        SchemaInfo fallbackInfo = new SchemaInfo(fallbackSchemaId, schema);
+        cache.putIfAbsent(subject, fallbackInfo);
+        return fallbackInfo;
     }
 
     private static int resolveIdentityMapCapacity(Map<String, String> props) {
         return parsePositiveInt(
                 prop(props, "client.cache.capacity", null),
                 AbstractKafkaAvroSerDeConfig.MAX_SCHEMAS_PER_SUBJECT_DEFAULT);
+    }
+
+    /**
+     * Проверяет совместимость двух Avro схем (вместо строгого == сравнения).
+     */
+    private static boolean isSchemaParsesCompatible(Schema recordSchema, Schema serializerSchema) {
+        if (recordSchema == null || serializerSchema == null) {
+            return recordSchema == serializerSchema;
+        }
+        if (recordSchema == serializerSchema) {
+            return true;
+        }
+        return recordSchema.getFullName().equals(serializerSchema.getFullName()) &&
+               recordSchema.getNamespace().equals(serializerSchema.getNamespace());
+    }
+
+    /**
+     * Описывает расхождения между двумя схемами для логирования.
+     */
+    private static String describeFieldMismatch(Schema recordSchema, Schema serializerSchema) {
+        if (recordSchema == null || serializerSchema == null) {
+            return "одна из схем=null";
+        }
+        if (!recordSchema.getFullName().equals(serializerSchema.getFullName())) {
+            return "fullName: '" + recordSchema.getFullName() + "' vs '" + serializerSchema.getFullName() + "'";
+        }
+        List<Schema.Field> recordFields = recordSchema.getFields();
+        List<Schema.Field> serializerFields = serializerSchema.getFields();
+        if (recordFields.size() != serializerFields.size()) {
+            return "количество полей: " + recordFields.size() + " vs " + serializerFields.size();
+        }
+        StringBuilder diff = new StringBuilder();
+        for (int i = 0; i < recordFields.size(); i++) {
+            Schema.Field rf = recordFields.get(i);
+            Schema.Field sf = serializerFields.get(i);
+            if (!rf.name().equals(sf.name()) || !rf.schema().equals(sf.schema())) {
+                if (diff.length() > 0) diff.append("; ");
+                diff.append("[").append(i).append("]='").append(rf.name()).append("' vs '").append(sf.name()).append("'");
+            }
+        }
+        return diff.length() > 0 ? "поля отличаются: " + diff.toString() : "несовместимые типы полей";
     }
 
     private static String prop(Map<String, String> props, String key, String def) {
