@@ -193,32 +193,40 @@ final class WalCounterService {
     private void emitPeriodicSummaries(java.util.Map<String, Long> extras, Logger log) {
         if (extras == null || extras.isEmpty()) return;
         long now = System.nanoTime();
-        // Сводка ensure (INFO)
-    long targetEnsure = nextEnsureSummaryAt.get();
-    boolean ensureDue = now >= targetEnsure && nextEnsureSummaryAt.compareAndSet(targetEnsure, now + ENSURE_SUMMARY_INTERVAL_NS);
-    if (ensureDue && log.isInfoEnabled()) {
-            long accepted = get(extras, "ensure.вызовов.принято");
-            long rejected = get(extras, "ensure.вызовов.отклонено");
-            long existsYes = get(extras, "существует.да");
-            long existsNo = get(extras, "существует.нет");
-            long existsUnknown = get(extras, "существует.неизвестно");
-            long createdOk = get(extras, "создание.успех");
-            long createdRace = get(extras, "создание.гонка");
-            long createdFail = get(extras, "создание.ошибка");
-            long backoffSize = get(extras, "ensure.бэкофф.размер");
-            long queuePending = get(extras, "ensure.очередь.ожидает");
-            log.info("Сводка ensure: принято={}, отклонено={}, существует[да/нет/неизв]={}/{}/{}, создание[ok/гонка/ош] ={}/{}/{}, бэкофф={}, очередь={}",
-                    accepted, rejected, existsYes, existsNo, existsUnknown,
-                    createdOk, createdRace, createdFail, backoffSize, queuePending);
-        }
-        // Сводка Schema Registry (DEBUG)
-    long targetSr = nextSrSummaryAt.get();
-    boolean srDue = now >= targetSr && nextSrSummaryAt.compareAndSet(targetSr, now + SR_SUMMARY_INTERVAL_NS);
-    if (srDue && log.isDebugEnabled()) {
-            long srOk = get(extras, "sr.регистрация.успехов");
-            long srFail = get(extras, "sr.регистрация.ошибок");
-            log.debug("Сводка SR: регистраций ок={}, ошибок={}", srOk, srFail);
-        }
+        emitEnsureSummary(extras, now, log);
+        emitSrSummary(extras, now, log);
+    }
+
+    /** Выводит сводку ensure-метрик если подошло время. */
+    private void emitEnsureSummary(java.util.Map<String, Long> extras, long now, Logger log) {
+        long targetEnsure = nextEnsureSummaryAt.get();
+        boolean ensureDue = now >= targetEnsure && nextEnsureSummaryAt.compareAndSet(targetEnsure, now + ENSURE_SUMMARY_INTERVAL_NS);
+        if (!ensureDue || !log.isInfoEnabled()) return;
+        
+        long accepted = get(extras, "ensure.вызовов.принято");
+        long rejected = get(extras, "ensure.вызовов.отклонено");
+        long existsYes = get(extras, "существует.да");
+        long existsNo = get(extras, "существует.нет");
+        long existsUnknown = get(extras, "существует.неизвестно");
+        long createdOk = get(extras, "создание.успех");
+        long createdRace = get(extras, "создание.гонка");
+        long createdFail = get(extras, "создание.ошибка");
+        long backoffSize = get(extras, "ensure.бэкофф.размер");
+        long queuePending = get(extras, "ensure.очередь.ожидает");
+        log.info("Сводка ensure: принято={}, отклонено={}, существует[да/нет/неизв]={}/{}/{}, создание[ok/гонка/ош] ={}/{}/{}, бэкофф={}, очередь={}",
+                accepted, rejected, existsYes, existsNo, existsUnknown,
+                createdOk, createdRace, createdFail, backoffSize, queuePending);
+    }
+
+    /** Выводит сводку Schema Registry метрик если подошло время. */
+    private void emitSrSummary(java.util.Map<String, Long> extras, long now, Logger log) {
+        long targetSr = nextSrSummaryAt.get();
+        boolean srDue = now >= targetSr && nextSrSummaryAt.compareAndSet(targetSr, now + SR_SUMMARY_INTERVAL_NS);
+        if (!srDue || !log.isDebugEnabled()) return;
+        
+        long srOk = get(extras, "sr.регистрация.успехов");
+        long srFail = get(extras, "sr.регистрация.ошибок");
+        log.debug("Сводка SR: регистраций ок={}, ошибок={}", srOk, srFail);
     }
 
     private static String formatDecimal(double value) {

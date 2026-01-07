@@ -206,9 +206,7 @@ public final class AvroValueCoercer {
     }
 
     private static Map<String, Object> toStringObjectMap(Object v, String path) {
-        if (!(v instanceof Map<?, ?>)) {
-            throw typeError(path, "MAP", v);
-        }
+        validateMapInput(v, path);
         Map<?, ?> input = (Map<?, ?>) v;
         Map<String, Object> normalized = new HashMap<>(input.size());
         // Без лямбды: простой for-loop для избежания ненужных объектов на горячем пути
@@ -216,6 +214,13 @@ public final class AvroValueCoercer {
             normalized.put(String.valueOf(entry.getKey()), entry.getValue());
         }
         return normalized;
+    }
+
+    /** Валидирует, что значение — это Map, иначе выбрасывает исключение. */
+    private static void validateMapInput(Object v, String path) {
+        if (!(v instanceof Map<?, ?>)) {
+            throw typeError(path, "MAP", v);
+        }
     }
 
     private static Object coerceBytes(Object datum, String path) {
