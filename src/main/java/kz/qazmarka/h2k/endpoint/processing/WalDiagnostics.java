@@ -69,7 +69,7 @@ final class WalDiagnostics {
         }
         Map<TableName, TableStatsSnapshot> copy = new java.util.HashMap<>();
         // Простой for-loop вместо forEach для минимизации allocation диагностических лямбд
-        for (java.util.Map.Entry<TableName, TableStats> entry : stats.entrySet()) {
+        for (Map.Entry<TableName, TableStats> entry : stats.entrySet()) {
             copy.put(entry.getKey(), entry.getValue().snapshot());
         }
         return copy;
