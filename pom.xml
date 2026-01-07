@@ -600,6 +600,7 @@
                   <include>org.apache.commons:commons-compress</include>
                   <include>org.apache.kafka:kafka-clients</include>
                   <include>org.lz4:lz4-java</include>
+                  <include>com.github.luben:zstd-jni</include>
                   <include>io.confluent:*</include>
                 </includes>
               </artifactSet>
@@ -627,6 +628,10 @@
                 <relocation>
                   <pattern>net.jpountz.lz4</pattern>
                   <shadedPattern>kz.qazmarka.shaded.lz4</shadedPattern>
+                </relocation>
+                <relocation>
+                  <pattern>com.github.luben.zstd</pattern>
+                  <shadedPattern>kz.qazmarka.shaded.zstd</shadedPattern>
                 </relocation>
               </relocations>
             </configuration>

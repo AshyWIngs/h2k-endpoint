@@ -148,6 +148,8 @@ PhoenixTableMetadataProvider provider = PhoenixTableMetadataProvider.builder()
 
 **Pass‑through:** все ключи с префиксом **`h2k.producer.`** копируются в конфигурацию Kafka Producer **без изменений имени** (например, `h2k.producer.acks`, `h2k.producer.linger.ms` и т.д.). Компрессия продьюсера всегда зафиксирована на `lz4` и не переопределяется.
 
+> Безопасность порядка: если `h2k.producer.enable.idempotence=true`, Endpoint принудительно удерживает связку `acks=all`, `retries=Integer.MAX_VALUE` и `max.in.flight.requests.per.connection ≤ 5` независимо от overrides. Это исключает риск потери порядка/идемпотентности при Kafka 2.3.1+.
+
 **Спец‑ключи проекта:**
 
 | Ключ | Что делает | Примечание |

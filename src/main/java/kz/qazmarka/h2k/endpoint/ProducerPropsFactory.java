@@ -53,6 +53,7 @@ final class ProducerPropsFactory {
         applyDefaultProducerSettings(props, cfg);
         props.put(ProducerConfig.CLIENT_ID_CONFIG, computeClientId(cfg));
         applyPassThroughSettings(props, cfg);
+        enforceIdempotentOrdering(props);
         return props;
     }
 
@@ -110,6 +111,38 @@ final class ProducerPropsFactory {
                     props.putIfAbsent(realKey, entry.getValue());
                 }
             }
+        }
+    }
+
+    /**
+     * Жестко фиксирует связку идемпотентности и порядка: acks=all, бесконечные retry и max.in.flight<=5.
+     * Это удерживает порядок при Kafka 2.3.1+ даже при пользовательских overrides.
+     */
+    private static void enforceIdempotentOrdering(Properties props) {
+        String idempotence = String.valueOf(props.get(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG));
+        if ("false".equalsIgnoreCase(idempotence)) {
+            return;
+        }
+
+        props.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, "true");
+        props.put(ProducerConfig.ACKS_CONFIG, "all");
+        props.put(ProducerConfig.RETRIES_CONFIG, String.valueOf(Integer.MAX_VALUE));
+
+        int maxInFlight = parseIntOrDefault(
+                props.getProperty(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION),
+                5);
+        if (maxInFlight > 5) {
+            props.put(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION, "5");
+        } else {
+            props.put(ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION, String.valueOf(maxInFlight));
+        }
+    }
+
+    private static int parseIntOrDefault(String value, int defaultValue) {
+        try {
+            return Integer.parseInt(value);
+        } catch (Exception ignore) {
+            return defaultValue;
         }
     }
 }
